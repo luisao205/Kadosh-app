@@ -139,6 +139,8 @@ const AdminDashboard = ({ user }) => {
           diffDays = Math.ceil((bdayThisYear.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
         }
 
+        const edadCumplida = bdayThisYear.getFullYear() - parseInt(y);
+
         // LÓGICA DE SORPRESAS DE CUMPLEAÑOS (Solo procesado por el admin principal)
         if ((esDueno || user?.rol === 'admin') && (diffDays === 7 || diffDays === 1)) {
           const flagKey = `${bdayThisYear.getFullYear()}_${diffDays}d`;
@@ -162,7 +164,7 @@ const AdminDashboard = ({ user }) => {
           }
         }
 
-        return { ...u, diffDays };
+        return { ...u, diffDays, edad: edadCumplida };
       });
       
       // Orden personalizado: Hoy y Próximos primero, luego los Pasados recientes
@@ -453,7 +455,10 @@ const AdminDashboard = ({ user }) => {
                   <div className="w-10 h-10 rounded-full bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400 flex items-center justify-center font-bold text-sm uppercase shrink-0 shadow-sm">{c.nombre.charAt(0)}</div>
                 )}
                 <div>
-                  <p className="text-sm font-bold text-zinc-800 dark:text-zinc-200 truncate leading-none mb-1">{c.nombre}</p>
+                  <p className="text-sm font-bold text-zinc-800 dark:text-zinc-200 truncate leading-none mb-1 flex items-center gap-1.5">
+                    {c.nombre}
+                    <span className="text-[10px] font-black bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400 px-1.5 py-0.5 rounded-md">{c.edad} AÑOS</span>
+                  </p>
                   <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{new Date(0, parseInt(c.fechaNacimiento.split('-')[1])-1, parseInt(c.fechaNacimiento.split('-')[2])).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</p>
                 </div>
               </div>

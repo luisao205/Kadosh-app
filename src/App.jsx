@@ -21,6 +21,7 @@ import { getToken } from 'firebase/messaging';
 import { db, messaging } from './config/firebase';
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
+import { App as CapacitorApp } from '@capacitor/app';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -124,6 +125,19 @@ function App() {
       root.classList.remove('dark');
     }
   }, [userPreferences.darkMode]);
+
+  // EFECTO PARA MANEJAR EL BOTÓN DE RETROCESO EN ANDROID
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+        if (canGoBack) {
+          window.history.back();
+        } else {
+          CapacitorApp.exitApp();
+        }
+      });
+    }
+  }, []);
 
   if (loadingAuth) {
     return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500 font-bold animate-pulse">Cargando Kadosh App...</div>;

@@ -291,7 +291,7 @@ const EventManagement = ({ user }) => {
         }
       }
     });
-    mensaje += `\n📲 *Abre el Setlist aquí:* ${window.location.origin}/setlist/${evento.id}`;
+    mensaje += `\n📲 *Abre el Setlist aquí:* https://kadosh-app-iddbv.vercel.app/setlist/${evento.id}`;
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(mensaje)}`, '_blank');
   };
 
