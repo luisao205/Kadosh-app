@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Calendar, Music, BarChart3, TrendingUp, Mic2, Bell, CheckCircle2, XCircle, Cake, Trash2 } from 'lucide-react';
+import { Users, Calendar, Music, BarChart3, TrendingUp, Mic2, Bell, CheckCircle2, XCircle, Cake, Trash2, MessageCircle } from 'lucide-react';
 import { collection, query, where, orderBy, limit, onSnapshot, getDoc, doc, getDocs, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { traducirAcorde } from '../../utils/musicCore';
+import confetti from 'canvas-confetti';
 
 const AdminDashboard = ({ user }) => {
   const navigate = useNavigate();
@@ -19,6 +20,7 @@ const AdminDashboard = ({ user }) => {
   const [stats, setStats] = useState({ topCanciones: [], topCantantes: [], totalEventos: 0 });
   const [isCleaning, setIsCleaning] = useState(false);
   const [cleanResult, setCleanResult] = useState(null);
+  const confettiFired = useRef(false);
 
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
 
@@ -176,6 +178,13 @@ const AdminDashboard = ({ user }) => {
         return 0;
       });
       setCumpleanos(lista); // Mostramos todos sin límite
+      
+      if (!confettiFired.current && lista.some(c => c.diffDays === 0)) {
+        confettiFired.current = true;
+        setTimeout(() => {
+          confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 }, zIndex: 100 });
+        }, 500);
+      }
     });
 
     return () => { unsubEventos(); unsubInv(); unsubUsuarios(); };
@@ -457,14 +466,19 @@ const AdminDashboard = ({ user }) => {
                 <div>
                   <p className="text-sm font-bold text-zinc-800 dark:text-zinc-200 truncate leading-none mb-1 flex items-center gap-1.5">
                     {c.nombre}
-                    <span className="text-[10px] font-black bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400 px-1.5 py-0.5 rounded-md">{c.edad} AÑOS</span>
+                    <span className="hidden sm:inline-block text-[10px] font-black bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400 px-1.5 py-0.5 rounded-md">{c.edad} AÑOS</span>
                   </p>
                   <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{new Date(0, parseInt(c.fechaNacimiento.split('-')[1])-1, parseInt(c.fechaNacimiento.split('-')[2])).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</p>
                 </div>
               </div>
-              <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg tracking-widest shrink-0 ${c.diffDays === 0 ? 'bg-pink-500 text-white animate-pulse shadow-md shadow-pink-500/30' : c.diffDays < 0 ? 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400' : 'bg-pink-100 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300'}`}>
-                {c.diffDays === 0 ? '¡ES HOY!' : c.diffDays < 0 ? `HACE ${Math.abs(c.diffDays)} DÍAS` : `EN ${c.diffDays} DÍAS`}
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg tracking-widest ${c.diffDays === 0 ? 'bg-pink-500 text-white animate-pulse shadow-md shadow-pink-500/30' : c.diffDays < 0 ? 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400' : 'bg-pink-100 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300'}`}>
+                  {c.diffDays === 0 ? '¡ES HOY!' : c.diffDays < 0 ? `HACE ${Math.abs(c.diffDays)} DÍAS` : `EN ${c.diffDays} DÍAS`}
+                </span>
+                <button onClick={() => window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(`¡Feliz cumpleaños ${c.nombre.split(' ')[0]}! 🎉 Te deseamos un día muy bendecido de parte de todo el equipo de Kadosh.`)}`, '_blank')} className="w-8 h-8 rounded-full bg-[#25D366]/10 text-[#25D366] flex items-center justify-center hover:bg-[#25D366] hover:text-white transition-colors" title="Felicitar por WhatsApp">
+                  <MessageCircle size={14} />
+                </button>
+              </div>
             </div>
           )) : <p className="text-sm text-zinc-500 dark:text-zinc-500 col-span-full">No hay cumpleaños registrados. Ve a "Equipo" para añadirlos.</p>}
         </div>

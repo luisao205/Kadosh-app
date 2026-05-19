@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
+import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX, Cake } from 'lucide-react';
 import { transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 
@@ -98,6 +98,20 @@ const SetlistViewer = ({ user }) => {
     });
     return validSongs;
   }, [evento, canciones]);
+
+  const cumpleanerosHoy = useMemo(() => {
+    if (!evento || !evento.fecha || equipo.length === 0) return [];
+    // Tomamos la fecha del evento considerando zona horaria local
+    const eventDate = new Date(evento.fecha);
+    const evMonth = eventDate.getMonth() + 1;
+    const evDay = eventDate.getDate();
+
+    return equipo.filter(u => {
+      if (!u.fechaNacimiento) return false;
+      const [y, m, d] = u.fechaNacimiento.split('-');
+      return parseInt(m) === evMonth && parseInt(d) === evDay;
+    });
+  }, [evento, equipo]);
 
   const handleAddComment = async (e) => {
     e.preventDefault();
@@ -371,6 +385,13 @@ const SetlistViewer = ({ user }) => {
             </div>
           )}
 
+          {cumpleanerosHoy.length > 0 && (
+            <div className="bg-pink-50 dark:bg-pink-900/20 border border-pink-200 dark:border-pink-800/50 rounded-2xl p-4 shadow-sm mb-4 animate-in slide-in-from-top-4">
+              <h3 className="text-pink-800 dark:text-pink-400 font-black text-sm flex items-center gap-1.5 mb-1"><Cake size={18}/> ¡Doble Celebración!</h3>
+              <p className="text-pink-900/80 dark:text-pink-400/80 text-sm font-medium">En este evento cumple años <b className="text-pink-700 dark:text-pink-300 uppercase">{cumpleanerosHoy.map(c => c.nombre.split(' ')[0]).join(', ')}</b>. ¡Que no se les olvide cantar el Cumpleaños Feliz! 🎉</p>
+            </div>
+          )}
+
           <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-4 flex items-center gap-2"><Music size={20} className="text-blue-600 dark:text-blue-400" /> Repertorio del Día</h2>
           
           {(!evento.setlist && canciones.length === 0) || (evento.setlist && evento.setlist.length === 0) ? (
@@ -383,10 +404,11 @@ const SetlistViewer = ({ user }) => {
                 
                 return setlistItems.map((item, index) => {
                   if (item.type === 'note') {
+                    const isHeader = item.value.startsWith('🎤') || item.value === item.value.toUpperCase();
                     return (
-                      <div key={item.idLocal || index} className="bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 border-dashed rounded-xl p-3 flex items-center gap-3">
-                        <FileText size={16} className="text-zinc-400" />
-                        <span className="text-sm font-bold text-zinc-700 dark:text-zinc-400 italic">{item.value}</span>
+                      <div key={item.idLocal || index} className={`rounded-xl p-3 flex items-center gap-3 ${isHeader ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800/50 border shadow-sm my-2' : 'bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 border-dashed'}`}>
+                        {isHeader ? <Mic2 size={18} className="text-indigo-600 dark:text-indigo-400" /> : <FileText size={16} className="text-zinc-400" />}
+                        <span className={`text-sm ${isHeader ? 'font-black text-indigo-800 dark:text-indigo-300 tracking-wide uppercase' : 'font-bold text-zinc-700 dark:text-zinc-400 italic'}`}>{item.value}</span>
                       </div>
                     );
                   }
@@ -574,9 +596,10 @@ const SetlistViewer = ({ user }) => {
                 let count = 1;
                 return setlistItems.map((item, idx) => {
                   if (item.type === 'note') {
+                    const isHeader = item.value.startsWith('🎤') || item.value === item.value.toUpperCase();
                     return (
-                      <div key={idx} className="p-3 border-2 border-dashed border-gray-400 rounded-xl text-center bg-gray-50">
-                        <span className="font-bold italic text-gray-600">{item.value}</span>
+                      <div key={idx} className={`p-3 rounded-xl mt-4 ${isHeader ? 'bg-gray-200 border-2 border-gray-400 text-left' : 'border-2 border-dashed border-gray-400 text-center bg-gray-50'}`}>
+                        <span className={`${isHeader ? 'font-black uppercase tracking-widest text-gray-800' : 'font-bold italic text-gray-600'}`}>{item.value}</span>
                       </div>
                     );
                   } else {

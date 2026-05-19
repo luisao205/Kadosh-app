@@ -556,6 +556,10 @@ const EventManagement = ({ user }) => {
                     <input type="text" value={textoNota} onChange={(e) => setTextoNota(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addToSetlist('note', textoNota))} placeholder="Añadir momento (Ej. Predica)" className="flex-1 p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-xs bg-zinc-50 dark:bg-zinc-950 focus:ring-rose-500 dark:text-white" />
                     <button type="button" onClick={() => addToSetlist('note', textoNota)} className="px-3 bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors"><Plus size={16}/></button>
                   </div>
+                  <div className="flex gap-2 flex-wrap mt-1">
+                    <button type="button" onClick={() => addToSetlist('note', '🎤 BLOQUE DE EXALTACIÓN | Coros: ')} className="text-[10px] font-bold bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 px-2 py-1 rounded border border-indigo-100 dark:border-indigo-500/20 hover:bg-indigo-100 dark:hover:bg-indigo-500/30 transition-colors">+ Bloque Exaltación</button>
+                    <button type="button" onClick={() => addToSetlist('note', '🎤 BLOQUE DE ADORACIÓN | Coros: ')} className="text-[10px] font-bold bg-violet-50 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400 px-2 py-1 rounded border border-violet-100 dark:border-violet-500/20 hover:bg-violet-100 dark:hover:bg-violet-500/30 transition-colors">+ Bloque Adoración</button>
+                  </div>
                 </div>
               </div>
 
