@@ -4,7 +4,7 @@
 importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-messaging-compat.js');
 
-// 🚨 REEMPLAZA ESTO CON LA CONFIGURACIÓN DE TU FIREBASE
+// 🚨 REEMPLAZA LA API KEY CON LA NUEVA QUE GENERASTE
 const firebaseConfig = {
   apiKey: "AIzaSyCYRYwA77qz7ASeJNGi23w8E2jBvfjmLqs",
   authDomain: "kadosh-49600.firebaseapp.com",
