@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "474316353062",
+    "firebase_url": "https://kadosh-49600-default-rtdb.firebaseio.com",
+    "project_id": "kadosh-49600",
+    "storage_bucket": "kadosh-49600.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:474316353062:android:bf00a8a51b65a5ddc200e7",
+        "android_client_info": {
+          "package_name": "com.kadosh.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA1ZdBBETN9O5U24m3bE2ESCRJFqXp3lXQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -32,6 +32,7 @@ const ProyectorController = ({ user }) => {
   const [isUploadingFondo, setIsUploadingFondo] = useState(false);
   const [fondoActivo, setFondoActivo] = useState(null);
   const [transicionActiva, setTransicionActiva] = useState('fade');
+  const [guardarEnCancion, setGuardarEnCancion] = useState(true);
 
   const [displayLiveSlide, setDisplayLiveSlide] = useState(null);
   const [fadeState, setFadeState] = useState('in');
@@ -224,8 +225,12 @@ const ProyectorController = ({ user }) => {
       const data = await res.json();
       
       if (data.secure_url) {
-        // Guardar la URL del fondo activo en Firebase
         await updateDoc(doc(db, 'eventos', eventoId), { proyectorFondo: data.secure_url });
+        
+        if (activeSongId && guardarEnCancion) {
+          await updateDoc(doc(db, 'canciones', activeSongId), { fondoUrl: data.secure_url });
+          setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: data.secure_url } : c));
+        }
       }
     } catch (err) {
       console.error("Error subiendo a Cloudinary", err);
@@ -238,6 +243,12 @@ const ProyectorController = ({ user }) => {
 
   const quitarFondo = async () => {
     await updateDoc(doc(db, 'eventos', eventoId), { proyectorFondo: null });
+    
+    if (activeSongId && guardarEnCancion) {
+      await updateDoc(doc(db, 'canciones', activeSongId), { fondoUrl: null });
+      setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: null } : c));
+    }
+    setShowFondosModal(false);
   };
 
   // Lógica para enviar mensajes a tarima
@@ -344,7 +355,13 @@ const ProyectorController = ({ user }) => {
                 return (
                   <button 
                     key={idx} 
-                    onClick={() => { setActiveSongId(c.id); setPreviewSlide(null); }}
+                    onClick={async () => { 
+                      setActiveSongId(c.id); 
+                      setPreviewSlide(null); 
+                      if (c.fondoUrl) {
+                        try { await updateDoc(doc(db, 'eventos', eventoId), { proyectorFondo: c.fondoUrl }); } catch(e) { console.error(e); }
+                      }
+                    }}
                     className={`w-full text-left p-3 rounded-xl transition-all border ${activeSongId === c.id ? 'bg-violet-600/10 border-violet-500/50 text-white shadow-sm' : 'border-transparent hover:bg-zinc-800/50 text-zinc-400 hover:text-zinc-200'}`}
                   >
                     <p className="font-bold text-sm truncate">{idx + 1}. {c.titulo}</p>
@@ -527,7 +544,12 @@ const ProyectorController = ({ user }) => {
               return (
                 <button 
                   key={idx} 
-                  onClick={() => setActiveSongId(c.id)}
+                  onClick={async () => { 
+                    setActiveSongId(c.id); 
+                    if (c.fondoUrl) {
+                      try { await updateDoc(doc(db, 'eventos', eventoId), { proyectorFondo: c.fondoUrl }); } catch(e) { console.error(e); }
+                    }
+                  }}
                   className={`inline-flex items-center px-4 py-2 rounded-xl text-sm font-bold transition-all border shadow-sm ${activeSongId === c.id ? 'bg-violet-600 text-white border-violet-500' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}
                 >
                   {idx + 1}. {c.titulo}
@@ -601,6 +623,16 @@ const ProyectorController = ({ user }) => {
                   <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png" className="hidden" disabled={isUploadingFondo} onChange={handleUploadCloudinary} />
                 </label>
               </div>
+
+              {activeSongId && (
+                <label className="flex items-center gap-3 p-3 bg-zinc-800/50 rounded-xl cursor-pointer border border-zinc-700/50 hover:bg-zinc-800 transition-colors">
+                  <input type="checkbox" checked={guardarEnCancion} onChange={e => setGuardarEnCancion(e.target.checked)} className="w-5 h-5 rounded text-indigo-500 focus:ring-indigo-500 bg-zinc-900 border-zinc-700" />
+                  <div className="flex flex-col">
+                    <span className="text-sm font-bold text-white leading-none mb-1">Guardar en la canción</span>
+                    <span className="text-[10px] text-zinc-400 leading-tight">Este fondo se pondrá automáticamente la próxima vez que toques "{activeSong?.titulo}".</span>
+                  </div>
+                </label>
+              )}
 
               {fondoActivo && (
                 <button onClick={quitarFondo} className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl font-bold text-sm transition-colors border border-red-500/20">

@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { AlertTriangle, ChevronRight } from 'lucide-react';
+import { AlertTriangle, ChevronRight, ArrowLeft } from 'lucide-react';
 
 const StageDisplay = () => {
   const { eventoId } = useParams();
+  const navigate = useNavigate();
   const [slide, setSlide] = useState(null);
   const [nextSlide, setNextSlide] = useState(null);
   const [alerta, setAlerta] = useState(null);
@@ -47,14 +48,19 @@ const StageDisplay = () => {
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:100px_100px] pointer-events-none"></div>
 
       {/* Header: Reloj y Estado */}
-      <header className="relative z-10 flex justify-between items-end px-8 py-6 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm shrink-0 shadow-sm">
-         <div className="flex flex-col">
-           <span className="text-red-500 font-black tracking-[0.2em] uppercase text-sm mb-1 flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></div> EN VIVO</span>
-           <span className="text-zinc-400 font-bold uppercase tracking-widest text-2xl flex items-center gap-3">
-             Kadosh <span className="bg-zinc-800 text-white px-3 py-1 rounded-lg text-sm shadow-inner border border-zinc-700">STAGE DISPLAY</span>
-           </span>
+      <header className="relative z-10 flex justify-between items-center px-3 py-2 lg:px-8 lg:py-6 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm shrink-0 shadow-sm">
+         <div className="flex items-center gap-2 lg:gap-4">
+           <button onClick={() => navigate(`/setlist/${eventoId}`)} className="p-2 lg:p-3 bg-zinc-800/50 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded-full transition-all backdrop-blur-md" title="Volver">
+             <ArrowLeft className="w-5 h-5 lg:w-6 lg:h-6" />
+           </button>
+           <div className="flex flex-col">
+             <span className="text-red-500 font-black tracking-[0.2em] uppercase text-[10px] lg:text-sm mb-0.5 lg:mb-1 flex items-center gap-1.5 lg:gap-2"><div className="w-2 h-2 lg:w-2.5 lg:h-2.5 rounded-full bg-red-500 animate-pulse"></div> EN VIVO</span>
+             <span className="text-zinc-400 font-bold uppercase tracking-widest text-sm lg:text-2xl flex items-center gap-2 lg:gap-3">
+               Kadosh <span className="bg-zinc-800 text-white px-2 lg:px-3 py-0.5 lg:py-1 rounded-lg text-xs lg:text-sm shadow-inner border border-zinc-700">STAGE DISPLAY</span>
+             </span>
+           </div>
          </div>
-         <div className="text-6xl font-black text-white font-mono tracking-tighter tabular-nums drop-shadow-[0_0_15px_rgba(255,255,255,0.2)]">
+         <div className="text-2xl lg:text-6xl font-black text-white font-mono tracking-tighter tabular-nums drop-shadow-[0_0_15px_rgba(255,255,255,0.2)]">
            {hora.toLocaleTimeString('es-ES', { hour12: false })}
          </div>
       </header>
@@ -69,33 +75,33 @@ const StageDisplay = () => {
         </div>
       )}
 
-      <main className="relative z-0 flex-1 flex flex-col justify-center items-center text-center p-4 sm:p-8 w-full overflow-hidden">
-         <h2 className="text-[min(8vw,6vh)] md:text-[min(6vw,6.5vh)] lg:text-[min(5vw,6.5vh)] font-black text-yellow-400 leading-[1.15] drop-shadow-[0_5px_25px_rgba(250,204,21,0.15)] whitespace-pre-wrap max-w-[95vw]">
+      <main className="relative z-0 flex-1 flex flex-col justify-center items-center text-center p-2 lg:p-8 w-full overflow-hidden">
+         <h2 className="text-[16px] md:text-[18px] lg:text-[min(5vw,6.5vh)] font-black text-yellow-400 leading-[1.2] drop-shadow-[0_5px_25px_rgba(250,204,21,0.15)] whitespace-pre-wrap break-words max-w-[95vw]">
            {showLogo ? (
-             <span className="text-zinc-600 italic font-bold">🎯 LOGO KADOSH EN PANTALLA</span>
+             <span className="text-zinc-600 italic font-bold text-lg md:text-2xl lg:text-[min(6vw,6.5vh)]">🎯 LOGO KADOSH EN PANTALLA</span>
            ) : slide ? (slide.texto.trim() === '' ? (
              <div className="flex flex-col items-center">
-               <span className="text-zinc-600 italic font-bold">🎶 {slide.titulo ? slide.titulo.toUpperCase() : 'INSTRUMENTAL'}</span>
-               <span className="text-[min(4vw,4vh)] text-amber-500/80 font-black tracking-widest uppercase mt-4 animate-pulse">Toda La Banda</span>
+               <span className="text-zinc-600 italic font-bold text-lg md:text-2xl lg:text-[min(6vw,6.5vh)]">🎶 {slide.titulo ? slide.titulo.toUpperCase() : 'INSTRUMENTAL'}</span>
+               <span className="text-[11px] md:text-[13px] lg:text-[min(4vw,4vh)] text-amber-500/80 font-black tracking-widest uppercase mt-4 animate-pulse">Toda La Banda</span>
              </div>
-           ) : slide.texto) : <span className="text-zinc-800">KADOSH APP</span>}
+           ) : slide.texto) : <span className="text-zinc-800 text-lg md:text-2xl lg:text-[min(6vw,6.5vh)]">KADOSH APP</span>}
          </h2>
       </main>
 
       {nextSong && (
-        <div className="relative z-10 bg-indigo-950/80 border-t border-indigo-900/50 px-8 py-3 shrink-0 flex justify-between items-center shadow-inner">
-           <span className="text-indigo-400 font-bold uppercase tracking-widest text-sm">A continuación en el programa:</span>
-           <span className="text-xl sm:text-2xl font-black text-indigo-100 truncate">{nextSong}</span>
+        <div className="relative z-10 bg-indigo-950/80 border-t border-indigo-900/50 px-3 py-1.5 lg:px-8 lg:py-3 shrink-0 flex justify-between items-center shadow-inner">
+           <span className="text-indigo-400 font-bold uppercase tracking-widest text-[10px] lg:text-sm">Siguiente:</span>
+           <span className="text-sm sm:text-xl lg:text-2xl font-black text-indigo-100 truncate pl-2">{nextSong}</span>
         </div>
       )}
 
-      <footer className="relative z-10 bg-zinc-900 border-t border-zinc-800 p-8 shrink-0 flex items-center gap-8 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
+      <footer className="relative z-10 bg-zinc-900 border-t border-zinc-800 p-2 lg:p-8 shrink-0 flex items-center gap-3 lg:gap-8 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
          <div className="shrink-0 flex flex-col items-center justify-center">
-            <span className="text-zinc-500 font-black uppercase tracking-widest text-sm mb-2">Preparar</span>
-            <div className="w-12 h-12 rounded-full border-4 border-zinc-700 flex items-center justify-center bg-zinc-800"><ChevronRight size={24} className="text-zinc-400" /></div>
+            <span className="text-zinc-500 font-black uppercase tracking-widest text-[9px] lg:text-sm mb-0.5 lg:mb-2">Preparar</span>
+            <div className="w-8 h-8 lg:w-12 lg:h-12 rounded-full border-2 lg:border-4 border-zinc-700 flex items-center justify-center bg-zinc-800"><ChevronRight className="w-5 h-5 lg:w-6 lg:h-6 text-zinc-400" /></div>
          </div>
-         <div className="flex-1 border-l-2 border-zinc-800 pl-8 overflow-hidden">
-           <p className="text-[min(4vw,4vh)] font-bold text-zinc-300 leading-none whitespace-pre-wrap truncate">
+         <div className="flex-1 border-l-2 border-zinc-800 pl-3 lg:pl-8 overflow-hidden">
+           <p className="text-[min(5vw,5vh)] lg:text-[min(4vw,4vh)] font-bold text-zinc-300 leading-none whitespace-pre-wrap truncate">
              {nextSlide ? (nextSlide.texto.trim() === '' ? <span className="text-zinc-600 italic">🎶 {nextSlide.titulo ? nextSlide.titulo.toUpperCase() : 'INSTRUMENTAL'} (TODA LA BANDA)</span> : nextSlide.texto.replace(/\n/g, ' - ')) : <span className="text-zinc-700">---</span>}
            </p>
          </div>

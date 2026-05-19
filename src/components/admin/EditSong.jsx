@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, onSnapshot, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
-import { Save, ArrowLeft, Edit3, AlertCircle, Play, Pause, Volume2, Volume1, VolumeX, X, Library, Video, Link as LinkIcon, FileText as FileIcon, Upload, Trash2, SlidersHorizontal, Headphones } from 'lucide-react';
+import { Save, ArrowLeft, Edit3, AlertCircle, Play, Pause, Volume2, Volume1, VolumeX, X, Library, Video, Link as LinkIcon, FileText as FileIcon, Upload, Trash2, SlidersHorizontal, Headphones, Monitor } from 'lucide-react';
 import { traducirAcorde } from '../../utils/musicCore';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
@@ -28,6 +28,7 @@ const EditSong = ({ user }) => {
   const [audioUrl, setAudioUrl] = useState('');
   const [audioFile, setAudioFile] = useState(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [fondoUrl, setFondoUrl] = useState('');
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -77,6 +78,7 @@ const EditSong = ({ user }) => {
           setLetraRaw(data.letraRaw || '');
           setAudioUrl(data.audioUrl || '');
           setYoutubeUrl(data.youtubeUrl || '');
+          setFondoUrl(data.fondoUrl || '');
 
           if (data.tonosAlternativos) {
             const parsed = {};
@@ -223,6 +225,25 @@ const EditSong = ({ user }) => {
     setMultitracks(multitracks.filter(m => m.id !== id));
   };
 
+  const handleUploadFondo = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    showToast("Subiendo fondo de proyección...", "info");
+    setIsSaving(true);
+    try {
+      const storage = getStorage();
+      const fondoRef = ref(storage, `fondos/${Date.now()}_${file.name}`);
+      await uploadBytes(fondoRef, file);
+      const url = await getDownloadURL(fondoRef);
+      setFondoUrl(url);
+      showToast("¡Fondo de proyector subido exitosamente!", "success");
+    } catch (err) {
+      showToast("Error al subir el fondo.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!titulo || !letraRaw) {
       showToast("El título y la letra son obligatorios.");
@@ -258,6 +279,7 @@ const EditSong = ({ user }) => {
         letraRaw,
         audioUrl: newAudioUrl,
         youtubeUrl,
+        fondoUrl,
         fechaActualizacion: new Date().toISOString()
       });
       showToast("¡Canción actualizada exitosamente!", "success");
@@ -418,6 +440,34 @@ const EditSong = ({ user }) => {
                   <Upload size={14} /> Subir Pista (MP3/WAV)
                   <input type="file" accept="audio/*" className="hidden" onChange={handleUploadStem} disabled={isSaving} />
                 </label>
+              </div>
+            </div>
+
+            {/* NUEVO PANEL: FONDO DE PROYECCIÓN */}
+            <div className="col-span-2 pt-4 mt-2 border-t border-zinc-100 dark:border-zinc-800">
+              <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
+                <Monitor size={18} className="text-emerald-500"/> Fondo de Proyección Automático
+              </label>
+              <div className="bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 flex flex-col gap-3">
+                {fondoUrl && (
+                  <div className="relative w-full h-36 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700">
+                    {fondoUrl.match(/\.(mp4|webm|mov)$/i) || fondoUrl.includes('video/upload') ? (
+                      <video src={fondoUrl} autoPlay loop muted playsInline className="w-full h-full object-cover" />
+                    ) : (
+                      <img src={fondoUrl} alt="Fondo" className="w-full h-full object-cover" />
+                    )}
+                    <button type="button" onClick={() => setFondoUrl('')} className="absolute top-2 right-2 p-2 bg-red-600/90 hover:bg-red-600 text-white rounded-lg shadow-md transition-colors active:scale-95">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                )}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input type="url" value={fondoUrl} onChange={e => setFondoUrl(e.target.value)} placeholder="Pegar URL (ej. Cloudinary/YouTube...)" className="flex-1 text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white dark:bg-zinc-900 dark:text-white" />
+                  <label className="text-xs font-bold bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-4 py-2.5 rounded-lg hover:bg-emerald-200 dark:hover:bg-emerald-500/30 transition-colors flex justify-center items-center gap-2 cursor-pointer shadow-sm shrink-0">
+                    <Upload size={14} /> Subir Archivo
+                    <input type="file" accept="image/*,video/*" className="hidden" onChange={handleUploadFondo} disabled={isSaving} />
+                  </label>
+                </div>
               </div>
             </div>
 

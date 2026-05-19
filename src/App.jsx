@@ -19,6 +19,8 @@ import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { getToken } from 'firebase/messaging';
 import { db, messaging } from './config/firebase';
+import { Capacitor } from '@capacitor/core';
+import { PushNotifications } from '@capacitor/push-notifications';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -48,15 +50,33 @@ function App() {
 
           // Registrar Token de Notificaciones Push (FCM)
           try {
-            if (import.meta.env.VITE_VAPID_KEY) {
-              const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
-              if (currentToken) {
-                // Guardamos el token en la BD para saber a qué dispositivo enviarle los Push
-                await updateDoc(docRef, { fcmToken: currentToken });
+            if (Capacitor.isNativePlatform()) {
+              // 📱 MODO NATIVO (APK / iOS)
+              const permStatus = await PushNotifications.requestPermissions();
+              if (permStatus.receive === 'granted') {
+                await PushNotifications.register();
+                
+                PushNotifications.removeAllListeners();
+                PushNotifications.addListener('registration', async (token) => {
+                  await updateDoc(docRef, { fcmToken: token.value });
+                });
+                
+                PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
+                  const data = notification.notification.data;
+                  if (data && data.url) window.location.href = data.url;
+                });
               }
+            } else {
+              // 💻 MODO WEB (PWA / PC)
+              if (import.meta.env.VITE_VAPID_KEY) {
+                const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
+                if (currentToken) {
+                  await updateDoc(docRef, { fcmToken: currentToken });
+                }
+            }
             }
           } catch (error) {
-            console.warn('FCM Token no generado (Permisos denegados):', error);
+            console.warn('Error al registrar notificaciones:', error);
           }
 
         // Escuchamos los cambios del perfil en TIEMPO REAL

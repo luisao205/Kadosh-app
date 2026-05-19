@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown } from 'lucide-react';
+import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 
@@ -25,6 +25,9 @@ const SetlistViewer = ({ user }) => {
   const [ensayoDuration, setEnsayoDuration] = useState(0);
   const ensayoAudioRef = useRef(null);
   const [showControladorMenu, setShowControladorMenu] = useState(false);
+  const ensayoAudioRefs = useRef({});
+  const [ensayoMutes, setEnsayoMutes] = useState({});
+  const [ensayoVolumes, setEnsayoVolumes] = useState({});
 
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
 
@@ -38,7 +41,6 @@ const SetlistViewer = ({ user }) => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // 1. Obtener Evento
         const eventoSnap = await getDoc(doc(db, 'eventos', id));
         if (!eventoSnap.exists()) {
           navigate('/eventos');
@@ -47,7 +49,6 @@ const SetlistViewer = ({ user }) => {
         const eventoData = eventoSnap.data();
         setEvento(eventoData);
 
-        // 2. Obtener Canciones del Evento (Extraídas del Setlist)
         const songIds = eventoData.setlist ? eventoData.setlist.filter(i => i.type === 'song').map(i => i.value) : (eventoData.canciones || []);
         const uniqueSongIds = [...new Set(songIds)];
         
@@ -57,7 +58,6 @@ const SetlistViewer = ({ user }) => {
             setCanciones(cancionesSnaps.map(snap => ({ id: snap.id, ...snap.data() })));
         }
 
-        // 3. Obtener Equipo Convocado
         if (eventoData.equipo && eventoData.equipo.length > 0) {
           const equipoPromises = eventoData.equipo.map(item => {
             const userId = typeof item === 'string' ? item : item.id;
@@ -79,7 +79,13 @@ const SetlistViewer = ({ user }) => {
     fetchData();
   }, [id, navigate]);
 
-  // Extraer lista de reproducción para Modo Ensayo
+  // Bloquear el scroll del fondo cuando el Ensayo está abierto
+  useEffect(() => {
+    if (showEnsayoPlayer) document.body.style.overflow = 'hidden';
+    else document.body.style.overflow = 'unset';
+    return () => { document.body.style.overflow = 'unset'; };
+  }, [showEnsayoPlayer]);
+
   const playlist = useMemo(() => {
     if (!evento) return [];
     const items = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
@@ -87,15 +93,12 @@ const SetlistViewer = ({ user }) => {
     items.forEach(item => {
       if (item.type === 'song') {
         const c = canciones.find(x => x.id === item.value);
-        // Usar audio general, o si no hay, el primer stem/multitrack disponible
-        const audio = c?.audioUrl || (c?.multitracks?.length > 0 ? c.multitracks[0].url : null);
-        if (c && audio) validSongs.push({ ...c, playUrl: audio });
+        if (c) validSongs.push(c);
       }
     });
     return validSongs;
   }, [evento, canciones]);
 
-  // Muro de Comentarios
   const handleAddComment = async (e) => {
     e.preventDefault();
     if (!comentario.trim()) return;
@@ -119,7 +122,6 @@ const SetlistViewer = ({ user }) => {
       setEvento(prev => ({ ...prev, comentarios: nuevosComentarios }));
       setComentario('');
       
-      // Notificar a los demás convocados
       const destinatarios = eventoSnap.data().equipo?.map(item => typeof item === 'string' ? item : item.id) || [];
       await addDoc(collection(db, 'notificaciones'), {
         titulo: `Muro de Ensayo`,
@@ -129,7 +131,7 @@ const SetlistViewer = ({ user }) => {
         fechaCreacion: new Date().toISOString()
       });
     } catch (error) {
-      console.error("Error al añadir comentario", error);
+      console.error(error);
     } finally {
       setIsSubmittingComment(false);
     }
@@ -151,7 +153,6 @@ const SetlistViewer = ({ user }) => {
     }
   };
 
-  // Lógica de cálculo de transposición para imprimir los acordes correctos
   const calcularOffset = (tonoOriginal, tonoDestino) => {
     if (!tonoOriginal || !tonoDestino) return 0;
     const NOTAS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -185,18 +186,13 @@ const SetlistViewer = ({ user }) => {
           const disponibles = [];
           usuariosSnap.forEach(usuarioDoc => {
             const u = usuarioDoc.data();
-            // Buscamos músicos que toquen ese instrumento y que NO estén ya convocados
             if (usuarioDoc.id !== user.uid && !u.sinAcceso && u.instrumentos?.includes(miRol)) {
               const yaConvocado = equipo.some(eq => eq.id === usuarioDoc.id);
               if (!yaConvocado) disponibles.push(u.nombre.split(' ')[0]);
             }
           });
-
-          if (disponibles.length > 0) {
-            sugerenciaMsg = `\n💡 Tienes a ${disponibles.join(', ')} disponible(s) en ${miRol}.`;
-          } else {
-            sugerenciaMsg = `\n⚠️ No hay otros músicos registrados en ${miRol}.`;
-          }
+          if (disponibles.length > 0) sugerenciaMsg = `\n💡 Tienes a ${disponibles.join(', ')} disponible(s) en ${miRol}.`;
+          else sugerenciaMsg = `\n⚠️ No hay otros músicos registrados en ${miRol}.`;
         }
       }
 
@@ -211,19 +207,63 @@ const SetlistViewer = ({ user }) => {
     } catch (error) { console.error(error); }
   };
 
-  // Controles de Reproducción Modo Ensayo
-  useEffect(() => {
-    if (showEnsayoPlayer && ensayoAudioRef.current) {
-      ensayoAudioRef.current.play().then(() => setEnsayoIsPlaying(true)).catch(() => setEnsayoIsPlaying(false));
+  const stopEnsayoAll = () => {
+    if (ensayoAudioRef.current) {
+      ensayoAudioRef.current.pause();
+      ensayoAudioRef.current.currentTime = 0;
     }
+    Object.values(ensayoAudioRefs.current).filter(Boolean).forEach(t => {
+      t.pause();
+      t.currentTime = 0;
+    });
+    setEnsayoIsPlaying(false);
+    setEnsayoProgress(0);
+  };
+
+  useEffect(() => {
+    stopEnsayoAll();
+    setEnsayoMutes({});
+    setEnsayoVolumes({});
   }, [currentTrackIdx, showEnsayoPlayer]);
 
-  const playNextTrack = () => {
-    if (currentTrackIdx < playlist.length - 1) setCurrentTrackIdx(prev => prev + 1);
-    else { setEnsayoIsPlaying(false); setShowEnsayoPlayer(false); } // Cierra al terminar toda la lista
+  const toggleEnsayoPlay = () => {
+    const currentSong = playlist[currentTrackIdx];
+    const isMulti = currentSong?.multitracks?.length > 0;
+    const hasAudio = isMulti || currentSong?.audioUrl;
+    if (!hasAudio) return;
+
+    if (isMulti) {
+      const tracks = Object.values(ensayoAudioRefs.current).filter(Boolean);
+      if (ensayoIsPlaying) tracks.forEach(t => t.pause());
+      else tracks.forEach(t => t.play().catch(e => console.error(e)));
+    } else {
+      if (ensayoAudioRef.current) {
+        if (ensayoIsPlaying) ensayoAudioRef.current.pause();
+        else ensayoAudioRef.current.play().catch(e => console.error(e));
+      }
+    }
+    setEnsayoIsPlaying(!ensayoIsPlaying);
   };
-  const playPrevTrack = () => {
-    if (currentTrackIdx > 0) setCurrentTrackIdx(prev => prev - 1);
+
+  const handleEnsayoSeek = (e) => {
+    const val = Number(e.target.value);
+    const isMulti = playlist[currentTrackIdx]?.multitracks?.length > 0;
+    if (isMulti) Object.values(ensayoAudioRefs.current).filter(Boolean).forEach(t => t.currentTime = val);
+    else if (ensayoAudioRef.current) ensayoAudioRef.current.currentTime = val;
+    setEnsayoProgress(val);
+  };
+
+  const toggleEnsayoMute = (trackId) => {
+    setEnsayoMutes(prev => {
+      const isMuted = !prev[trackId];
+      if (ensayoAudioRefs.current[trackId]) ensayoAudioRefs.current[trackId].muted = isMuted;
+      return { ...prev, [trackId]: isMuted };
+    });
+  };
+
+  const handleEnsayoVolume = (trackId, vol) => {
+    setEnsayoVolumes(prev => ({ ...prev, [trackId]: vol }));
+    if (ensayoAudioRefs.current[trackId]) ensayoAudioRefs.current[trackId].volume = vol;
   };
 
   const formatTime = (time) => {
@@ -233,9 +273,25 @@ const SetlistViewer = ({ user }) => {
     return `${min}:${sec < 10 ? '0' : ''}${sec}`;
   };
 
-  if (loading) {
-    return <div className="flex justify-center items-center h-64 text-zinc-500 font-bold animate-pulse">Cargando Setlist...</div>;
+  // ----- LÓGICA DEL MODO ENSAYO (Extraída para mayor limpieza) -----
+  const currentEnsayoSong = playlist[currentTrackIdx];
+  const isEnsayoMulti = currentEnsayoSong?.multitracks?.length > 0;
+  const hasEnsayoAudio = isEnsayoMulti || currentEnsayoSong?.audioUrl;
+  
+  let ensayoOffset = 0;
+  let ensayoTonoFinal = currentEnsayoSong?.tonoOriginal;
+  const cantanteAsignadoEnsayo = evento?.cantantesPorCancion?.[currentEnsayoSong?.id];
+  if (cantanteAsignadoEnsayo && currentEnsayoSong?.tonosAlternativos) {
+    const opciones = currentEnsayoSong.tonosAlternativos.split(',');
+    const match = opciones.find(opt => opt.trim().toLowerCase().startsWith(cantanteAsignadoEnsayo.toLowerCase() + ':'));
+    if (match) {
+      ensayoTonoFinal = match.split(':')[1].trim();
+      ensayoOffset = calcularOffset(currentEnsayoSong.tonoOriginal, ensayoTonoFinal);
+    }
   }
+  const ensayoSeccionesParsed = currentEnsayoSong ? parsearCancion(currentEnsayoSong.letraRaw) : [];
+
+  if (loading) return <div className="flex justify-center items-center h-64 text-zinc-500 font-bold animate-pulse">Cargando Setlist...</div>;
 
   return (
     <>
@@ -463,9 +519,7 @@ const SetlistViewer = ({ user }) => {
 
     {/* VISTA DE IMPRESIÓN (Generación Automática del Documento Físico) */}
     <div className="hidden print:block bg-white text-black font-sans">
-       {/* PÁGINA 1: RESUMEN DE HOJA DE RUTA */}
       <div className="break-after-page">
-        {/* Cabecera Principal */}
         <div className="text-center mb-8 border-b-4 border-black pb-6">
           <h1 className="text-5xl font-black uppercase tracking-tighter mb-2">{evento.titulo}</h1>
           <p className="text-xl font-bold text-gray-700">
@@ -475,7 +529,6 @@ const SetlistViewer = ({ user }) => {
         </div>
 
         <div className="grid grid-cols-2 gap-12">
-          {/* Columna Izquierda: Instrucciones y Equipo */}
           <div>
             {evento.notas && (
               <div className="mb-8 p-5 border-2 border-black rounded-2xl bg-gray-50">
@@ -513,7 +566,6 @@ const SetlistViewer = ({ user }) => {
             )}
           </div>
 
-          {/* Columna Derecha: Orden de Canciones (Setlist) */}
           <div>
             <h3 className="font-black text-lg uppercase tracking-widest border-b-2 border-black pb-2 mb-4">Orden del Repertorio</h3>
             <div className="space-y-4">
@@ -623,6 +675,7 @@ const SetlistViewer = ({ user }) => {
           });
         })()}
       </div>
+    </div>
 
   {/* Modal Confirmar Eliminación de Comentario */}
   {commentToDelete && (
@@ -658,43 +711,145 @@ const SetlistViewer = ({ user }) => {
     </div>
   )}
 
-  {/* Reproductor Modo Ensayo (Mini Spotify) Flotante */}
-  {showEnsayoPlayer && playlist.length > 0 && (
-    <div className="fixed bottom-4 md:bottom-8 left-1/2 -translate-x-1/2 w-[95%] max-w-sm bg-zinc-900 border border-zinc-800 p-5 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-50 animate-in slide-in-from-bottom-10 flex flex-col text-white print:hidden">
-      <div className="flex justify-between items-start mb-3">
-        <div className="flex-1 overflow-hidden pr-4">
-          <p className="text-[10px] text-emerald-400 font-black uppercase tracking-widest mb-1 flex items-center gap-1.5">
-            <PlayCircle size={12}/> Reproduciendo Ensayo ({currentTrackIdx + 1}/{playlist.length})
-          </p>
-          <h4 className="font-bold text-base truncate">{playlist[currentTrackIdx].titulo}</h4>
-          <p className="text-xs text-zinc-400 truncate">{playlist[currentTrackIdx].artista}</p>
+  {/* ESTUDIO DE ENSAYO (MODAL A PANTALLA COMPLETA - Extraído al nivel raíz) */}
+  {showEnsayoPlayer && playlist.length > 0 && currentEnsayoSong && (
+    <div className="fixed inset-0 z-[100] bg-black text-white flex flex-col md:flex-row overflow-hidden animate-in fade-in print:hidden">
+      
+      {/* BARRA LATERAL (Setlist) */}
+      <div className="w-full md:w-80 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 h-[30vh] md:h-full shadow-[20px_0_50px_rgba(0,0,0,0.5)] z-20">
+        <div className="p-4 md:p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+          <h3 className="font-black text-lg flex items-center gap-2 text-emerald-400 tracking-tight"><ListMusic size={20}/> Estudio de Ensayo</h3>
+          <button onClick={() => { stopEnsayoAll(); setShowEnsayoPlayer(false); }} className="p-2 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-full transition-colors active:scale-95"><X size={20}/></button>
         </div>
-        <button onClick={() => { setShowEnsayoPlayer(false); if(ensayoAudioRef.current) ensayoAudioRef.current.pause(); setEnsayoIsPlaying(false); }} className="text-zinc-500 hover:text-white p-1.5 bg-zinc-800 rounded-full transition-colors shrink-0 active:scale-95">
-          <X size={16}/>
-        </button>
+        <div className="flex-1 overflow-y-auto p-3 space-y-2 [&::-webkit-scrollbar]:hidden">
+          {playlist.map((song, idx) => (
+            <button 
+              key={idx}
+              onClick={() => setCurrentTrackIdx(idx)}
+              className={`w-full text-left p-3 rounded-xl transition-all border flex items-center gap-3 ${currentTrackIdx === idx ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-100 shadow-sm' : 'border-transparent hover:bg-zinc-800 text-zinc-400 hover:text-white'}`}
+            >
+              <span className="font-black text-xs opacity-50 w-4 text-center">{idx + 1}</span>
+              <div className="flex-1 truncate">
+                <p className="font-bold text-sm truncate leading-tight">{song.titulo}</p>
+                <p className="text-[10px] uppercase tracking-wider opacity-70 mt-0.5 truncate">{song.artista}</p>
+              </div>
+              {currentTrackIdx === idx && ensayoIsPlaying && <PlayCircle size={16} className="text-emerald-500 shrink-0 animate-pulse" />}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="flex items-center gap-3 mb-3">
-        <span className="text-[10px] font-mono text-zinc-500 w-8 text-right">{formatTime(ensayoProgress)}</span>
-        <input type="range" min="0" max={ensayoDuration || 100} value={ensayoProgress} onChange={(e) => { const val = Number(e.target.value); if(ensayoAudioRef.current) ensayoAudioRef.current.currentTime = val; setEnsayoProgress(val); }} className="flex-1 h-1.5 bg-zinc-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:bg-emerald-400 transition-all" />
-        <span className="text-[10px] font-mono text-zinc-500 w-8">{formatTime(ensayoDuration)}</span>
-      </div>
+      {/* ÁREA PRINCIPAL DERECHA */}
+      <div className="flex-1 flex flex-col h-[70vh] md:h-full relative bg-zinc-950">
+        
+        {/* Cabecera de la canción */}
+        <div className="p-4 md:px-8 py-5 border-b border-zinc-800 bg-zinc-900/50 flex justify-between items-center shrink-0">
+           <div>
+              <h2 className="text-xl md:text-3xl font-black text-white tracking-tight">{currentEnsayoSong.titulo}</h2>
+              <p className="text-xs md:text-sm text-zinc-400 mt-1 font-medium">{currentEnsayoSong.artista} • {currentEnsayoSong.bpm} BPM</p>
+           </div>
+           <div className="text-right">
+              <span className="text-lg md:text-xl font-black text-white bg-zinc-800 border border-zinc-700 px-3 py-1 rounded-lg inline-block shadow-sm">
+                {traducirAcorde(ensayoTonoFinal || 'C', formatoAcordes)}
+              </span>
+              {cantanteAsignadoEnsayo && <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest mt-1">Canta: {cantanteAsignadoEnsayo}</p>}
+           </div>
+        </div>
 
-      <div className="flex items-center justify-center gap-8">
-        <button onClick={playPrevTrack} disabled={currentTrackIdx === 0} className="text-zinc-400 hover:text-white disabled:opacity-30 transition-colors active:scale-95">
-          <SkipBack size={24} fill="currentColor" />
-        </button>
-        <button onClick={() => { if (ensayoAudioRef.current) { if (ensayoIsPlaying) ensayoAudioRef.current.pause(); else ensayoAudioRef.current.play(); setEnsayoIsPlaying(!ensayoIsPlaying); } }} className="w-14 h-14 flex items-center justify-center bg-white text-black hover:bg-zinc-200 rounded-full transition-transform active:scale-95 shadow-lg">
-          {ensayoIsPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
-        </button>
-        <button onClick={playNextTrack} disabled={currentTrackIdx === playlist.length - 1} className="text-zinc-400 hover:text-white disabled:opacity-30 transition-colors active:scale-95">
-          <SkipForward size={24} fill="currentColor" />
-        </button>
+        {/* Letras y Acordes Transpuestos */}
+        <div className="flex-1 overflow-y-auto p-5 md:p-10 [&::-webkit-scrollbar]:hidden">
+           <div className="max-w-4xl mx-auto pb-12">
+              {ensayoSeccionesParsed.length === 0 ? (
+                <p className="text-zinc-600 font-medium text-center py-20 border-2 border-dashed border-zinc-800 rounded-2xl">No hay letra registrada para esta canción.</p>
+              ) : (
+                ensayoSeccionesParsed.map((seccion, sIdx) => (
+                  <div key={sIdx} className="mb-8 break-inside-avoid">
+                    <span className="text-[10px] md:text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-lg mb-3 inline-block bg-zinc-800 text-blue-400 border border-zinc-700 shadow-sm">
+                      {seccion.titulo}
+                    </span>
+                    {seccion.lineas.map((linea, lIdx) => (
+                      <div key={lIdx} className="flex flex-wrap items-end gap-x-1.5 md:gap-x-2 gap-y-4 mt-2 font-medium leading-tight">
+                        {linea.map((palabra, pIdx) => (
+                          <div key={pIdx} className="flex items-end whitespace-nowrap">
+                            {palabra.map((silaba, silIdx) => (
+                              <div key={silIdx} className="flex flex-col justify-end items-start">
+                                <span className="font-bold min-h-[1.1rem] md:min-h-[1.5rem] flex items-end mb-0.5 text-xs md:text-sm text-blue-400 leading-none">
+                                  {silaba.acorde ? traducirAcorde(transponerNota(silaba.acorde, ensayoOffset), formatoAcordes) : ""}
+                                </span>
+                                <span className="text-[15px] md:text-[18px] text-zinc-100 leading-none">{silaba.texto}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ))
+              )}
+           </div>
+        </div>
+
+        {/* Reproductor / Mezcladora Inferior */}
+        <div className="bg-zinc-900 border-t border-zinc-800 p-4 md:p-6 shrink-0 shadow-[0_-20px_50px_rgba(0,0,0,0.5)] z-10">
+           {!hasEnsayoAudio ? (
+             <div className="text-center text-zinc-500 font-medium text-sm py-4">No hay pista de audio ni secuencias subidas para ensayar esta canción.</div>
+           ) : (
+             <div className="flex flex-col gap-5 max-w-5xl mx-auto">
+                {/* Controles Principales */}
+                <div className="flex items-center gap-4 bg-zinc-950 p-2 pr-4 pl-3 rounded-2xl border border-zinc-800 shadow-inner">
+                   <button onClick={() => currentTrackIdx > 0 && setCurrentTrackIdx(p=>p-1)} disabled={currentTrackIdx === 0} className="text-zinc-400 hover:text-white disabled:opacity-30 transition-colors active:scale-95 shrink-0"><SkipBack size={24} fill="currentColor" /></button>
+                   <button onClick={toggleEnsayoPlay} className="w-14 h-14 flex items-center justify-center bg-emerald-500 hover:bg-emerald-400 text-black rounded-full transition-transform active:scale-95 shadow-lg shrink-0">
+                     {ensayoIsPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
+                   </button>
+                   <button onClick={() => currentTrackIdx < playlist.length - 1 && setCurrentTrackIdx(p=>p+1)} disabled={currentTrackIdx === playlist.length - 1} className="text-zinc-400 hover:text-white disabled:opacity-30 transition-colors active:scale-95 shrink-0"><SkipForward size={24} fill="currentColor" /></button>
+                   
+                   <div className="flex-1 flex items-center gap-3 ml-2 border-l border-zinc-800 pl-4">
+                     <span className="text-[10px] md:text-xs font-mono font-bold text-emerald-500 w-10 text-right shrink-0">{formatTime(ensayoProgress)}</span>
+                     <input type="range" min="0" max={ensayoDuration || 100} value={ensayoProgress} onChange={handleEnsayoSeek} className="flex-1 h-2 bg-zinc-800 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-emerald-500 [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:bg-emerald-400 transition-all shadow-inner" />
+                     <span className="text-[10px] md:text-xs font-mono font-bold text-zinc-500 w-10 shrink-0">{formatTime(ensayoDuration)}</span>
+                   </div>
+                </div>
+
+                {/* Canales (Stems) o Audio Simple */}
+                {isEnsayoMulti ? (
+                   <div className="flex gap-3 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden snap-x">
+                     {currentEnsayoSong.multitracks.map((track, idx) => (
+                       <div key={track.id} className="bg-zinc-950 border border-zinc-800 p-3 rounded-2xl flex items-center gap-3 min-w-[220px] snap-start shadow-sm">
+                         <button onClick={() => toggleEnsayoMute(track.id)} className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs transition-colors shadow-inner ${ensayoMutes[track.id] ? 'bg-red-500 text-white shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'}`}>M</button>
+                         <div className="flex-1">
+                           <p className="text-[11px] font-bold text-white truncate mb-2">{track.nombre}</p>
+                           <div className="flex items-center gap-2">
+                             <Volume2 size={12} className="text-zinc-600"/>
+                             <input type="range" min="0" max="1" step="0.01" value={ensayoVolumes[track.id] ?? 1} onChange={(e) => handleEnsayoVolume(track.id, parseFloat(e.target.value))} className="flex-1 h-1.5 bg-zinc-800 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-zinc-300 [&::-webkit-slider-thumb]:rounded-full" />
+                           </div>
+                         </div>
+                         <audio
+                           ref={el => ensayoAudioRefs.current[track.id] = el}
+                           src={track.url}
+                           onTimeUpdate={idx === 0 ? (e) => setEnsayoProgress(e.target.currentTime) : null}
+                           onLoadedMetadata={idx === 0 ? (e) => setEnsayoDuration(e.target.duration) : null}
+                           onEnded={idx === 0 ? () => { if (currentTrackIdx < playlist.length - 1) setCurrentTrackIdx(p=>p+1); else stopEnsayoAll(); } : null}
+                           className="hidden"
+                         />
+                       </div>
+                     ))}
+                   </div>
+                ) : (
+                   <audio
+                     ref={ensayoAudioRef}
+                     src={currentEnsayoSong.audioUrl}
+                     onTimeUpdate={(e) => setEnsayoProgress(e.target.currentTime)}
+                     onLoadedMetadata={(e) => setEnsayoDuration(e.target.duration)}
+                     onEnded={() => { if (currentTrackIdx < playlist.length - 1) setCurrentTrackIdx(p=>p+1); else stopEnsayoAll(); }}
+                     className="hidden"
+                   />
+                )}
+             </div>
+           )}
+        </div>
       </div>
-      <audio ref={ensayoAudioRef} src={playlist[currentTrackIdx].playUrl} onTimeUpdate={(e) => setEnsayoProgress(e.target.currentTime)} onLoadedMetadata={(e) => setEnsayoDuration(e.target.duration)} onEnded={playNextTrack} className="hidden" />
     </div>
   )}
-    </div>
     </>
   );
 };
