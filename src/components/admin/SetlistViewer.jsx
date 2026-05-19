@@ -432,7 +432,8 @@ const SetlistViewer = ({ user }) => {
                         <div className="truncate">
                           <h3 className="font-bold text-zinc-900 dark:text-zinc-100 flex flex-wrap items-center gap-2">
                             <span className="truncate">{cancion.titulo}</span>
-                            {evento.cantantesPorCancion?.[cancion.id] && <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 px-2 py-0.5 rounded-full border border-rose-100 dark:border-rose-500/20 tracking-wide uppercase">{evento.cantantesPorCancion[cancion.id]}</span>}
+                            {evento.cantantesPorCancion?.[cancion.id] && <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 px-2 py-0.5 rounded-full border border-rose-100 dark:border-rose-500/20 tracking-wide uppercase">Voz: {evento.cantantesPorCancion[cancion.id].split(' ')[0]}</span>}
+                            {evento.corosPorCancion?.[cancion.id]?.length > 0 && <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-100 dark:border-indigo-500/20 tracking-wide uppercase">Coros: {evento.corosPorCancion[cancion.id].map(n => n.split(' ')[0]).join(', ')}</span>}
                           </h3>
                           <p className="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1 mt-0.5"><Mic2 size={12}/> <span className="truncate">{cancion.artista}</span></p>
                         </div>
@@ -620,7 +621,8 @@ const SetlistViewer = ({ user }) => {
                           <span className="w-8 h-8 rounded-full bg-black text-white flex items-center justify-center text-sm font-black shrink-0">{count++}</span>
                           <div>
                             <p className="font-black text-base leading-tight">{cancion.titulo}</p>
-                            {cantanteAsignado && <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-0.5">Voz: {cantanteAsignado}</p>}
+                            {cantanteAsignado && <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-0.5">Voz: {cantanteAsignado.split(' ')[0]}</p>}
+                            {evento.corosPorCancion?.[cancion.id]?.length > 0 && <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-0.5">Coros: {evento.corosPorCancion[cancion.id].map(n => n.split(' ')[0]).join(', ')}</p>}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
@@ -669,7 +671,8 @@ const SetlistViewer = ({ user }) => {
                   </div>
                   <div className="text-right">
                     <span className="text-3xl font-black border-4 border-black px-3 py-1 rounded-xl inline-block mb-1">{traducirAcorde(tonoFinal || 'C', formatoAcordes)}</span>
-                    <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{cancion.bpm} BPM {cantanteAsignado ? `• Voz: ${cantanteAsignado}` : ''}</p>
+                    <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{cancion.bpm} BPM {cantanteAsignado ? `• Voz: ${cantanteAsignado.split(' ')[0]}` : ''}</p>
+                    {evento.corosPorCancion?.[cancion.id]?.length > 0 && <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-1">Coros: {evento.corosPorCancion[cancion.id].map(n => n.split(' ')[0]).join(', ')}</p>}
                   </div>
                 </div>
                 <div className="columns-2 gap-12 text-sm font-medium">

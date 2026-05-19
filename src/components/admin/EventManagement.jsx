@@ -30,6 +30,7 @@ const EventManagement = ({ user }) => {
   const [textoNota, setTextoNota] = useState('');
   const [equipoSeleccionado, setEquipoSeleccionado] = useState([]);
   const [cantantesPorCancion, setCantantesPorCancion] = useState({});
+  const [corosPorCancion, setCorosPorCancion] = useState({});
   const [isSaving, setIsSaving] = useState(false);
   
   // Nuevos estados para Fase 1
@@ -197,6 +198,7 @@ const EventManagement = ({ user }) => {
         equipo: equipoSeleccionado,
         estadoAsistencia,
         cantantesPorCancion,
+        corosPorCancion,
       };
 
       let eventIdParaNotif = editingEventId;
@@ -286,7 +288,11 @@ const EventManagement = ({ user }) => {
         const cancion = canciones.find(c => c.id === item.value);
         if (cancion) {
           const cantante = evento.cantantesPorCancion?.[cancion.id];
-          mensaje += `${songCount}. ${cancion.titulo} (${traducirAcorde(cancion.tonoOriginal || 'C', formatoAcordes)})${cantante ? ` - Canta: ${cantante}` : ''}\n`;
+          const coros = evento.corosPorCancion?.[cancion.id];
+          let linea = `${songCount}. ${cancion.titulo} (${traducirAcorde(cancion.tonoOriginal || 'C', formatoAcordes)})`;
+          if (cantante) linea += ` - Voz: ${cantante.split(' ')[0]}`;
+          if (coros && coros.length > 0) linea += ` - Coros: ${coros.map(c => c.split(' ')[0]).join(', ')}`;
+          mensaje += linea + '\n';
           songCount++;
         }
       }
@@ -348,13 +354,14 @@ const EventManagement = ({ user }) => {
     setNotasGenerales(evento.notas || '');
     setSetlist(evento.setlist || (evento.canciones || []).map(id => ({ idLocal: Date.now().toString() + Math.random(), type: 'song', value: id })));
     setCantantesPorCancion(evento.cantantesPorCancion || {});
+    setCorosPorCancion(evento.corosPorCancion || {});
     setEquipoSeleccionado(evento.equipo || []);
     setEstadoAsistenciaActual(evento.estadoAsistencia || {});
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const cancelEdit = () => {
-    setEditingEventId(null); setTitulo(''); setFecha(''); setFechaEnsayo(''); setSetlist([]); setNotasGenerales(PLANTILLA_NOTAS); setEquipoSeleccionado([]); setCantantesPorCancion({}); setEstadoAsistenciaActual({});
+    setEditingEventId(null); setTitulo(''); setFecha(''); setFechaEnsayo(''); setSetlist([]); setNotasGenerales(PLANTILLA_NOTAS); setEquipoSeleccionado([]); setCantantesPorCancion({}); setCorosPorCancion({}); setEstadoAsistenciaActual({});
   };
 
   // Duplicar Evento
@@ -365,6 +372,7 @@ const EventManagement = ({ user }) => {
     const oldSetlist = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
     setSetlist(oldSetlist.map(item => ({ ...item, idLocal: Date.now().toString() + Math.random() })));
     setCantantesPorCancion(evento.cantantesPorCancion || {});
+    setCorosPorCancion(evento.corosPorCancion || {});
     setEquipoSeleccionado(evento.equipo || []);
     setFecha(''); setFechaEnsayo('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -582,6 +590,7 @@ const EventManagement = ({ user }) => {
                     const cantantesDisponibles = usuarios.filter(u => u.instrumentos?.includes('Voz Principal') || u.instrumentos?.includes('Coros'));
                     const selectedSinger = cantantesPorCancion[songId] || '';
                     const isSelected = selectedSinger !== '';
+                    const corosAsignados = corosPorCancion[songId] || [];
                     const hasTono = isSelected && tonosGuardados[selectedSinger] !== undefined;
                     const tonoFinal = hasTono ? (tonosGuardados[selectedSinger] || c.tono) : null;
                       
@@ -609,6 +618,38 @@ const EventManagement = ({ user }) => {
                             <Music size={12} /> Tono registrado para {selectedSinger}: {traducirAcorde(tonoFinal, formatoAcordes)}
                           </p>
                         )}
+                        
+                        <div className="mt-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                          <p className="text-[10px] font-bold text-zinc-500 mb-1.5 flex items-center gap-1">🎤 Asignar Coros a esta canción:</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {cantantesDisponibles.map(cor => {
+                              const isCoroSelected = corosAsignados.includes(cor.nombre);
+                              return (
+                                <button
+                                  key={cor.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setCorosPorCancion(prev => {
+                                      const corosActuales = prev[songId] || [];
+                                      const nuevosCoros = corosActuales.includes(cor.nombre) ? corosActuales.filter(n => n !== cor.nombre) : [...corosActuales, cor.nombre];
+                                      setEquipoSeleccionado(prevEquipo => {
+                                        let updated = [...prevEquipo];
+                                        if (!corosActuales.includes(cor.nombre)) {
+                                          if (!updated.some(item => (typeof item === 'string' && item === cor.id) || (item.id === cor.id && item.rol === 'Coros'))) updated.push({ id: cor.id, rol: 'Coros' });
+                                        }
+                                        return updated;
+                                      });
+                                      return { ...prev, [songId]: nuevosCoros };
+                                    });
+                                  }}
+                                  className={`text-[10px] px-2.5 py-1 rounded-full font-bold transition-all border ${isCoroSelected ? 'bg-indigo-100 dark:bg-indigo-500/20 border-indigo-200 dark:border-indigo-500/30 text-indigo-700 dark:text-indigo-400 shadow-sm' : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}
+                                >
+                                  {cor.nombre.split(' ')[0]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
                         </div>
                       );
                     })}
