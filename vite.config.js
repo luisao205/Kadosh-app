@@ -22,15 +22,15 @@ export default defineConfig({
         orientation: 'portrait',
         icons: [
           {
-            src: '/KADOSH_APP.jpg', // Asegúrate de tener este logo en public/
+            src: '/logo.png', // Usamos el PNG que creamos para Android
             sizes: '192x192',
-            type: 'image/jpeg',
+            type: 'image/png',
             purpose: 'any maskable'
           },
           {
-            src: '/KADOSH_APP.jpg',
+            src: '/logo.png',
             sizes: '512x512',
-            type: 'image/jpeg',
+            type: 'image/png',
             purpose: 'any maskable'
           }
         ]
