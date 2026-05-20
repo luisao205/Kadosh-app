@@ -445,6 +445,7 @@ const EditSong = ({ user }) => {
                   <option value="Bajo" className="bg-white dark:bg-zinc-900">🎸 Bajo</option>
                   <option value="Secuencia" className="bg-white dark:bg-zinc-900">🎹 Secuencia / Synths</option>
                   <option value="Coros" className="bg-white dark:bg-zinc-900">🎤 Coros</option>
+                  <option value="Otro" className="bg-white dark:bg-zinc-900">📝 Otro (Escribir nombre)</option>
                 </select>
                 {nombreStem === 'Otro' && (
                   <input
