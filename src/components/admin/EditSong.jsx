@@ -22,6 +22,7 @@ const EditSong = ({ user }) => {
   const [nuevoRecurso, setNuevoRecurso] = useState({ titulo: '', url: '', tipo: 'youtube', instrumento: 'General' });
   const [multitracks, setMultitracks] = useState([]); // [{id, nombre, url, fileName}]
   const [nombreStem, setNombreStem] = useState('Click');
+  const [customStemName, setCustomStemName] = useState(''); // Nuevo estado para nombre personalizado
   const [cantantesDisponibles, setCantantesDisponibles] = useState([]);
   const [tonosCantantes, setTonosCantantes] = useState({});
   const [letraRaw, setLetraRaw] = useState('');
@@ -197,23 +198,32 @@ const EditSong = ({ user }) => {
   const handleUploadStem = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    showToast(`Subiendo pista de ${nombreStem}...`, "info");
+
+    // Determinar el nombre final de la pista
+    const finalStemName = nombreStem === 'Otro' ? customStemName.trim() : nombreStem;
+    if (!finalStemName || finalStemName === 'Otro') { // Asegurarse de que haya un nombre si se seleccionó 'Otro'
+      showToast("Por favor, ingresa un nombre para la pista.", "error");
+      return;
+    }
+    showToast(`Subiendo pista de ${finalStemName}...`, "info");
     setIsSaving(true);
     try {
       const storage = getStorage();
       const stemRef = ref(storage, `multitracks/${Date.now()}_${file.name}`);
-      await uploadBytes(stemRef, file);
-      const url = await getDownloadURL(stemRef);
-      setMultitracks([...multitracks, { id: Date.now().toString(), nombre: nombreStem, url, fileName: file.name }]);
+      await uploadBytes(stemRef, file); // Sube el archivo
+      const url = await getDownloadURL(stemRef); // Obtiene la URL
+      setMultitracks([...multitracks, { id: Date.now().toString(), nombre: finalStemName, url, fileName: file.name }]);
       
       addDoc(collection(db, 'notificaciones'), {
-        titulo: `Nueva Pista: ${nombreStem}`,
-        mensaje: `Se subió una secuencia/pista de ${nombreStem} para la canción "${titulo}".`,
+        titulo: `Nueva Pista: ${finalStemName}`,
+        mensaje: `Se subió una secuencia/pista de ${finalStemName} para la canción "${titulo}".`,
         destinatarios: ['all'],
         emisorId: user?.uid,
         fechaCreacion: new Date().toISOString()
       }).catch(e => console.error(e));
-      showToast(`¡Pista de ${nombreStem} subida!`, "success");
+      showToast(`¡Pista de ${finalStemName} subida!`, "success");
+      setCustomStemName(''); // Limpiar el nombre personalizado después de subir
+      setNombreStem('Click'); // Restablecer a la opción predeterminada
     } catch (err) {
       showToast("Error al subir la pista.");
     } finally {
@@ -428,7 +438,7 @@ const EditSong = ({ user }) => {
               </div>
 
               <div className="bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row gap-2 items-center">
-                <select value={nombreStem} onChange={e => setNombreStem(e.target.value)} className="w-full sm:w-1/3 text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-zinc-900 dark:text-white font-bold text-zinc-700 dark:text-zinc-300">
+                <select value={nombreStem} onChange={e => { setNombreStem(e.target.value); setCustomStemName(''); }} className="w-full sm:w-1/3 text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-zinc-900 dark:text-white font-bold text-zinc-700 dark:text-zinc-300">
                   <option value="Click" className="bg-white dark:bg-zinc-900">🥁 Click (Metrónomo)</option>
                   <option value="Guía" className="bg-white dark:bg-zinc-900">🗣️ Guía (Voz Directora)</option>
                   <option value="Batería" className="bg-white dark:bg-zinc-900">🥁 Batería</option>
@@ -436,6 +446,15 @@ const EditSong = ({ user }) => {
                   <option value="Secuencia" className="bg-white dark:bg-zinc-900">🎹 Secuencia / Synths</option>
                   <option value="Coros" className="bg-white dark:bg-zinc-900">🎤 Coros</option>
                 </select>
+                {nombreStem === 'Otro' && (
+                  <input
+                    type="text"
+                    value={customStemName}
+                    onChange={e => setCustomStemName(e.target.value)}
+                    placeholder="Nombre de la pista (ej. Trombón 2)"
+                    className="w-full sm:flex-1 text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-zinc-900 dark:text-white font-bold text-zinc-700 dark:text-zinc-300"
+                  />
+                )}
                 <label className="w-full sm:flex-1 text-xs font-bold bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-400 py-2.5 rounded-lg hover:bg-indigo-200 dark:hover:bg-indigo-500/30 transition-colors flex justify-center items-center gap-2 cursor-pointer shadow-sm">
                   <Upload size={14} /> Subir Pista (MP3/WAV)
                   <input type="file" accept="audio/*" className="hidden" onChange={handleUploadStem} disabled={isSaving} />
