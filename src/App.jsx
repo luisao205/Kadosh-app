@@ -39,9 +39,8 @@ function App() {
         const docSnap = await getDoc(docRef);
         if (!docSnap.exists()) {
           // Si la cuenta se creó antes de tener el sistema de roles, la registramos ahora.
-          // IMPORTANTE: Cambia este correo por tu correo real con el que inicias sesión
-          const MI_CORREO_MAESTRO = 'luistorresdrums2024@gmail.com'; 
-          const esElDueno = firebaseUser.email === MI_CORREO_MAESTRO;
+          // Se usa una variable de entorno para el correo del dueño principal.
+          const esElDueno = firebaseUser.email === import.meta.env.VITE_OWNER_EMAIL;
           
           const userData = { email: firebaseUser.email, nombre: esElDueno ? 'Dueño Principal' : 'Usuario Nuevo', rol: esElDueno ? 'dueño' : 'musico', fechaCreacion: new Date().toISOString() };
           

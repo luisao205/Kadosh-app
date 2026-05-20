@@ -21,55 +21,26 @@ const AdminDashboard = ({ user }) => {
   const [isCleaning, setIsCleaning] = useState(false);
   const [cleanResult, setCleanResult] = useState(null);
   const confettiFired = useRef(false);
+  const sentBirthdayNotifs = useRef(new Set());
 
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
 
   useEffect(() => {
-    // 1. Obtener Estadísticas Generales (Canciones y Eventos)
-    const fetchStats = async () => {
-      // Cargar todas las canciones para mapear sus IDs a Títulos
-      const songsSnap = await getDocs(collection(db, 'canciones'));
-      const songsMap = {};
-      songsSnap.forEach(doc => {
-        songsMap[doc.id] = doc.data().titulo;
-      });
-      setTotalCanciones(songsSnap.size);
-
-      // Cargar historial de eventos para calcular estadísticas
-      const eventsSnap = await getDocs(collection(db, 'eventos'));
-      let songCounts = {};
-      let singerCounts = {};
-
-      eventsSnap.forEach(doc => {
-        const ev = doc.data();
-        
-        // Frecuencia de canciones
-        const songIds = ev.setlist ? ev.setlist.filter(i => i.type === 'song').map(i => i.value) : (ev.canciones || []);
-        songIds.forEach(id => {
-          songCounts[id] = (songCounts[id] || 0) + 1;
+    // 1. Obtener Estadísticas (Ahora desde el documento pre-calculado)
+    const unsubStats = onSnapshot(doc(db, 'sistema', 'estadisticas'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setStats({
+          topCanciones: data.topCanciones || [],
+          topCantantes: data.topCantantes || [],
+          totalEventos: data.totalEventos || 0,
         });
-
-        // Frecuencia de cantantes
-        if (ev.cantantesPorCancion) {
-          Object.values(ev.cantantesPorCancion).forEach(singer => {
-            if (singer && singer.trim() !== '') {
-              singerCounts[singer] = (singerCounts[singer] || 0) + 1;
-            }
-          });
-        }
-      });
-
-      const sortedSongs = Object.entries(songCounts)
-        .map(([id, count]) => ({ titulo: songsMap[id] || 'Canción Eliminada', count }))
-        .sort((a, b) => b.count - a.count).slice(0, 5);
-
-      const sortedSingers = Object.entries(singerCounts)
-        .map(([nombre, count]) => ({ nombre, count }))
-        .sort((a, b) => b.count - a.count).slice(0, 5);
-
-      setStats({ topCanciones: sortedSongs, topCantantes: sortedSingers, totalEventos: eventsSnap.size });
-    };
-    fetchStats();
+        setTotalCanciones(data.totalCanciones || 0);
+      } else {
+        console.log("Documento de estadísticas no encontrado. Se generará automáticamente o puede ser forzado en la consola de Firebase.");
+        // Para la primera vez, podemos dejar los contadores en 0 o mostrar un mensaje.
+      }
+    });
 
     // Formato YYYY-MM-DD en hora local para no perder eventos programados para hoy más temprano
     const tzoffset = (new Date()).getTimezoneOffset() * 60000;
@@ -146,8 +117,10 @@ const AdminDashboard = ({ user }) => {
         // LÓGICA DE SORPRESAS DE CUMPLEAÑOS (Solo procesado por el admin principal)
         if ((esDueno || user?.rol === 'admin') && (diffDays === 7 || diffDays === 1)) {
           const flagKey = `${bdayThisYear.getFullYear()}_${diffDays}d`;
+          const sessionKey = `${u.id}_${flagKey}`;
           
-          if (u.avisosCumpleanos !== flagKey) {
+          if (u.avisosCumpleanos !== flagKey && !sentBirthdayNotifs.current.has(sessionKey)) {
+            sentBirthdayNotifs.current.add(sessionKey); // Bloqueamos el reenvío en esta sesión
             (async () => {
               try {
                 await updateDoc(doc(db, 'usuarios', u.id), { avisosCumpleanos: flagKey });
@@ -161,7 +134,10 @@ const AdminDashboard = ({ user }) => {
                   emisorId: 'system',
                   fechaCreacion: new Date().toISOString()
                 });
-              } catch (e) { console.error(e); }
+              } catch (e) { 
+                console.error(e); 
+                sentBirthdayNotifs.current.delete(sessionKey); // Si falla, permitimos reintentar
+              }
             })();
           }
         }
@@ -187,7 +163,7 @@ const AdminDashboard = ({ user }) => {
       }
     });
 
-    return () => { unsubEventos(); unsubInv(); unsubUsuarios(); };
+    return () => { unsubStats(); unsubEventos(); unsubInv(); unsubUsuarios(); };
   }, []);
 
   const responderRSVP = async (eventoId, respuesta) => {
