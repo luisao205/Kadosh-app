@@ -3,6 +3,8 @@ import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { User, Save, Moon, Sun, Type, Camera, Loader2, Quote, Mic2, Palette, Check, X } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Camera as NativeCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 
 const UserProfile = ({ user }) => {
   // Extraemos las preferencias guardadas o usamos unas por defecto
@@ -12,6 +14,7 @@ const UserProfile = ({ user }) => {
   const [fontSize, setFontSize] = useState(prefGuardadas.fontSize ?? 16);
   const [ocultarAcordes, setOcultarAcordes] = useState(prefGuardadas.ocultarAcordes ?? false);
   const [formatoAcordes, setFormatoAcordes] = useState(prefGuardadas.formatoAcordes || 'american');
+  const [notacion, setNotacion] = useState(prefGuardadas.notacion || 'sharps');
   const [themeColor, setThemeColor] = useState(prefGuardadas.themeColor || 'violet');
   const [biografia, setBiografia] = useState(user?.biografia || '');
   const [fotoUrl, setFotoUrl] = useState(user?.fotoPerfil || '');
@@ -29,6 +32,49 @@ const UserProfile = ({ user }) => {
     violet: 'bg-violet-600 hover:bg-violet-700 text-white ring-violet-200 dark:ring-violet-900',
     blue: 'bg-blue-600 hover:bg-blue-700 text-white ring-blue-200 dark:ring-blue-900',
     rose: 'bg-rose-600 hover:bg-rose-700 text-white ring-rose-200 dark:ring-rose-900'
+  };
+
+  // Función para manejar la subida desde el APK (Nativo)
+  const handleNativePhoto = async () => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    try {
+      const image = await NativeCamera.getPhoto({
+        quality: 80,
+        allowEditing: true,
+        resultType: CameraResultType.Uri,
+        source: CameraSource.Prompt, // Pregunta si quiere Cámara o Galería
+        width: 300,
+        height: 300
+      });
+
+      if (image.webPath) {
+        setIsUploading(true);
+        // Convertir la ruta local en un Blob para Firebase
+        const response = await fetch(image.webPath);
+        const blob = await response.blob();
+        
+        const storage = getStorage();
+        const avatarRef = ref(storage, `avatars/${user.uid}.jpg`);
+        await uploadBytes(avatarRef, blob);
+        const url = await getDownloadURL(avatarRef);
+
+        await updateDoc(doc(db, 'usuarios', user.uid), { 
+          fotoPerfil: url,
+          historialFotos: [...(user?.historialFotos || []), new Date().toISOString()]
+        });
+
+        setFotoUrl(url);
+        showToast("¡Foto actualizada!");
+      }
+    } catch (error) {
+      console.error("Error en cámara nativa:", error);
+      if (error.message !== "User cancelled photos app") {
+        showToast("Error al acceder a la cámara", "error");
+      }
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   // Compresión mágica de imagen antes de subirla
@@ -111,6 +157,7 @@ const UserProfile = ({ user }) => {
           fontSize: Number(fontSize) || 16,
           ocultarAcordes: ocultarAcordes ?? false,
           formatoAcordes: formatoAcordes || 'american',
+          notacion: notacion || 'sharps',
           themeColor: themeColor || 'violet'
         }
       });
@@ -138,10 +185,16 @@ const UserProfile = ({ user }) => {
             )}
           </div>
           
-          <label className="absolute -bottom-2 -right-2 p-2 bg-zinc-900 text-white rounded-full shadow-lg cursor-pointer hover:bg-zinc-800 transition-colors active:scale-95 group-hover:scale-110">
+          <button 
+            type="button"
+            onClick={() => Capacitor.isNativePlatform() ? handleNativePhoto() : null}
+            className="absolute -bottom-2 -right-2 p-2 bg-zinc-900 text-white rounded-full shadow-lg cursor-pointer hover:bg-zinc-800 transition-colors active:scale-95 group-hover:scale-110"
+          >
             <Camera size={14} />
-            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={isUploading} />
-          </label>
+            {!Capacitor.isNativePlatform() && (
+              <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleImageUpload} disabled={isUploading} />
+            )}
+          </button>
         </div>
 
         <div className="ml-2">
@@ -191,6 +244,22 @@ const UserProfile = ({ user }) => {
                 Latino (Do, Re, Mi)
               </button>
             </div>
+          </div>
+
+          {/* Preferencia de Alteraciones */}
+          <div>
+            <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
+              <Palette size={18} className="text-violet-600" /> Preferencia de Alteraciones
+            </label>
+            <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl w-full sm:w-max gap-1">
+              <button onClick={() => setNotacion('sharps')} className={`flex-1 sm:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all ${notacion === 'sharps' ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-white' : 'text-zinc-500 dark:text-zinc-400'}`}>
+                Sostenidos (#)
+              </button>
+              <button onClick={() => setNotacion('flats')} className={`flex-1 sm:flex-none px-6 py-2 rounded-lg text-sm font-bold transition-all ${notacion === 'flats' ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-white' : 'text-zinc-500 dark:text-zinc-400'}`}>
+                Bemoles (b)
+              </button>
+            </div>
+            <p className="text-[10px] text-zinc-500 mt-2">Ejemplo: ¿Prefieres leer D# o Eb?</p>
           </div>
 
           {/* Modo Oscuro */}

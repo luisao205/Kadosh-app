@@ -17,7 +17,7 @@ import SetlistViewer from './components/admin/SetlistViewer';
 import UserProfile from './components/admin/UserProfile';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
-import { getToken } from 'firebase/messaging';
+import { getToken, onMessage } from 'firebase/messaging';
 import { db, messaging } from './config/firebase';
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
@@ -34,6 +34,7 @@ function App() {
     const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         const docRef = doc(db, 'usuarios', firebaseUser.uid);
+        let userFirestoreData = null;
         
         // Comprobamos si el perfil existe, si no, lo creamos
         const docSnap = await getDoc(docRef);
@@ -46,34 +47,64 @@ function App() {
           
           // Lo guardamos en la base de datos automáticamente
           await setDoc(docRef, userData);
+          userFirestoreData = userData;
+        } else {
+          userFirestoreData = docSnap.data();
         }
 
           // Registrar Token de Notificaciones Push (FCM)
           try {
             if (Capacitor.isNativePlatform()) {
               // 📱 MODO NATIVO (APK / iOS)
-              const permStatus = await PushNotifications.requestPermissions();
+              let permStatus = await PushNotifications.checkPermissions();
+
+              if (permStatus.receive === 'prompt' || permStatus.receive === 'denied') {
+                permStatus = await PushNotifications.requestPermissions();
+              }
+
               if (permStatus.receive === 'granted') {
                 await PushNotifications.register();
-                
+              }
+              
+            } else {
+              // 💻 MODO WEB (PWA / PC)
+              const permission = await Notification.requestPermission();
+
+              if (import.meta.env.VITE_VAPID_KEY && permission === 'granted') {
+                const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
+                // Solo actualizar si el token es nuevo o diferente al guardado
+                if (currentToken && currentToken !== userFirestoreData?.fcmToken) {
+                  await updateDoc(docRef, { fcmToken: currentToken });
+                }
+
+                // Escuchar notificaciones en TIEMPO REAL cuando la app está abierta
+                onMessage(messaging, (payload) => {
+                  console.log('Mensaje recibido en primer plano:', payload);
+                  // Aquí podrías disparar un sonido o un Toast personalizado
+                  alert(`🔔 ${payload.notification.title}\n${payload.notification.body}`);
+                });
+              }
+            }
+
+            // Configurar listeners si tenemos permisos
+            if (Capacitor.isNativePlatform()) {
                 PushNotifications.removeAllListeners();
                 PushNotifications.addListener('registration', async (token) => {
-                  await updateDoc(docRef, { fcmToken: token.value });
+                  if (token.value !== userFirestoreData?.fcmToken) {
+                    await updateDoc(docRef, { fcmToken: token.value });
+                  }
+                });
+                
+                // Listener para notificaciones en TIEMPO REAL cuando la app está abierta (APK)
+                PushNotifications.addListener('pushNotificationReceived', (notification) => {
+                  console.log('Mensaje recibido en primer plano (APK):', notification);
+                  alert(`🔔 ${notification.title}\n${notification.body}`);
                 });
                 
                 PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
                   const data = notification.notification.data;
                   if (data && data.url) window.location.href = data.url;
                 });
-              }
-            } else {
-              // 💻 MODO WEB (PWA / PC)
-              if (import.meta.env.VITE_VAPID_KEY) {
-                const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
-                if (currentToken) {
-                  await updateDoc(docRef, { fcmToken: currentToken });
-                }
-            }
             }
           } catch (error) {
             console.warn('Error al registrar notificaciones:', error);
@@ -112,7 +143,8 @@ function App() {
     fontSize: user?.preferencias?.fontSize ?? 16,
     ocultarAcordes: user?.preferencias?.ocultarAcordes ?? false,
     formatoAcordes: user?.preferencias?.formatoAcordes || 'american',
-    themeColor: user?.preferencias?.themeColor || 'violet'
+    themeColor: user?.preferencias?.themeColor || 'violet',
+    notacion: user?.preferencias?.notacion || 'sharps' // 'sharps' (#) o 'flats' (b)
   };
 
   // EFECTO PARA APLICAR EL MODO OSCURO A TODA LA PÁGINA (Siempre arriba)

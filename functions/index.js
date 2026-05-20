@@ -76,17 +76,16 @@ exports.enviarNotificacionPush = functions.firestore
       });
 
       if (tokens.length > 0) {
-        // FCM has a limit of 500 tokens per multicast message.
-        const tokenChunks = [];
-        for (let i = 0; i < tokens.length; i += 500) {
-          tokenChunks.push(tokens.slice(i, i + 500));
-        }
+        const messages = tokens.map(token => ({
+          ...messagePayload,
+          token: token
+        }));
 
-        for (const chunk of tokenChunks) {
-          const message = { ...messagePayload, tokens: chunk };
+        // Enviar en grupos de 500 (límite de Firebase)
+        for (let i = 0; i < tokens.length; i += 500) {
           try {
-            const response = await admin.messaging().sendMulticast(message);
-            console.log(`${response.successCount} messages sent via token list chunk.`);
+            const response = await admin.messaging().sendEach(messages.slice(i, i + 500));
+            console.log(`${response.successCount} notificaciones enviadas por lista de tokens.`);
           } catch (error) {
             console.error("Error sending Push via token list:", error);
           }
