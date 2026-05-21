@@ -22,6 +22,7 @@ const EditSong = ({ user }) => {
   const [nuevoRecurso, setNuevoRecurso] = useState({ titulo: '', url: '', tipo: 'youtube', instrumento: 'General' });
   const [multitracks, setMultitracks] = useState([]); // [{id, nombre, url, fileName}]
   const [nombreStem, setNombreStem] = useState('Click');
+  const [stemsNuevosCount, setStemsNuevosCount] = useState(0);
   const [customStemName, setCustomStemName] = useState(''); // Nuevo estado para nombre personalizado
   const [cantantesDisponibles, setCantantesDisponibles] = useState([]);
   const [tonosCantantes, setTonosCantantes] = useState({});
@@ -213,14 +214,7 @@ const EditSong = ({ user }) => {
       await uploadBytes(stemRef, file); // Sube el archivo
       const url = await getDownloadURL(stemRef); // Obtiene la URL
       setMultitracks([...multitracks, { id: Date.now().toString(), nombre: finalStemName, url, fileName: file.name }]);
-      
-      addDoc(collection(db, 'notificaciones'), {
-        titulo: `Nueva Pista: ${finalStemName}`,
-        mensaje: `Se subió una secuencia/pista de ${finalStemName} para la canción "${titulo}".`,
-        destinatarios: ['all'],
-        emisorId: user?.uid,
-        fechaCreacion: new Date().toISOString()
-      }).catch(e => console.error(e));
+      setStemsNuevosCount(prev => prev + 1);
       showToast(`¡Pista de ${finalStemName} subida!`, "success");
       setCustomStemName(''); // Limpiar el nombre personalizado después de subir
       setNombreStem('Click'); // Restablecer a la opción predeterminada
@@ -292,6 +286,17 @@ const EditSong = ({ user }) => {
         fondoUrl,
         fechaActualizacion: new Date().toISOString()
       });
+
+      if (stemsNuevosCount > 0) {
+        await addDoc(collection(db, 'notificaciones'), {
+          titulo: `🎶 Pistas Actualizadas: ${titulo}`,
+          mensaje: `Se han añadido ${stemsNuevosCount} pistas/secuencias nuevas a esta canción.`,
+          destinatarios: ['all'],
+          emisorId: user?.uid,
+          fechaCreacion: new Date().toISOString()
+        });
+      }
+
       showToast("¡Canción actualizada exitosamente!", "success");
       setTimeout(() => navigate('/canciones'), 1500); // Volver al repertorio tras leer el mensaje
     } catch (error) {

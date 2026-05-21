@@ -51,8 +51,9 @@ exports.enviarNotificacionPush = functions.firestore
       },
     };
 
-    // Detectar si hay IDs de usuario específicos (los UIDs no tienen espacios y suelen ser largos)
-    const tieneUsuariosEspecificos = destinatarios.some((d) => d !== "all" && !d.includes(" ") && d.length > 15);
+    // Para Setlists (Evento Actualizado / Convocatoria), preferimos notificar por Temas a menos que haya exclusiones.
+    // Esto evita problemas si los UIDs no están sincronizados.
+    const tieneUsuariosEspecificos = destinatarios.some((d) => d !== "all" && !d.includes(" ") && d.length > 15 && !notif.titulo.includes("Evento"));
 
     if (excluidos.length > 0 || tieneUsuariosEspecificos) {
       console.log("Usando envío basado en Tokens (Convocatoria/Privado/Exclusiones)");

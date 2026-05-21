@@ -1,6 +1,14 @@
 // src/utils/musicCore.js
 const NOTAS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
+const EQUIVALENCIAS = {
+  'Db': 'C#', 'Eb': 'D#', 'Gb': 'F#', 'Ab': 'G#', 'Bb': 'A#', 'Cb': 'B', 'Fb': 'E'
+};
+
+const SHARP_TO_FLAT = {
+  'C#': 'Db', 'D#': 'Eb', 'F#': 'Gb', 'G#': 'Ab', 'A#': 'Bb'
+};
+
 const MAPA_LATINO = {
   'C': 'Do', 'C#': 'Do#', 'Db': 'Reb', 'D': 'Re', 'D#': 'Re#', 'Eb': 'Mib', 'E': 'Mi',
   'F': 'Fa', 'F#': 'Fa#', 'Gb': 'Solb', 'G': 'Sol', 'G#': 'Sol#', 'Ab': 'Lab', 'A': 'La',
@@ -9,10 +17,10 @@ const MAPA_LATINO = {
 
 /**
  * Traduce un acorde americano a formato latino si es necesario
- * Mantiene los adornos intactos (ej. C#m7 -> Do#m7)
+ * Ahora respeta la preferencia de Sostenidos/Bemoles
  */
-export const traducirAcorde = (acorde, formato = 'american') => {
-  if (!acorde || formato === 'american') return acorde;
+export const traducirAcorde = (acorde, formato = 'american', notacion = 'sharps') => {
+  if (!acorde) return '';
 
   // Dividir por slash si es un acorde compuesto (ej. D/F# -> Re/Fa#)
   const partes = acorde.split('/');
@@ -20,8 +28,16 @@ export const traducirAcorde = (acorde, formato = 'american') => {
   const traducirParte = (parte) => {
     const rootMatch = parte.match(/^[A-G][#b]?/);
     if (!rootMatch) return parte; 
-    const root = rootMatch[0];
+    let root = rootMatch[0];
     const adorno = parte.substring(root.length);
+        // 1. Aplicar preferencia de alteraciones (# vs b)
+    if (notacion === 'sharps' && EQUIVALENCIAS[root]) {
+      root = EQUIVALENCIAS[root];
+    } else if (notacion === 'flats' && SHARP_TO_FLAT[root]) {
+      root = SHARP_TO_FLAT[root];
+    }
+
+    if (formato === 'american') return root + adorno;
     return (MAPA_LATINO[root] || root) + adorno;
   };
 

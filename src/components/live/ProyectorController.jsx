@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { parsearCancion } from '../../utils/songParser';
-import { Monitor, Play, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone } from 'lucide-react';
+import { Monitor, Play, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight } from 'lucide-react';
 import { traducirAcorde } from '../../utils/musicCore';
 
 const ProyectorController = ({ user }) => {
@@ -115,6 +115,17 @@ const ProyectorController = ({ user }) => {
     ).join('\n');
     slides.push({ titulo: sec.titulo, texto: texto.trim() || ' ', lineas: sec.lineas, originalIndex: slides.length });
   });
+
+  // Función para avanzar a la siguiente diapositiva automáticamente
+  const handleNextSlide = () => {
+    if (!liveSlide || slides.length === 0) return;
+    const currentIndex = slides.findIndex(s => s.texto === liveSlide.texto);
+    if (currentIndex !== -1 && currentIndex < slides.length - 1) {
+      handleProyectar(slides[currentIndex + 1]);
+    } else {
+      handleProyectar({ titulo: 'Instrumental', texto: ' ' }); // Al final, limpiar texto
+    }
+  };
 
   const handleProyectar = async (slide = previewSlide) => {
     if (!slide) return;
@@ -418,6 +429,11 @@ const ProyectorController = ({ user }) => {
                   </div>
                 ))}
               </div>
+              
+              {/* Botón flotante para PC/Tablet de Siguiente */}
+              <button onClick={handleNextSlide} className="fixed bottom-32 right-1/3 mr-8 p-6 bg-orange-600 hover:bg-orange-500 text-white rounded-full shadow-2xl z-20 hover:scale-110 active:scale-95 transition-all flex items-center justify-center border-4 border-white/20">
+                <ChevronRight size={40} />
+              </button>
               </>
             )}
           </div>
@@ -560,21 +576,31 @@ const ProyectorController = ({ user }) => {
         </div>
 
         {/* Grid de Diapositivas (1 solo toque proyecta) */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-24">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-40">
           {!activeSong ? (
             <div className="h-full flex items-center justify-center text-zinc-600 font-medium text-sm text-center px-4">Desliza la barra superior y selecciona una canción para proyectar</div>
           ) : (
             <>
-              <button onClick={() => handleProyectar({ titulo: 'Instrumental', texto: ' ' })} className="w-full py-3.5 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 rounded-xl flex items-center justify-center gap-2 font-bold text-zinc-300 transition-colors shadow-sm active:scale-95">
-                <Eraser size={16} className="text-zinc-400"/> Limpiar Texto (Solo Fondo)
-              </button>
+              <div className="flex gap-2">
+                <button onClick={() => handleProyectar({ titulo: 'Instrumental', texto: ' ' })} className="flex-1 py-3.5 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 rounded-xl flex items-center justify-center gap-2 font-bold text-zinc-300 transition-colors shadow-sm active:scale-95">
+                  <Eraser size={16} className="text-zinc-400"/> Limpiar
+                </button>
+                <button 
+                  onClick={handleNextSlide} 
+                  className="flex-[2] py-3.5 bg-orange-600 text-white border border-orange-500 rounded-xl flex items-center justify-center gap-2 font-black text-sm uppercase shadow-lg shadow-orange-900/20 active:scale-95 transition-all"
+                >
+                  Siguiente <ChevronRight size={20}/>
+                </button>
+              </div>
               
               <div className="grid grid-cols-2 gap-3">
                 {slides.map((s, idx) => (
                   <div 
                     key={idx}
                     onClick={() => handleProyectar(s)}
-                    className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-32 transition-all transform active:scale-95 ${liveSlide?.texto === s.texto && !isBlackout ? 'border-violet-500 ring-2 ring-violet-500/50 bg-zinc-800 shadow-[0_0_15px_rgba(139,92,246,0.15)]' : 'border-zinc-800 bg-zinc-900'}`}
+                    className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-32 transition-all transform active:scale-95 
+                      ${liveSlide?.texto === s.texto && !isBlackout ? 'border-violet-500 ring-2 ring-violet-500/50 bg-zinc-800 shadow-[0_0_15px_rgba(139,92,246,0.15)]' : 'border-zinc-800 bg-zinc-900'}
+                      ${liveSlide && slides[slides.findIndex(x => x.texto === liveSlide.texto) + 1]?.texto === s.texto ? 'border-orange-500/60 border-2 dashed' : ''}`}
                   >
                     <div className="px-2 py-1.5 bg-zinc-950/80 border-b border-zinc-800 flex justify-between items-center shrink-0">
                       <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{s.titulo}</span>

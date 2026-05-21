@@ -102,6 +102,26 @@ const AddSongAI = ({ user }) => {
     const keyMatch = t.match(/\{key:\s*(.*?)\}/i);
     if (keyMatch) setTono(keyMatch[1]);
     
+    // Detección automática de acordes sin corchetes (si el usuario pega texto crudo)
+    // Si no detectamos corchetes [], intentamos procesar línea por línea
+    if (!t.includes('[') && !t.includes('{')) {
+      const lines = t.split('\n');
+      const processedLines = lines.map((line, index) => {
+        // Expresión regular para detectar una línea que solo tiene acordes americanos
+        const chordLineRegex = /^(\s*[A-G][#b]?(m|maj|dim|aug|sus|add|2|4|5|6|7|9|11|13)*(\/[A-G][#b]?)?\s*)+$/;
+        if (chordLineRegex.test(line) && lines[index + 1]) {
+           // Es una línea de acordes. Intentaremos fusionarla con la de abajo.
+           // Este es un algoritmo simple; ChordPro real es preferible.
+           return null; 
+        }
+        return line;
+      }).filter(l => l !== null);
+      
+      if (processedLines.length < lines.length) {
+        showToast("Se detectaron acordes sin formato. Se recomienda usar corchetes [C] para mayor precisión.", "info");
+      }
+    }
+
     t = t.replace(/\{c:\s*(.*?)\}/gi, '\n# $1\n').replace(/\{comment:\s*(.*?)\}/gi, '\n# $1\n').replace(/\{.*?\}/g, '');
     
     setLetraGenerada(t.trim());

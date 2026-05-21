@@ -253,6 +253,14 @@ const AdminDashboard = ({ user }) => {
       {/* Alertas de RSVP */}
       {invitaciones.length > 0 && (
         <div className="mb-8 space-y-3">
+          {/* Banner de Cumpleaños Propio */}
+          {cumpleanos.find(c => c.id === user.uid && c.diffDays === 0) && (
+            <div className="bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 p-6 rounded-3xl shadow-xl text-white text-center animate-bounce-subtle">
+              <h2 className="text-2xl font-black mb-1">¡FELIZ CUMPLEAÑOS, {user.nombre.split(' ')[0].toUpperCase()}! 🎂</h2>
+              <p className="text-white/90 font-medium">Toda la familia Kadosh celebra tu vida hoy. ¡Eres una gran bendición!</p>
+            </div>
+          )}
+
           {invitaciones.map(inv => (
             <div key={inv.id} className="bg-gradient-to-r from-amber-500 to-orange-500 p-4 sm:p-6 rounded-3xl shadow-lg text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in slide-in-from-top-4">
               <div className="flex items-start sm:items-center gap-3">

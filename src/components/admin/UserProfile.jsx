@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { doc, updateDoc, collection, addDoc } from 'firebase/firestore';
 import { db, messaging } from '../../config/firebase';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -24,6 +24,19 @@ const UserProfile = ({ user }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [viewingPhoto, setViewingPhoto] = useState(false);
   const [toast, setToast] = useState(null);
+  const [permisoConcedido, setPermisoConcedido] = useState(false);
+
+  useEffect(() => {
+    const checkPerms = async () => {
+      if (Capacitor.isNativePlatform()) {
+        const status = await PushNotifications.checkPermissions();
+        setPermisoConcedido(status.receive === 'granted');
+      } else {
+        setPermisoConcedido(Notification.permission === 'granted');
+      }
+    };
+    checkPerms();
+  }, []);
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
