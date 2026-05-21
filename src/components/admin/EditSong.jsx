@@ -46,6 +46,7 @@ const EditSong = ({ user }) => {
   const [isMuted, setIsMuted] = useState(true);
 
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
+  const notacion = user?.preferencias?.notacion || 'sharps';
 
   const showToast = (message, type = 'error') => {
     setToast({ message, type });

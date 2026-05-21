@@ -23,24 +23,27 @@ const AdminDashboard = ({ user }) => {
   const confettiFired = useRef(false);
   const sentBirthdayNotifs = useRef(new Set());
 
+  const notacion = user?.preferencias?.notacion || 'sharps';
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
 
   useEffect(() => {
-    // 1. Obtener Estadísticas (Ahora desde el documento pre-calculado)
+    // 1. Obtener Rankings (Desde el documento pre-calculado de las 3 AM)
     const unsubStats = onSnapshot(doc(db, 'sistema', 'estadisticas'), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        setStats({
+        setStats(prev => ({
+          ...prev,
           topCanciones: data.topCanciones || [],
           topCantantes: data.topCantantes || [],
-          totalEventos: data.totalEventos || 0,
-        });
-        setTotalCanciones(data.totalCanciones || 0);
+        }));
       } else {
-        console.log("Documento de estadísticas no encontrado. Se generará automáticamente o puede ser forzado en la consola de Firebase.");
-        // Para la primera vez, podemos dejar los contadores en 0 o mostrar un mensaje.
+        console.debug("Estadísticas: El documento 'sistema/estadisticas' se creará en el próximo ciclo nocturno.");
       }
     });
+
+    // 2. Contadores en Tiempo Real (Escuchan las colecciones directamente)
+    const unsubCancionesCount = onSnapshot(collection(db, 'canciones'), (snap) => setTotalCanciones(snap.size));
+    const unsubEventosCount = onSnapshot(collection(db, 'eventos'), (snap) => setStats(prev => ({ ...prev, totalEventos: snap.size })));
 
     // Formato YYYY-MM-DD en hora local para no perder eventos programados para hoy más temprano
     const tzoffset = (new Date()).getTimezoneOffset() * 60000;
@@ -115,7 +118,7 @@ const AdminDashboard = ({ user }) => {
         const edadCumplida = bdayThisYear.getFullYear() - parseInt(y);
 
         // LÓGICA DE SORPRESAS DE CUMPLEAÑOS (Solo procesado por el admin principal)
-        if ((esDueno || user?.rol === 'admin') && (diffDays === 7 || diffDays === 1)) {
+        if ((esDueno || user?.rol === 'admin') && (diffDays === 7 || diffDays === 1 || diffDays === 0)) {
           const flagKey = `${bdayThisYear.getFullYear()}_${diffDays}d`;
           const sessionKey = `${u.id}_${flagKey}`;
           
@@ -125,10 +128,12 @@ const AdminDashboard = ({ user }) => {
               try {
                 await updateDoc(doc(db, 'usuarios', u.id), { avisosCumpleanos: flagKey });
                 await addDoc(collection(db, 'notificaciones'), {
-                  titulo: diffDays === 7 ? '🎂 Cumpleaños cercano' : '🤫 ¡Mañana hay Cumpleaños!',
+                  titulo: diffDays === 7 ? '🎂 Cumpleaños cercano' : diffDays === 1 ? '🤫 ¡Mañana hay Cumpleaños!' : '🎉 ¡Hoy es el cumpleaños!',
                   mensaje: diffDays === 7 
                     ? `Falta 1 semana para el cumpleaños de ${u.nombre.split(' ')[0]}. ¡Prepara el abrazo!` 
-                    : `¡Mañana es el cumpleaños de ${u.nombre.split(' ')[0]}! Sorprendámoslo(a) mañana.`,
+                    : diffDays === 1 
+                      ? `¡Mañana es el cumpleaños de ${u.nombre.split(' ')[0]}! Sorprendámoslo(a) mañana.`
+                      : `Hoy celebramos la vida de ${u.nombre.split(' ')[0]}. ¡No olvides felicitarlo(a)!`,
                   destinatarios: ['all'],
                   excluidos: [u.id], // 🚨 Magia: Excluye al cumpleañero
                   emisorId: 'system',
@@ -163,7 +168,12 @@ const AdminDashboard = ({ user }) => {
       }
     });
 
-    return () => { unsubStats(); unsubEventos(); unsubInv(); unsubUsuarios(); };
+    return () => { unsubStats(); 
+      unsubCancionesCount(); 
+      unsubEventosCount(); 
+      unsubEventos(); 
+      unsubInv(); 
+      unsubUsuarios();  };
   }, []);
 
   const responderRSVP = async (eventoId, respuesta) => {
@@ -251,7 +261,7 @@ const AdminDashboard = ({ user }) => {
       </header>
 
       {/* Alertas de RSVP */}
-      {invitaciones.length > 0 && (
+      {(invitaciones.length > 0 || cumpleanos.some(c => c.diffDays === 0)) && (
         <div className="mb-8 space-y-3">
           {/* Banner de Cumpleaños Propio */}
           {cumpleanos.find(c => c.id === user.uid && c.diffDays === 0) && (
@@ -260,6 +270,20 @@ const AdminDashboard = ({ user }) => {
               <p className="text-white/90 font-medium">Toda la familia Kadosh celebra tu vida hoy. ¡Eres una gran bendición!</p>
             </div>
           )}
+
+          {/* Banner de Otros Cumpleaños Hoy */}
+          {cumpleanos.filter(c => c.id !== user.uid && c.diffDays === 0).map(c => (
+            <div key={`bday-banner-${c.id}`} className="bg-gradient-to-r from-indigo-600 to-blue-500 p-4 sm:p-6 rounded-3xl shadow-lg text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in slide-in-from-top-4">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-xl"><Cake size={24} className="text-white animate-pulse" /></div>
+                <div>
+                  <h3 className="font-black text-lg">¡Hoy es el cumpleaños de {c.nombre.split(' ')[0]}! 🎂</h3>
+                  <p className="text-blue-100 text-sm font-medium">No olvides enviarle un mensaje y celebrar su vida.</p>
+                </div>
+              </div>
+              <button onClick={() => window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(`¡Feliz cumpleaños ${c.nombre.split(' ')[0]}! 🎉 De parte de todo el equipo de Kadosh, te deseamos un día increíble y lleno de la bendición de Dios. ¡Te queremos!`)}`, '_blank')} className="w-full sm:w-auto px-4 py-2 bg-white text-blue-600 hover:bg-zinc-50 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-sm"><MessageCircle size={16}/> Felicitar</button>
+            </div>
+          ))}
 
           {invitaciones.map(inv => (
             <div key={inv.id} className="bg-gradient-to-r from-amber-500 to-orange-500 p-4 sm:p-6 rounded-3xl shadow-lg text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in slide-in-from-top-4">
@@ -312,7 +336,7 @@ const AdminDashboard = ({ user }) => {
                       if (opcionMatch) tonoFinal = opcionMatch.split(':')[1].trim();
                     }
                     
-                    return (
+                  return ( 
                   <div key={`${cancion.id}-${idx}`} onClick={() => {
                     navigate(`/setlist/${proximoEvento.id}`);
                   }} className="flex items-center justify-between p-4 bg-zinc-50/50 dark:bg-zinc-800/50 rounded-2xl border border-zinc-100 dark:border-zinc-700 hover:border-blue-200 dark:hover:border-blue-500/50 transition-colors cursor-pointer group">
@@ -321,7 +345,7 @@ const AdminDashboard = ({ user }) => {
                         {currentCount}. {cancion.titulo}
                         {proximoEvento.cantantesPorCancion?.[cancion.id] && <span className="text-[9px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 px-1.5 py-0.5 rounded uppercase">{proximoEvento.cantantesPorCancion[cancion.id]}</span>}
                       </p>
-                      <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium mt-0.5">Tono: {traducirAcorde(tonoFinal || 'C', formatoAcordes)} | {cancion.bpm} BPM</p>
+                      <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium mt-0.5">Tono: {traducirAcorde(tonoFinal || 'C', formatoAcordes, notacion)} | {cancion.bpm} BPM</p>
                     </div>
                     <span className="px-3 py-1 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 text-xs font-bold rounded-full flex items-center gap-1"><Calendar size={12}/> Ver Evento</span>
                   </div>
@@ -346,7 +370,7 @@ const AdminDashboard = ({ user }) => {
           </div>
           <h2 className="text-lg font-bold mb-2 text-blue-100">Repertorio Activo</h2>
           <p className="text-5xl font-black mb-1">{totalCanciones}</p>
-          <p className="text-blue-200 text-sm mb-8 font-medium">Canciones en la base de datos</p>
+          <p className="text-blue-200 text-sm mb-8 font-medium">Canciones disponibles</p>
           
           {!esMusico && (
             <button 
@@ -406,7 +430,7 @@ const AdminDashboard = ({ user }) => {
             {stats.topCantantes.length > 0 ? stats.topCantantes.map((c, i) => (
               <div key={i} className="flex items-center justify-between">
                 <div className="flex items-center gap-3 overflow-hidden">
-                  <div className="w-7 h-7 rounded-full bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center font-bold text-xs uppercase shrink-0">{c.nombre.charAt(0)}</div>
+                  <div className="w-7 h-7 rounded-full bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center font-bold text-xs uppercase shrink-0">{c.nombre?.charAt(0) || '?'}</div>
                   <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300 truncate">{c.nombre}</span>
                 </div>
                 <span className="text-[10px] font-black bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 px-2 py-1 rounded-md tracking-wider">{c.count} CANTOS</span>
@@ -445,7 +469,7 @@ const AdminDashboard = ({ user }) => {
                 {c.fotoPerfil ? (
                   <img src={c.fotoPerfil} className="w-10 h-10 rounded-full object-cover shrink-0 shadow-sm" />
                 ) : (
-                  <div className="w-10 h-10 rounded-full bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400 flex items-center justify-center font-bold text-sm uppercase shrink-0 shadow-sm">{c.nombre.charAt(0)}</div>
+                  <div className="w-10 h-10 rounded-full bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400 flex items-center justify-center font-bold text-sm uppercase shrink-0 shadow-sm">{c.nombre?.charAt(0) || '?'}</div>
                 )}
                 <div>
                   <p className="text-sm font-bold text-zinc-800 dark:text-zinc-200 truncate leading-none mb-1 flex items-center gap-1.5">
@@ -459,7 +483,7 @@ const AdminDashboard = ({ user }) => {
                 <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg tracking-widest ${c.diffDays === 0 ? 'bg-pink-500 text-white animate-pulse shadow-md shadow-pink-500/30' : c.diffDays < 0 ? 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400' : 'bg-pink-100 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300'}`}>
                   {c.diffDays === 0 ? '¡ES HOY!' : c.diffDays < 0 ? `HACE ${Math.abs(c.diffDays)} DÍAS` : `EN ${c.diffDays} DÍAS`}
                 </span>
-                <button onClick={() => window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(`¡Feliz cumpleaños ${c.nombre.split(' ')[0]}! 🎉 Te deseamos un día muy bendecido de parte de todo el equipo de Kadosh.`)}`, '_blank')} className="w-8 h-8 rounded-full bg-[#25D366]/10 text-[#25D366] flex items-center justify-center hover:bg-[#25D366] hover:text-white transition-colors" title="Felicitar por WhatsApp">
+                <button onClick={() => window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(`¡Feliz cumpleaños ${c.nombre.split(' ')[0]}! 🎉 Que hoy sea un día de mucha alegría y paz para tu vida. ¡Un fuerte abrazo!`)}`, '_blank')} className="w-8 h-8 rounded-full bg-[#25D366]/10 text-[#25D366] flex items-center justify-center hover:bg-[#25D366] hover:text-white transition-colors" title="Felicitar por WhatsApp">
                   <MessageCircle size={14} />
                 </button>
               </div>

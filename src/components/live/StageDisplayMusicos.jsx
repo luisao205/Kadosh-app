@@ -15,6 +15,7 @@ const StageDisplayMusicos = () => {
   const [showLogo, setShowLogo] = useState(false);
   const [offset, setOffset] = useState(0);
   const [formato, setFormato] = useState('american');
+  const [notacion, setNotacion] = useState('sharps'); // Asumimos 'sharps' por defecto si no hay preferencias de usuario
   const [hora, setHora] = useState(new Date());
 
   // Reloj en tiempo real
@@ -34,6 +35,10 @@ const StageDisplayMusicos = () => {
         setNextSong(data.proyectorNextSong || null);
         setShowLogo(data.proyectorLogo || false);
         setOffset(data.proyectorOffset || 0); // Recibimos el offset calculado por el controlador
+        // Si el evento tiene preferencias de usuario (ej. del director), las usamos
+        if (data.preferencias?.formatoAcordes) setFormato(data.preferencias.formatoAcordes);
+        if (data.preferencias?.notacion) setNotacion(data.preferencias.notacion);
+
       }
     });
     return () => unsub();
@@ -93,7 +98,7 @@ const StageDisplayMusicos = () => {
                             {palabra.map((silaba, idxSilaba) => (
                               <div key={idxSilaba} className="flex flex-col justify-end items-start">
                                 <span className="font-bold min-h-[1rem] lg:min-h-[1.5rem] flex items-end mb-0.5 text-[13px] sm:text-[14px] md:text-[15px] lg:text-[min(3vw,3vh)] text-blue-400 leading-none">
-                                  {silaba.acorde ? traducirAcorde(transponerNota(silaba.acorde, offset), formato) : ""}
+                                  {silaba.acorde ? traducirAcorde(transponerNota(silaba.acorde, offset), formato, notacion) : ""}
                                 </span>
                                 <span className="text-[15px] sm:text-[17px] md:text-[20px] lg:text-[min(5.5vw,5.5vh)] text-white drop-shadow-lg leading-none mt-1">{silaba.texto}</span>
                               </div>

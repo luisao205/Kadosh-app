@@ -19,6 +19,7 @@ const SongList = ({ user }) => {
   const [songToDelete, setSongToDelete] = useState(null);
   const navigate = useNavigate();
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
+  const notacion = user?.preferencias?.notacion || 'sharps';
   
   // Estados para el Generador de Medleys
   const [showMedleyModal, setShowMedleyModal] = useState(false);
@@ -286,7 +287,7 @@ const SongList = ({ user }) => {
                   <button onClick={(e) => toggleFavorito(cancion.id, e)} className="text-zinc-300 hover:text-rose-500 transition-colors" title="Añadir a Favoritos">
                     <Heart size={20} className={misFavoritos.includes(cancion.id) ? "fill-rose-500 text-rose-500 drop-shadow-sm" : ""} />
                   </button>
-                  <span className="px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-bold rounded-lg border border-zinc-200 dark:border-zinc-700">{traducirAcorde(cancion.tonoOriginal, formatoAcordes)}</span>
+                  <span className="px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-bold rounded-lg border border-zinc-200 dark:border-zinc-700">{traducirAcorde(cancion.tonoOriginal, formatoAcordes, notacion)}</span>
                 </div>
               </div>
               

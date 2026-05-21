@@ -32,6 +32,7 @@ const EventManagement = ({ user }) => {
   const [cantantesPorCancion, setCantantesPorCancion] = useState({});
   const [corosPorCancion, setCorosPorCancion] = useState({});
   const [isSaving, setIsSaving] = useState(false);
+  const [showMobileForm, setShowMobileForm] = useState(false);
   
   // Nuevos estados para Fase 1
   const [editingEventId, setEditingEventId] = useState(null);
@@ -42,6 +43,7 @@ const EventManagement = ({ user }) => {
   const [eventToDelete, setEventToDelete] = useState(null);
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
   const [lastPlayedMap, setLastPlayedMap] = useState({});
+  const notacion = user?.preferencias?.notacion || 'sharps';
   const [showCompletados, setShowCompletados] = useState(false);
   
   const [plantillas, setPlantillas] = useState([]);
@@ -226,6 +228,7 @@ const EventManagement = ({ user }) => {
 
       showToast(editingEventId ? "¡Evento actualizado exitosamente!" : "¡Evento programado exitosamente!", "success");
       cancelEdit();
+      setShowMobileForm(false);
     } catch (error) {
       console.error(error);
       showToast("Hubo un error al guardar el evento.");
@@ -288,7 +291,7 @@ const EventManagement = ({ user }) => {
         if (cancion) {
           const cantante = evento.cantantesPorCancion?.[cancion.id];
           const coros = evento.corosPorCancion?.[cancion.id];
-          let linea = `${songCount}. ${cancion.titulo} (${traducirAcorde(cancion.tonoOriginal || 'C', formatoAcordes)})`;
+          let linea = `${songCount}. ${cancion.titulo} (${traducirAcorde(cancion.tonoOriginal || 'C', formatoAcordes, notacion)})`;
           if (cantante) linea += ` - Voz: ${cantante.split(' ')[0]}`;
           if (coros && coros.length > 0) linea += ` - Coros: ${coros.map(c => c.split(' ')[0]).join(', ')}`;
           mensaje += linea + '\n';
@@ -356,11 +359,13 @@ const EventManagement = ({ user }) => {
     setCorosPorCancion(evento.corosPorCancion || {});
     setEquipoSeleccionado(evento.equipo || []);
     setEstadoAsistenciaActual(evento.estadoAsistencia || {});
+    setShowMobileForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const cancelEdit = () => {
     setEditingEventId(null); setTitulo(''); setFecha(''); setFechaEnsayo(''); setSetlist([]); setNotasGenerales(PLANTILLA_NOTAS); setEquipoSeleccionado([]); setCantantesPorCancion({}); setCorosPorCancion({}); setEstadoAsistenciaActual({});
+    setShowMobileForm(false);
   };
 
   // Duplicar Evento
@@ -452,7 +457,23 @@ const EventManagement = ({ user }) => {
         
         {/* Columna Izquierda: Formulario (Solo visible para admins) */}
         {esAdmin && (
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 lg:col-span-1 h-fit sticky top-6 max-h-[90vh] overflow-y-auto">
+          <div className="lg:col-span-1">
+            {/* Botón de despliegue para móviles */}
+            <button 
+              onClick={() => setShowMobileForm(!showMobileForm)}
+              className="lg:hidden w-full mb-4 p-4 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 flex justify-between items-center font-bold text-zinc-700 dark:text-zinc-200 shadow-sm active:scale-[0.98] transition-all"
+            >
+              <div className="flex items-center gap-2">
+                <div className={`p-1.5 rounded-lg ${editingEventId ? 'bg-blue-100 text-blue-600' : 'bg-rose-100 text-rose-600'}`}>
+                  {editingEventId ? <Edit3 size={18} /> : <Plus size={18} />}
+                </div>
+                <span>{editingEventId ? 'Editando Evento' : 'Programar Nuevo Evento'}</span>
+              </div>
+              {showMobileForm ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+            </button>
+
+            {/* Contenedor del Formulario (Visible siempre en PC, toggle en móvil) */}
+            <div className={`${showMobileForm ? 'block' : 'hidden lg:block'} bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 h-fit sticky top-6 max-h-[90vh] overflow-y-auto mb-8 lg:mb-0 animate-in slide-in-from-top-2 duration-300`}>
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
               <Clock size={20} className="text-rose-600" /> {editingEventId ? 'Editar Evento' : 'Programar Evento'}
             </h2>
@@ -725,6 +746,7 @@ const EventManagement = ({ user }) => {
                 </button>
               </div>
             </form>
+          </div>
           </div>
         )}
 

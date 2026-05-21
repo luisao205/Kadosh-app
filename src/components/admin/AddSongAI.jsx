@@ -23,6 +23,7 @@ const AddSongAI = ({ user }) => {
   const [showSingerModal, setShowSingerModal] = useState(false);
   const [toast, setToast] = useState(null);
   const [showImportModal, setShowImportModal] = useState(false);
+  const notacion = user?.preferencias?.notacion || 'sharps';
   const [chordProText, setChordProText] = useState('');
 
   const showToast = (message, type = 'error') => {
@@ -295,7 +296,7 @@ const AddSongAI = ({ user }) => {
                     <div className="flex flex-wrap gap-1.5">
                       {Object.entries(tonosCantantes).map(([cantante, key]) => (
                         <span key={cantante} className="text-[10px] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 px-2 py-1 rounded-md font-bold flex items-center gap-1 shadow-sm">
-                          {cantante} <span className="text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-1 rounded">{key || tono || '?'}</span>
+                          {cantante} <span className="text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-1 rounded">{traducirAcorde(key || tono || '?', user?.preferencias?.formatoAcordes, notacion)}</span>
                         </span>
                       ))}
                     </div>

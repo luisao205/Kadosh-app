@@ -37,6 +37,7 @@ function App() {
         if (Capacitor.isNativePlatform()) {
           // 📱 MODO NATIVO (APK)
           let permStatus = await PushNotifications.checkPermissions();
+          console.log('Push Status inicial:', permStatus.receive);
           
           if (permStatus.receive === 'prompt' || permStatus.receive === 'denied') {
             permStatus = await PushNotifications.requestPermissions();
@@ -72,6 +73,14 @@ function App() {
         } else {
           // 💻 MODO WEB (PWA)
           const permission = await Notification.requestPermission();
+          
+          // Verificar Service Worker con re-intento pequeño para evitar el AbortError
+          let registration = await navigator.serviceWorker.ready;
+          
+          if (!registration) {
+            return console.warn('Notificaciones Web: Service Worker no está listo.');
+          }
+
           if (import.meta.env.VITE_VAPID_KEY && permission === 'granted') {
             const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
             if (currentToken && currentToken !== userData?.fcmToken) {

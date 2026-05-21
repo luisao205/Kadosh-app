@@ -26,6 +26,7 @@ const SetlistViewer = ({ user }) => {
   const ensayoAudioRef = useRef(null);
   const [showControladorMenu, setShowControladorMenu] = useState(false);
   const ensayoAudioRefs = useRef({});
+  const notacion = user?.preferencias?.notacion || 'sharps';
   const [ensayoMutes, setEnsayoMutes] = useState({});
   const [ensayoVolumes, setEnsayoVolumes] = useState({});
 
@@ -468,7 +469,7 @@ const SetlistViewer = ({ user }) => {
                   if (estadoRSVP === 'rechazado') rsvpIcon = <XCircle size={14} className="text-red-500" title="Rechazado" />;
                   return (
                   <div key={`${u.id}-${index}`} className="flex items-center gap-3 p-3 bg-zinc-50 dark:bg-zinc-800/50 rounded-xl border border-zinc-100 dark:border-zinc-800">
-                    <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-black text-sm uppercase">{u.nombre.charAt(0)}</div>
+                    <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center font-black text-sm uppercase">{u.nombre?.charAt(0) || '?'}</div>
                     <div>
                       <div className="flex items-center gap-1.5 mb-0.5">
                         <p className="font-bold text-sm text-zinc-900 dark:text-zinc-100 leading-tight">{u.nombre}</p>
@@ -512,7 +513,7 @@ const SetlistViewer = ({ user }) => {
                       {c.foto ? (
                         <img src={c.foto} alt="Avatar" className="w-5 h-5 rounded-full object-cover shadow-sm" />
                       ) : (
-                        <div className="w-5 h-5 bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center font-bold text-[10px] uppercase">{c.autor.charAt(0)}</div>
+                        <div className="w-5 h-5 bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center font-bold text-[10px] uppercase">{c.autor?.charAt(0) || '?'}</div>
                       )}
                       <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">{c.autor}</span>
                       <span className="text-[10px] text-zinc-400 font-medium">{new Date(c.fecha).toLocaleDateString('es-ES', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</span>
@@ -776,7 +777,7 @@ const SetlistViewer = ({ user }) => {
            </div>
            <div className="text-right">
               <span className="text-lg md:text-xl font-black text-white bg-zinc-800 border border-zinc-700 px-3 py-1 rounded-lg inline-block shadow-sm">
-                {traducirAcorde(ensayoTonoFinal || 'C', formatoAcordes)}
+                {traducirAcorde(ensayoTonoFinal || 'C', formatoAcordes, notacion)}
               </span>
               {cantanteAsignadoEnsayo && <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest mt-1">Canta: {cantanteAsignadoEnsayo}</p>}
            </div>
@@ -800,7 +801,7 @@ const SetlistViewer = ({ user }) => {
                             {palabra.map((silaba, silIdx) => (
                               <div key={silIdx} className="flex flex-col justify-end items-start">
                                 <span className="font-bold min-h-[1.1rem] md:min-h-[1.5rem] flex items-end mb-0.5 text-xs md:text-sm text-blue-400 leading-none">
-                                  {silaba.acorde ? traducirAcorde(transponerNota(silaba.acorde, ensayoOffset), formatoAcordes) : ""}
+                                  {silaba.acorde ? traducirAcorde(transponerNota(silaba.acorde, ensayoOffset), formatoAcordes, notacion) : ""}
                                 </span>
                                 <span className="text-[15px] md:text-[18px] text-zinc-100 leading-none">{silaba.texto}</span>
                               </div>

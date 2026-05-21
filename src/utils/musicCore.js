@@ -38,7 +38,7 @@ export const traducirAcorde = (acorde, formato = 'american', notacion = 'sharps'
     }
 
     if (formato === 'american') return root + adorno;
-    return (MAPA_LATINO[root] || root) + adorno;
+    return (MAPA_LATINO[root] || root) + adorno; // Aquí ya 'root' debería estar en el formato correcto (# o b)
   };
 
   return partes.map(traducirParte).join('/');

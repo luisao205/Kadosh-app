@@ -119,12 +119,13 @@ const ProyectorController = ({ user }) => {
 
   // Función para avanzar a la siguiente diapositiva automáticamente
   const handleNextSlide = () => {
-    if (!liveSlide || slides.length === 0) return;
-    const currentIndex = slides.findIndex(s => s.texto === liveSlide.texto);
-    if (currentIndex !== -1 && currentIndex < slides.length - 1) {
+    if (slides.length === 0) return;
+    // Usar el índice guardado en el documento del evento
+    const currentIndex = evento?.proyectorSlideIndex ?? -1;
+    if (currentIndex < slides.length - 1) {
       handleProyectar(slides[currentIndex + 1]);
     } else {
-      handleProyectar({ titulo: 'Instrumental', texto: ' ' }); // Al final, limpiar texto
+      handleProyectar({ titulo: 'Instrumental', texto: ' ', originalIndex: -1 }); // Al final, limpiar texto
     }
   };
 
@@ -185,6 +186,7 @@ const ProyectorController = ({ user }) => {
     try {
       await updateDoc(doc(db, 'eventos', eventoId), {
         proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
+        proyectorSlideIndex: slide.originalIndex ?? -1,
         proyectorNextSlide: nextSlide ? { titulo: nextSlide.titulo, texto: nextSlide.texto, lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null } : null,
         proyectorNextSong: nextSongInfo,
         proyectorOffset: offset,
@@ -582,7 +584,7 @@ const ProyectorController = ({ user }) => {
             <div className="h-full flex items-center justify-center text-zinc-600 font-medium text-sm text-center px-4">Desliza la barra superior y selecciona una canción para proyectar</div>
           ) : (
             <>
-              <div className="flex gap-2">
+              <div className="sticky top-0 z-20 flex gap-2 bg-zinc-950/90 backdrop-blur-sm pb-3 pt-1 -mx-4 px-4">
                 <button onClick={() => handleProyectar({ titulo: 'Instrumental', texto: ' ' })} className="flex-1 py-3.5 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 rounded-xl flex items-center justify-center gap-2 font-bold text-zinc-300 transition-colors shadow-sm active:scale-95">
                   <Eraser size={16} className="text-zinc-400"/> Limpiar
                 </button>
@@ -600,8 +602,8 @@ const ProyectorController = ({ user }) => {
                     key={idx}
                     onClick={() => handleProyectar(s)}
                     className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-32 transition-all transform active:scale-95 
-                      ${liveSlide?.texto === s.texto && !isBlackout ? 'border-violet-500 ring-2 ring-violet-500/50 bg-zinc-800 shadow-[0_0_15px_rgba(139,92,246,0.15)]' : 'border-zinc-800 bg-zinc-900'}
-                      ${liveSlide && slides[slides.findIndex(x => x.texto === liveSlide.texto) + 1]?.texto === s.texto ? 'border-orange-500/60 border-2 dashed' : ''}`}
+                      ${evento?.proyectorSlideIndex === idx && !isBlackout ? 'border-violet-500 ring-2 ring-violet-500/50 bg-zinc-800 shadow-[0_0_15px_rgba(139,92,246,0.15)]' : 'border-zinc-800 bg-zinc-900'}
+                      ${evento?.proyectorSlideIndex !== undefined && evento.proyectorSlideIndex + 1 === idx ? 'border-orange-500/60 border-2 dashed' : ''}`}
                   >
                     <div className="px-2 py-1.5 bg-zinc-950/80 border-b border-zinc-800 flex justify-between items-center shrink-0">
                       <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{s.titulo}</span>
