@@ -10,6 +10,7 @@ const ProyectorController = ({ user }) => {
   const { eventoId } = useParams();
   const navigate = useNavigate();
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
+  const notacion = user?.preferencias?.notacion || 'sharps';
   
   const handleOpenScreen = (path) => {
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -155,7 +156,7 @@ const ProyectorController = ({ user }) => {
               const match = opciones.find(o => o.trim().toLowerCase().startsWith(cantante.toLowerCase() + ':'));
               if (match) tonoFinal = match.split(':')[1].trim();
             }
-            nextSongInfo = `🎵 ${nextSongObj.titulo} (${traducirAcorde(tonoFinal || 'C', formatoAcordes)})`;
+            nextSongInfo = `🎵 ${nextSongObj.titulo} (${traducirAcorde(tonoFinal || 'C', formatoAcordes, notacion)})`;
           }
         }
       }

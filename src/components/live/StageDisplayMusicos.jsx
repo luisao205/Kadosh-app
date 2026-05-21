@@ -66,12 +66,11 @@ const StageDisplayMusicos = () => {
       </header>
 
       {alerta && (
-        <div className="absolute top-28 inset-x-8 z-50 bg-red-600 border-x-4 border-b-4 border-red-500 rounded-b-3xl shadow-[0_20px_50px_rgba(220,38,38,0.5)] animate-in slide-in-from-top-10 fade-in duration-500 overflow-hidden">
-           <div className="absolute inset-0 opacity-20 bg-[repeating-linear-gradient(45deg,transparent,transparent_10px,#000_10px,#000_20px)] pointer-events-none"></div>
-           <div className="relative p-8 flex flex-col items-center justify-center text-center">
-             <AlertTriangle size={60} className="mb-4 text-white drop-shadow-md animate-bounce" />
-             <h2 className="text-[5.5vw] font-black uppercase tracking-tighter leading-none drop-shadow-2xl">{alerta}</h2>
-           </div>
+        <div className="fixed inset-0 flex items-center justify-center bg-red-600/90 z-[100] animate-pulse">
+          <div className="text-center p-10">
+            <h2 className="text-4xl md:text-5xl lg:text-6xl font-black text-white uppercase mb-4 italic">¡ATENCIÓN MÚSICOS!</h2>
+            <p className="text-5xl md:text-7xl lg:text-8xl font-black text-white drop-shadow-2xl">{alerta}</p>
+          </div>
         </div>
       )}
 
