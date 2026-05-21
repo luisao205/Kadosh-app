@@ -31,84 +31,82 @@ function App() {
     const auth = getAuth();
     let unsubscribeSnapshot = null;
 
+    // 1. Lógica de Notificaciones (Independiente del Auth para asegurar que pida permisos)
+    const inicializarNotificaciones = async (uid, userData) => {
+      try {
+        if (Capacitor.isNativePlatform()) {
+          // 📱 MODO NATIVO (APK)
+          let permStatus = await PushNotifications.checkPermissions();
+          
+          if (permStatus.receive === 'prompt' || permStatus.receive === 'denied') {
+            permStatus = await PushNotifications.requestPermissions();
+          }
+
+          if (permStatus.receive === 'granted') {
+            // Configurar listeners ANTES de registrar para no perder el primer token
+            PushNotifications.removeAllListeners();
+            
+            PushNotifications.addListener('registration', async (token) => {
+              console.log('FCM Token recibido:', token.value);
+              if (token.value !== userData?.fcmToken) {
+                const userRef = doc(db, 'usuarios', uid);
+                await updateDoc(userRef, { fcmToken: token.value });
+              }
+            });
+
+            PushNotifications.addListener('registrationError', (error) => {
+              console.error('Error en registro nativo:', error);
+            });
+
+            PushNotifications.addListener('pushNotificationReceived', (notification) => {
+              alert(`🔔 ${notification.title}\n${notification.body}`);
+            });
+
+            PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
+              const data = notification.notification.data;
+              if (data && data.url) window.location.href = data.url;
+            });
+
+            await PushNotifications.register();
+          }
+        } else {
+          // 💻 MODO WEB (PWA)
+          const permission = await Notification.requestPermission();
+          if (import.meta.env.VITE_VAPID_KEY && permission === 'granted') {
+            const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
+            if (currentToken && currentToken !== userData?.fcmToken) {
+              const userRef = doc(db, 'usuarios', uid);
+              await updateDoc(userRef, { fcmToken: currentToken });
+            }
+
+            onMessage(messaging, (payload) => {
+              alert(`🔔 ${payload.notification.title}\n${payload.notification.body}`);
+            });
+          }
+        }
+      } catch (error) {
+        console.warn('Error en el flujo de notificaciones:', error);
+      }
+    };
+
     const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         const docRef = doc(db, 'usuarios', firebaseUser.uid);
-        let userFirestoreData = null;
         
-        // Comprobamos si el perfil existe, si no, lo creamos
         const docSnap = await getDoc(docRef);
+        let currentData = null;
+
         if (!docSnap.exists()) {
-          // Si la cuenta se creó antes de tener el sistema de roles, la registramos ahora.
-          // Se usa una variable de entorno para el correo del dueño principal.
           const esElDueno = firebaseUser.email === import.meta.env.VITE_OWNER_EMAIL;
-          
           const userData = { email: firebaseUser.email, nombre: esElDueno ? 'Dueño Principal' : 'Usuario Nuevo', rol: esElDueno ? 'dueño' : 'musico', fechaCreacion: new Date().toISOString() };
-          
-          // Lo guardamos en la base de datos automáticamente
           await setDoc(docRef, userData);
-          userFirestoreData = userData;
+          currentData = userData;
         } else {
-          userFirestoreData = docSnap.data();
+          currentData = docSnap.data();
         }
 
-          // Registrar Token de Notificaciones Push (FCM)
-          try {
-            if (Capacitor.isNativePlatform()) {
-              // 📱 MODO NATIVO (APK / iOS)
-              let permStatus = await PushNotifications.checkPermissions();
-
-              if (permStatus.receive === 'prompt' || permStatus.receive === 'denied') {
-                permStatus = await PushNotifications.requestPermissions();
-              }
-
-              if (permStatus.receive === 'granted') {
-                await PushNotifications.register();
-              }
-              
-            } else {
-              // 💻 MODO WEB (PWA / PC)
-              const permission = await Notification.requestPermission();
-
-              if (import.meta.env.VITE_VAPID_KEY && permission === 'granted') {
-                const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
-                // Solo actualizar si el token es nuevo o diferente al guardado
-                if (currentToken && currentToken !== userFirestoreData?.fcmToken) {
-                  await updateDoc(docRef, { fcmToken: currentToken });
-                }
-
-                // Escuchar notificaciones en TIEMPO REAL cuando la app está abierta
-                onMessage(messaging, (payload) => {
-                  console.log('Mensaje recibido en primer plano:', payload);
-                  // Aquí podrías disparar un sonido o un Toast personalizado
-                  alert(`🔔 ${payload.notification.title}\n${payload.notification.body}`);
-                });
-              }
-            }
-
-            // Configurar listeners si tenemos permisos
-            if (Capacitor.isNativePlatform()) {
-                PushNotifications.removeAllListeners();
-                PushNotifications.addListener('registration', async (token) => {
-                  if (token.value !== userFirestoreData?.fcmToken) {
-                    await updateDoc(docRef, { fcmToken: token.value });
-                  }
-                });
-                
-                // Listener para notificaciones en TIEMPO REAL cuando la app está abierta (APK)
-                PushNotifications.addListener('pushNotificationReceived', (notification) => {
-                  console.log('Mensaje recibido en primer plano (APK):', notification);
-                  alert(`🔔 ${notification.title}\n${notification.body}`);
-                });
-                
-                PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
-                  const data = notification.notification.data;
-                  if (data && data.url) window.location.href = data.url;
-                });
-            }
-          } catch (error) {
-            console.warn('Error al registrar notificaciones:', error);
-          }
+        // Disparamos la lógica de notificaciones
+        inicializarNotificaciones(firebaseUser.uid, currentData);
 
         // Escuchamos los cambios del perfil en TIEMPO REAL
         unsubscribeSnapshot = onSnapshot(docRef, (snap) => {

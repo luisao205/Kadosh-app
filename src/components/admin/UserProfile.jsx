@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import { doc, updateDoc, collection, addDoc } from 'firebase/firestore';
+import { db, messaging } from '../../config/firebase';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { User, Save, Moon, Sun, Type, Camera, Loader2, Quote, Mic2, Palette, Check, X } from 'lucide-react';
+import { getToken } from 'firebase/messaging';
+import { User, Save, Moon, Sun, Type, Camera, Loader2, Quote, Mic2, Palette, Check, X, Bell, BellRing, Settings } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
+import { PushNotifications } from '@capacitor/push-notifications';
 import { Camera as NativeCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 
 const UserProfile = ({ user }) => {
@@ -147,6 +149,46 @@ const UserProfile = ({ user }) => {
     img.src = URL.createObjectURL(file);
   };
 
+  // Función para solicitar permisos de notificación manualmente
+  const handleManualNotificationRequest = async () => {
+    try {
+      if (Capacitor.isNativePlatform()) {
+        // MODO NATIVO (APK)
+        let permStatus = await PushNotifications.checkPermissions();
+        
+        if (permStatus.receive !== 'granted') {
+          permStatus = await PushNotifications.requestPermissions();
+        }
+
+        if (permStatus.receive === 'granted') {
+          PushNotifications.removeAllListeners();
+          PushNotifications.addListener('registration', async (token) => {
+            await updateDoc(doc(db, 'usuarios', user.uid), { fcmToken: token.value });
+            showToast("¡Notificaciones nativas activadas!", "success");
+          });
+          await PushNotifications.register();
+        } else {
+          showToast("Permiso denegado. Actívalo en los ajustes de tu celular.", "error");
+        }
+      } else {
+        // MODO WEB
+        const permission = await Notification.requestPermission();
+        if (permission === 'granted') {
+          const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
+          if (currentToken) {
+            await updateDoc(doc(db, 'usuarios', user.uid), { fcmToken: currentToken });
+            showToast("¡Notificaciones web activadas!", "success");
+          }
+        } else {
+          showToast("Permiso denegado por el navegador.", "error");
+        }
+      }
+    } catch (error) {
+      console.error(error);
+      showToast("Error al configurar notificaciones", "error");
+    }
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
@@ -273,6 +315,31 @@ const UserProfile = ({ user }) => {
               </button>
               <button onClick={() => setDarkMode(true)} className={`flex justify-center items-center gap-2 px-6 py-2.5 sm:py-2 rounded-lg text-sm font-bold transition-all ${darkMode ? 'bg-zinc-900 dark:bg-zinc-600 shadow-sm text-white' : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'}`}>
                 <Moon size={16} /> Oscuro
+              </button>
+            </div>
+          </div>
+
+          {/* Sección de Notificaciones Push (Backup) */}
+          <div className="pt-6 border-t border-zinc-100 dark:border-zinc-800">
+            <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
+              <BellRing size={18} className="text-violet-600" /> Estado de Notificaciones
+            </label>
+            <div className="bg-zinc-50 dark:bg-zinc-800/50 p-4 rounded-2xl border border-zinc-100 dark:border-zinc-700 flex flex-col sm:flex-row items-center gap-4">
+              <div className="flex-1">
+                <p className="text-xs font-bold text-zinc-900 dark:text-white">
+                  {user?.fcmToken ? '✅ Suscrito correctamente' : '⚠️ No configuradas'}
+                </p>
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  Si no recibes avisos de ensayos o cambios de tonos, pulsa el botón para reactivarlas.
+                </p>
+              </div>
+              <button 
+                type="button"
+                onClick={handleManualNotificationRequest}
+                className="w-full sm:w-auto px-4 py-2 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-black rounded-xl hover:scale-105 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-sm"
+              >
+                <Bell size={14} />
+                Activar Avisos
               </button>
             </div>
           </div>
