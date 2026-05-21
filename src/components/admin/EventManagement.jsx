@@ -214,7 +214,8 @@ const EventManagement = ({ user }) => {
       }
 
       if (equipoSeleccionado.length > 0) {
-        const convocadosIds = equipoSeleccionado.map(item => typeof item === 'string' ? item : item.id);
+        // Obtener IDs únicos para evitar notificaciones duplicadas
+        const convocadosIds = [...new Set(equipoSeleccionado.map(item => typeof item === 'string' ? item : item.id))];
         await addDoc(collection(db, 'notificaciones'), {
           titulo: editingEventId ? '✏️ Evento Actualizado' : '🎸 Nueva Convocatoria',
           mensaje: editingEventId ? `El evento "${titulo}" ha sido modificado. Revisa los cambios.` : `Has sido convocado para: ${titulo}. Entra a la app para confirmar.`,

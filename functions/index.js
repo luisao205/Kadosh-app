@@ -51,10 +51,11 @@ exports.enviarNotificacionPush = functions.firestore
       },
     };
 
-    // HYBRID APPROACH: Use token-based for direct messages or when using exclusions.
-    const isDirectMessage = destinatarios.every((d) => d.length === 28 && !d.includes(" "));
-    if (excluidos.length > 0 || isDirectMessage) {
-      console.log("Using token-based sending for direct message or exclusion.", { isDirectMessage, hasExclusions: excluidos.length > 0 });
+    // Detectar si hay IDs de usuario específicos (los UIDs no tienen espacios y suelen ser largos)
+    const tieneUsuariosEspecificos = destinatarios.some((d) => d !== "all" && !d.includes(" ") && d.length > 15);
+
+    if (excluidos.length > 0 || tieneUsuariosEspecificos) {
+      console.log("Usando envío basado en Tokens (Convocatoria/Privado/Exclusiones)");
       const usersSnapshot = await admin.firestore().collection("usuarios").get();
       const tokens = [];
       usersSnapshot.forEach((doc) => {
@@ -97,7 +98,7 @@ exports.enviarNotificacionPush = functions.firestore
     }
 
     // NEW TOPIC-BASED APPROACH
-    console.log("Using topic-based sending for:", destinatarios);
+    console.log("Usando envío basado en Temas para:", destinatarios);
 
     const conditions = destinatarios.map((dest) => {
       if (dest === "all") {
