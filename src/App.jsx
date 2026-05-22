@@ -55,7 +55,6 @@ function App() {
               const userRef = doc(db, 'usuarios', uid);
               await updateDoc(userRef, { fcmToken: token.value, ultimaConexion: new Date().toISOString() });
               console.log('Token registrado con éxito');
-              alert("¡Sistema de Notificaciones Vinculado!"); // 👈 Ahora sí saldrá en el celular
             });
 
             PushNotifications.addListener('pushNotificationReceived', (notification) => {
