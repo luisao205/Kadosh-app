@@ -216,10 +216,20 @@ const EventManagement = ({ user }) => {
       }
 
       if (equipoSeleccionado.length > 0) {
+        // 1. IDs de músicos convocados
+        const idsConvocados = equipoSeleccionado.map(item => typeof item === 'string' ? item : item.id);
+        
+        // 2. IDs de Admins y Dueños (para que siempre estén enterados)
+        const adminsIds = usuarios
+          .filter(u => u.rol === 'admin' || u.rol === 'dueño')
+          .map(u => u.id);
+
+        const destinatariosFinales = [...new Set([...idsConvocados, ...adminsIds])];
+
         await addDoc(collection(db, 'notificaciones'), {
           titulo: editingEventId ? '✏️ Evento Actualizado' : '🎸 Nueva Convocatoria',
           mensaje: editingEventId ? `El evento "${titulo}" ha sido modificado. Revisa los cambios.` : `Has sido convocado para: ${titulo}. Entra a la app para confirmar.`,
-          destinatarios: ['musico', 'admin', 'dueño', 'multimedia'],
+          destinatarios: destinatariosFinales,
           emisorId: user?.uid,
           url: `/setlist/${eventIdParaNotif}`,
           fechaCreacion: new Date().toISOString()

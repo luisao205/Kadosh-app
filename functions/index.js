@@ -57,11 +57,11 @@ exports.enviarNotificacionPush = functions.firestore
       },
     };
 
-    // Forzamos envío por Tokens para máxima confiabilidad en equipos pequeños
-    const tieneUsuariosEspecificos = destinatarios.some((d) => d !== "all");
+    // Usamos Tokens si hay exclusiones o si los destinatarios no son el grupo global "all"
+    const usarTokens = excluidos.length > 0 || !destinatarios.includes("all");
 
-    if (excluidos.length > 0 || tieneUsuariosEspecificos) {
-      console.log("Usando envío basado en Tokens (Convocatoria/Privado/Exclusiones)");
+    if (usarTokens) {
+      console.log("Iniciando envío por Tokens (Máxima precisión)");
       const usersSnapshot = await admin.firestore().collection("usuarios").get();
       const tokens = [];
       usersSnapshot.forEach((doc) => {
