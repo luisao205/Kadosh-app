@@ -219,7 +219,7 @@ const EventManagement = ({ user }) => {
         await addDoc(collection(db, 'notificaciones'), {
           titulo: editingEventId ? '✏️ Evento Actualizado' : '🎸 Nueva Convocatoria',
           mensaje: editingEventId ? `El evento "${titulo}" ha sido modificado. Revisa los cambios.` : `Has sido convocado para: ${titulo}. Entra a la app para confirmar.`,
-          destinatarios: ['musico', 'admin', 'dueño'],
+          destinatarios: ['all'],
           emisorId: user?.uid,
           url: `/setlist/${eventIdParaNotif}`,
           fechaCreacion: new Date().toISOString()

@@ -58,9 +58,15 @@ function App() {
               alert("¡Sistema de Notificaciones Vinculado!"); // 👈 Ahora sí saldrá en el celular
             });
 
-            PushNotifications.addListener('registrationError', (error) => {
-              console.error('Error en registro de Push Nativo:', error);
-              // alert('Error al registrar notificaciones: ' + error.message); // Desactivado para no molestar al usuario
+            PushNotifications.addListener('pushNotificationReceived', (notification) => {
+              // Esto hace que vibre y suene si la App está abierta
+              console.log('Notificación recibida:', notification);
+            });
+
+            PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
+              // Esto hace que al tocar la notificación te lleve a la sección correcta
+              const data = notification.notification.data;
+              if (data && data.url) window.location.href = data.url;
             });
 
              await PushNotifications.register();

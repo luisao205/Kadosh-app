@@ -57,9 +57,8 @@ exports.enviarNotificacionPush = functions.firestore
       },
     };
 
-    // Si hay IDs largos (UIDs de Firebase), usamos envío por Tokens sí o sí.
-    // Eliminamos la restricción de que el título no contenga "Evento".
-    const tieneUsuariosEspecificos = destinatarios.some((d) => d !== "all" && !d.includes(" ") && d.length > 15);
+    // Forzamos envío por Tokens para máxima confiabilidad en equipos pequeños
+    const tieneUsuariosEspecificos = destinatarios.some((d) => d !== "all");
 
     if (excluidos.length > 0 || tieneUsuariosEspecificos) {
       console.log("Usando envío basado en Tokens (Convocatoria/Privado/Exclusiones)");
