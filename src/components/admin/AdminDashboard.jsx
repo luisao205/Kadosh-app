@@ -499,7 +499,7 @@ const AdminDashboard = ({ user }) => {
             <h3 className="text-sm font-black text-red-700 dark:text-red-400 flex items-center gap-2 mb-1"><Trash2 size={16}/> Mantenimiento del Sistema</h3>
             <p className="text-xs font-medium text-red-600/80 dark:text-red-400/80">Limpia datos antiguos para que tu app siempre corra a máxima velocidad.</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3"> {/* Botón de prueba de notificación movido a UserProfile.jsx */}
             {cleanResult && <span className="text-xs font-bold text-red-600 bg-red-100 px-3 py-2 rounded-lg">{cleanResult}</span>}
             <button onClick={handleMantenimiento} disabled={isCleaning} className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-colors shadow-sm disabled:opacity-50">{isCleaning ? 'Limpiando...' : 'Iniciar Limpieza'}</button>
           </div>

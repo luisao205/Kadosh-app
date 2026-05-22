@@ -38,11 +38,17 @@ exports.enviarNotificacionPush = functions.firestore
     const messagePayload = {
       data: { url: notif.url || "/" },
       notification: { title: notif.titulo, body: notif.mensaje },
-      android: {
+      android: { // Configuración para Android
         priority: "high",
-        notification: { sound: "default" },
+        notification: { 
+          sound: "default",
+          channelId: "urgente", // Cambiamos a un ID de canal que configuraremos como 'alto'
+          priority: "max",
+          visibility: "public",
+          notificationPriority: "PRIORITY_MAX"
+        },
       },
-      webpush: {
+      webpush: { // Configuración para Web (PWA)
         headers: { Urgency: "high" },
         notification: {
           icon: "/KADOSH_APP.jpg",
@@ -51,9 +57,9 @@ exports.enviarNotificacionPush = functions.firestore
       },
     };
 
-    // Para Setlists (Evento Actualizado / Convocatoria), preferimos notificar por Temas a menos que haya exclusiones.
-    // Esto evita problemas si los UIDs no están sincronizados.
-    const tieneUsuariosEspecificos = destinatarios.some((d) => d !== "all" && !d.includes(" ") && d.length > 15 && !notif.titulo.includes("Evento"));
+    // Si hay IDs largos (UIDs de Firebase), usamos envío por Tokens sí o sí.
+    // Eliminamos la restricción de que el título no contenga "Evento".
+    const tieneUsuariosEspecificos = destinatarios.some((d) => d !== "all" && !d.includes(" ") && d.length > 15);
 
     if (excluidos.length > 0 || tieneUsuariosEspecificos) {
       console.log("Usando envío basado en Tokens (Convocatoria/Privado/Exclusiones)");

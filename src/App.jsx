@@ -31,61 +31,56 @@ function App() {
     const auth = getAuth();
     let unsubscribeSnapshot = null;
 
-    // 1. Lógica de Notificaciones (Independiente del Auth para asegurar que pida permisos)
-    const inicializarNotificaciones = async (uid, userData) => {
+    const inicializarNotificaciones = async (uid) => {
       try {
         if (Capacitor.isNativePlatform()) {
-          // 📱 MODO NATIVO (APK)
-          let permStatus = await PushNotifications.checkPermissions();
-          console.log('Push Status inicial:', permStatus.receive);
-          
-          if (permStatus.receive === 'prompt' || permStatus.receive === 'denied') {
-            permStatus = await PushNotifications.requestPermissions();
-          }
+          // 📱 MODO NATIVO
+          const channelCreated = await PushNotifications.createChannel({
+            id: 'urgente',
+            name: 'Alertas Urgentes Kadosh', // Nombre más descriptivo
+            description: 'Notificaciones de setlists y eventos',
+            importance: 5, // Prioridad Máxima
+            visibility: 1,
+            sound: 'default',
+            vibration: true,
+          });
 
-          if (permStatus.receive === 'granted') {
-            // Configurar listeners ANTES de registrar para no perder el primer token
+          let perm = await PushNotifications.requestPermissions();
+          
+          if (perm.receive === 'granted') {
             PushNotifications.removeAllListeners();
             
             PushNotifications.addListener('registration', async (token) => {
-              console.log('FCM Token recibido:', token.value);
-              if (token.value !== userData?.fcmToken) {
-                const userRef = doc(db, 'usuarios', uid);
-                await updateDoc(userRef, { fcmToken: token.value });
-              }
+              // Actualizamos el token siempre para asegurar que no sea uno viejo
+              const userRef = doc(db, 'usuarios', uid);
+              await updateDoc(userRef, { fcmToken: token.value, ultimaConexion: new Date().toISOString() });
+              console.log('Token registrado con éxito');
+              alert("¡Sistema de Notificaciones Vinculado!"); // 👈 Ahora sí saldrá en el celular
             });
 
             PushNotifications.addListener('registrationError', (error) => {
-              console.error('Error en registro nativo:', error);
+              console.error('Error en registro de Push Nativo:', error);
+              // alert('Error al registrar notificaciones: ' + error.message); // Desactivado para no molestar al usuario
             });
 
-            PushNotifications.addListener('pushNotificationReceived', (notification) => {
-              alert(`🔔 ${notification.title}\n${notification.body}`);
-            });
-
-            PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
-              const data = notification.notification.data;
-              if (data && data.url) window.location.href = data.url;
-            });
-
-            await PushNotifications.register();
+             await PushNotifications.register();
+          } else {
+            alert("Aviso: No has permitido las notificaciones. No recibirás avisos del setlist.");
           }
         } else {
-          // 💻 MODO WEB (PWA)
-          const permission = await Notification.requestPermission();
+          // 💻 MODO WEB
+          if (!('Notification' in window)) return;
           
-          // Verificar Service Worker con re-intento pequeño para evitar el AbortError
+          const permission = await Notification.requestPermission();
           let registration = await navigator.serviceWorker.ready;
           
-          if (!registration) {
-            return console.warn('Notificaciones Web: Service Worker no está listo.');
-          }
+          if (!registration) return;
+
 
           if (import.meta.env.VITE_VAPID_KEY && permission === 'granted') {
-            const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
-            if (currentToken && currentToken !== userData?.fcmToken) {
-              const userRef = doc(db, 'usuarios', uid);
-              await updateDoc(userRef, { fcmToken: currentToken });
+             const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
+            if (currentToken) {
+              await updateDoc(doc(db, 'usuarios', uid), { fcmToken: currentToken });
             }
 
             onMessage(messaging, (payload) => {
@@ -103,19 +98,15 @@ function App() {
         const docRef = doc(db, 'usuarios', firebaseUser.uid);
         
         const docSnap = await getDoc(docRef);
-        let currentData = null;
 
         if (!docSnap.exists()) {
           const esElDueno = firebaseUser.email === import.meta.env.VITE_OWNER_EMAIL;
           const userData = { email: firebaseUser.email, nombre: esElDueno ? 'Dueño Principal' : 'Usuario Nuevo', rol: esElDueno ? 'dueño' : 'musico', fechaCreacion: new Date().toISOString() };
           await setDoc(docRef, userData);
-          currentData = userData;
-        } else {
-          currentData = docSnap.data();
         }
 
-        // Disparamos la lógica de notificaciones
-        inicializarNotificaciones(firebaseUser.uid, currentData);
+        // Disparamos la lógica de notificaciones inmediatamente
+        inicializarNotificaciones(firebaseUser.uid);
 
         // Escuchamos los cambios del perfil en TIEMPO REAL
         unsubscribeSnapshot = onSnapshot(docRef, (snap) => {

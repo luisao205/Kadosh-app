@@ -25,6 +25,7 @@ const UserProfile = ({ user }) => {
   const [viewingPhoto, setViewingPhoto] = useState(false);
   const [toast, setToast] = useState(null);
   const [permisoConcedido, setPermisoConcedido] = useState(false);
+  const [isSendingTestNotification, setIsSendingTestNotification] = useState(false);
 
   useEffect(() => {
     const checkPerms = async () => {
@@ -202,6 +203,27 @@ const UserProfile = ({ user }) => {
     }
   };
 
+  // Función para enviar una notificación de prueba (solo dueño)
+  const handleTestNotification = async () => {
+    setIsSendingTestNotification(true);
+    try {
+      await addDoc(collection(db, 'notificaciones'), {
+        titulo: '🧪 Prueba de Notificación',
+        mensaje: `¡Hola ${user.nombre.split(' ')[0]}! Si ves esto, las notificaciones de alta prioridad están funcionando correctamente.`,
+        destinatarios: [user.uid], // Se envía a sí mismo
+        emisorId: 'system-test',
+        url: '/perfil', // Redirige al perfil al hacer clic
+        fechaCreacion: new Date().toISOString()
+      });
+      showToast("Notificación de prueba enviada. Revisa tu dispositivo.");
+    } catch (e) {
+      console.error("Error al enviar notificación de prueba:", e);
+      showToast("Error al enviar la prueba de notificación.", "error");
+    } finally {
+      setIsSendingTestNotification(false);
+    }
+  };
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
@@ -355,6 +377,19 @@ const UserProfile = ({ user }) => {
                 Activar Avisos
               </button>
             </div>
+            {user?.rol === 'dueño' && (
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={handleTestNotification}
+                  disabled={isSendingTestNotification}
+                  className="w-full px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black rounded-xl transition-all active:scale-95 flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                >
+                  <BellRing size={14} />
+                  {isSendingTestNotification ? 'Enviando...' : 'Probar Notificación (Dueño)'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
