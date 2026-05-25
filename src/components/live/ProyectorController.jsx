@@ -186,6 +186,7 @@ const ProyectorController = ({ user }) => {
     try {
       await updateDoc(doc(db, 'eventos', eventoId), {
         proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
+        proyectorSongId: activeSongId,
         proyectorSlideIndex: slide.originalIndex ?? -1,
         proyectorNextSlide: nextSlide ? { titulo: nextSlide.titulo, texto: nextSlide.texto, lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null } : null,
         proyectorNextSong: nextSongInfo,

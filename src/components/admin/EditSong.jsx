@@ -203,11 +203,11 @@ const EditSong = ({ user }) => {
 
     // Determinar el nombre final de la pista
     const finalStemName = nombreStem === 'Otro' ? customStemName.trim() : nombreStem;
-    if (!finalStemName || finalStemName === 'Otro') { // Asegurarse de que haya un nombre si se seleccionó 'Otro'
+    if (!finalStemName || finalStemName === 'Otro') { 
       showToast("Por favor, ingresa un nombre para la pista.", "error");
       return;
     }
-    showToast(`Subiendo pista de ${finalStemName}...`, "info");
+    showToast(`Subiendo pista: ${finalStemName}...`, "info");
     setIsSaving(true);
     try {
       const storage = getStorage();
@@ -334,7 +334,7 @@ const EditSong = ({ user }) => {
           </div>
           <div>
             <h1 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">Editar Canción</h1>
-            <p className="text-zinc-500 dark:text-zinc-400 mt-1 text-sm font-medium">Modifica los detalles o corrige la letra y acordes.</p>
+          <p className="text-zinc-500 dark:text-zinc-400 mt-1 text-sm font-medium">Gestiona el contenido, pistas de audio y fondos de proyección.</p>
           </div>
         </div>
         <button onClick={() => navigate('/canciones')} className="flex w-full md:w-auto justify-center items-center gap-2 px-4 py-2.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl hover:bg-zinc-50 dark:hover:bg-zinc-800 font-bold text-sm text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors active:scale-95">

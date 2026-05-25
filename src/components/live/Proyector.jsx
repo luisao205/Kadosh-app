@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
+import { Minimize, RefreshCw } from 'lucide-react';
 
 const Proyector = () => {
   const { eventoId } = useParams();
@@ -12,6 +13,8 @@ const Proyector = () => {
   const [modoTransmision, setModoTransmision] = useState(false);
   const [showLogo, setShowLogo] = useState(false);
   const [ticker, setTicker] = useState(null);
+  const [showControls, setShowControls] = useState(false);
+  const controlsTimerRef = useRef(null);
 
   // Nuevos estados para la transición secuencial (Desvanecer viejo -> Aparecer nuevo)
   const [displaySlide, setDisplaySlide] = useState(null);
@@ -65,6 +68,46 @@ const Proyector = () => {
     }
   }, [slide, transicion, displaySlide]);
 
+  // Lógica para activar pantalla completa automáticamente al interactuar
+  useEffect(() => {
+    const activarPantallaCompleta = () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch((e) => {
+          console.warn("Pantalla completa bloqueada por el navegador hasta que interactúes.");
+        });
+      }
+    };
+
+    // Escuchamos el primer clic en la ventana para maximizar "solo"
+    window.addEventListener('click', activarPantallaCompleta);
+    return () => window.removeEventListener('click', activarPantallaCompleta);
+  }, []);
+
+  // Lógica para mostrar botones al mover el mouse
+  useEffect(() => {
+    const handleMouseMove = () => {
+      setShowControls(true);
+      if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = setTimeout(() => setShowControls(false), 2000);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
+    };
+  }, []);
+
+  const salirPantallaCompleta = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch((e) => console.error(e));
+    }
+  };
+
+  const refrescarPagina = () => {
+    window.location.reload();
+  };
+
   if (apagar || !displaySlide) {
     return <div className="fixed inset-0 bg-black animate-in fade-in duration-700"></div>;
   }
@@ -88,8 +131,26 @@ const Proyector = () => {
   }
 
   return (
-    <div className={`fixed inset-0 text-white flex flex-col font-sans selection:bg-transparent overflow-hidden transition-colors duration-500 ${modoTransmision ? 'bg-[#00FF00] justify-end items-start pb-12 md:pb-20' : 'bg-black items-center justify-center p-8 md:p-16'}`}>
+    <div className={`fixed inset-0 text-white flex flex-col font-sans selection:bg-transparent overflow-hidden transition-colors duration-500 ${modoTransmision ? 'bg-[#00FF00] justify-end items-start pb-12 md:pb-20' : 'bg-black items-center justify-center p-8 md:p-16'} ${!showControls ? 'cursor-none' : ''}`}>
       
+      {/* Botones de Control (Ocultos por defecto, aparecen al mover el mouse) */}
+      <div className={`fixed top-4 right-4 z-[100] flex gap-2 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <button 
+          onClick={refrescarPagina}
+          className="p-3 bg-zinc-900/80 hover:bg-zinc-800 text-white rounded-full shadow-xl border border-white/10 transition-all active:scale-95 flex items-center justify-center"
+          title="Refrescar Proyector"
+        >
+          <RefreshCw size={20} />
+        </button>
+        <button 
+          onClick={salirPantallaCompleta}
+          className="p-3 bg-zinc-900/80 hover:bg-zinc-800 text-white rounded-full shadow-xl border border-white/10 transition-all active:scale-95 flex items-center justify-center"
+          title="Salir de Pantalla Completa"
+        >
+          <Minimize size={20} />
+        </button>
+      </div>
+
       {/* Capa de Fondo (Imagen o VideoLoop) */}
       {!modoTransmision && fondoUrl && (
         <div className="absolute inset-0 z-0 pointer-events-none">
@@ -108,10 +169,10 @@ const Proyector = () => {
           <h1 className="mt-8 text-5xl md:text-7xl font-black tracking-tighter text-white drop-shadow-2xl">KADOSH</h1>
         </div>
       ) : (
-        <div className={`relative z-10 w-full max-w-screen-2xl flex flex-col ${modoTransmision ? 'justify-end items-start pl-8 md:pl-16' : 'justify-center items-center h-full mx-auto text-center'}`}>
+        <div className={`relative z-10 w-full max-w-none flex flex-col ${modoTransmision ? 'justify-end items-start pl-8 md:pl-16' : 'justify-center items-center h-full mx-auto text-center'}`}>
           <div 
             // Eliminamos la prop 'key' para que React no destruya el elemento, sino que aplique las clases de transición de CSS puro
-            className={`font-black tracking-tight whitespace-pre-wrap break-words ${animationClass} ${modoTransmision ? 'bg-black/80 border-l-[12px] border-violet-600 py-4 md:py-6 pr-8 pl-6 md:pl-8 rounded-r-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] inline-block text-left text-[min(6vw,6vh)] sm:text-[min(5vw,5vh)] md:text-[min(4vw,4vh)] leading-[1.2] max-w-[90vw] lg:max-w-5xl' : 'w-full max-w-[95vw] lg:max-w-7xl px-4 md:px-8 drop-shadow-[0_0_40px_rgba(0,0,0,0.9)] text-[min(8vw,7vh)] sm:text-[min(7vw,7vh)] md:text-[min(5.5vw,7vh)] xl:text-[min(4.5vw,6.5vh)] leading-[1.25] md:leading-[1.2]'}`}
+            className={`font-black tracking-tight whitespace-pre-wrap break-words text-outline ${animationClass} ${modoTransmision ? 'bg-black/80 border-l-[12px] border-violet-600 py-4 md:py-6 pr-8 pl-6 md:pl-8 rounded-r-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] inline-block text-left text-[min(6vw,6vh)] sm:text-[min(5vw,5vh)] md:text-[min(4vw,4vh)] leading-[1.2] max-w-[90vw] lg:max-w-5xl' : 'w-full max-w-[98vw] px-4 md:px-8 drop-shadow-[0_0_60px_rgba(0,0,0,1)] text-[min(12vw,11vh)] sm:text-[min(10vw,11vh)] md:text-[min(9vw,11vh)] xl:text-[min(7vw,10.5vh)] leading-[1.1] md:leading-[1.1]'}`}
           >
             {displaySlide.texto}
           </div>
@@ -130,6 +191,10 @@ const Proyector = () => {
               display: inline-block;
               white-space: nowrap;
               animation: marquee 25s linear infinite;
+            }
+            .text-outline {
+              -webkit-text-stroke: 2px black;
+              paint-order: stroke fill;
             }
           `}</style>
           <p className="animate-marquee text-2xl md:text-4xl font-black uppercase tracking-widest drop-shadow-md">

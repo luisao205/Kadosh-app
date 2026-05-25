@@ -19,6 +19,7 @@ const UserManagement = ({ user }) => {
   const [editingUserId, setEditingUserId] = useState(null);
   const [userToDelete, setUserToDelete] = useState(null);
   const [sinAcceso, setSinAcceso] = useState(false);
+  const [nuevoInstrumentoCustom, setNuevoInstrumentoCustom] = useState('');
   const [isActivating, setIsActivating] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   
@@ -47,6 +48,13 @@ const UserManagement = ({ user }) => {
         ? prev.filter(i => i !== inst)
         : [...prev, inst]
     );
+  };
+
+  const handleAddCustomInstrument = () => {
+    if (!nuevoInstrumentoCustom.trim()) return;
+    const inst = nuevoInstrumentoCustom.trim();
+    if (!instrumentosSeleccionados.includes(inst)) toggleInstrumento(inst);
+    setNuevoInstrumentoCustom('');
   };
 
   const handleSubmit = async (e) => {
@@ -270,6 +278,23 @@ const UserManagement = ({ user }) => {
                     {inst}
                   </button>
                 ))}
+              </div>
+              {/* Opción para crear un instrumento o función nueva */}
+              <div className="flex gap-2 mt-2">
+                <input 
+                  type="text" 
+                  value={nuevoInstrumentoCustom} 
+                  onChange={(e) => setNuevoInstrumentoCustom(e.target.value)}
+                  placeholder="Añadir función (Ej. Trombón)" 
+                  className="flex-1 p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-xs bg-zinc-50 dark:bg-zinc-950 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <button 
+                  type="button" 
+                  onClick={handleAddCustomInstrument}
+                  className="px-3 bg-zinc-800 dark:bg-zinc-700 text-white rounded-lg text-xs font-bold hover:bg-zinc-700 transition-colors"
+                >
+                  Añadir
+                </button>
               </div>
             </div>}
             <div className="flex gap-2 pt-2">

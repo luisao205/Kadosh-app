@@ -340,7 +340,8 @@ const SetlistViewer = ({ user }) => {
               <PlayCircle size={16} /> Modo Ensayo
             </button>
           )}
-          {(user?.rol === 'admin' || user?.rol === 'dueño' || user?.rol === 'multimedia') && (
+                      {/* 🎮 MENÚ DE CONTROLADOR: Ahora músicos también tienen acceso limitado */}
+            {(user?.rol === 'admin' || user?.rol === 'dueño' || user?.rol === 'multimedia' || user?.rol === 'musico') && (
             <div className="relative w-full sm:w-max">
               <button onClick={() => setShowControladorMenu(!showControladorMenu)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-violet-600 text-white rounded-xl hover:bg-violet-700 font-bold text-sm shadow-sm transition-colors active:scale-95 w-full sm:w-max">
                 <Monitor size={16} /> Controlador <ChevronDown size={14} className={`transition-transform ${showControladorMenu ? 'rotate-180' : ''}`} />
@@ -349,9 +350,13 @@ const SetlistViewer = ({ user }) => {
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowControladorMenu(false)}></div>
                   <div className="absolute top-full right-0 sm:left-0 sm:right-auto mt-2 w-56 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-xl p-2 z-50 animate-in fade-in zoom-in-95">
-                    <button onClick={() => handleOpenScreen(`/control-proyector/${id}`)} className="w-full text-left px-3 py-2.5 text-sm font-bold text-zinc-700 dark:text-zinc-300 hover:bg-violet-50 dark:hover:bg-violet-500/10 hover:text-violet-700 dark:hover:text-violet-400 rounded-lg flex items-center gap-2 transition-colors">
-                      <Monitor size={16} /> Controlador General
-                    </button>
+                    {/* Solo Admin/Dueño/Multimedia ven el Controlador General */}
+                      {(user?.rol === 'admin' || user?.rol === 'dueño' || user?.rol === 'multimedia') && (
+                        <button onClick={() => handleOpenScreen(`/control-proyector/${id}`)} className="w-full text-left px-3 py-2.5 text-sm font-bold text-zinc-700 dark:text-zinc-300 hover:bg-violet-50 dark:hover:bg-violet-500/10 hover:text-violet-700 dark:hover:text-violet-400 rounded-lg flex items-center gap-2 transition-colors">
+                          <Monitor size={16} /> Controlador General
+                        </button>
+                      )}
+                      {/* Los retornos de pantalla son para todos (Músicos y Cantantes) */}
                     <button onClick={() => handleOpenScreen(`/retorno/${id}`)} className="w-full text-left px-3 py-2.5 text-sm font-bold text-zinc-700 dark:text-zinc-300 hover:bg-violet-50 dark:hover:bg-violet-500/10 hover:text-violet-700 dark:hover:text-violet-400 rounded-lg flex items-center gap-2 transition-colors mt-1">
                       <Mic2 size={16} /> Retorno Cantantes
                     </button>
