@@ -13,8 +13,11 @@ const Proyector = () => {
   const [modoTransmision, setModoTransmision] = useState(false);
   const [showLogo, setShowLogo] = useState(false);
   const [ticker, setTicker] = useState(null);
+  const [media, setMedia] = useState(null); // { url, type, playing, volume, mode }
   const [showControls, setShowControls] = useState(false);
   const controlsTimerRef = useRef(null);
+  const videoRef = useRef(null);
+  const [fadeVolume, setFadeVolume] = useState(0);
 
   // Nuevos estados para la transición secuencial (Desvanecer viejo -> Aparecer nuevo)
   const [displaySlide, setDisplaySlide] = useState(null);
@@ -24,21 +27,60 @@ const Proyector = () => {
     const unsub = onSnapshot(doc(db, 'eventos', eventoId), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        if (data.proyectorSlide) {
-          setSlide(data.proyectorSlide);
-          setFondoUrl(data.proyectorFondo || null);
-          setApagar(data.proyectorApagado || false);
-          setTransicion(data.proyectorTransicion || 'fade');
-          setModoTransmision(data.proyectorModoTransmision || false);
-          setShowLogo(data.proyectorLogo || false);
-          setTicker(data.proyectorTicker || null);
-        } else {
-          setSlide(null);
-        }
+        setSlide(data.proyectorSlide || null);
+        setFondoUrl(data.proyectorFondo || null);
+        setMedia(data.proyectorMedia || null);
+        setApagar(data.proyectorApagado || false);
+        setTransicion(data.proyectorTransicion || 'fade');
+        setModoTransmision(data.proyectorModoTransmision || false);
+        setShowLogo(data.proyectorLogo || false);
+        setTicker(data.proyectorTicker || null);
       }
     });
     return () => unsub();
   }, [eventoId]);
+
+  // Sincronización de Play/Pause y Comandos de Navegación
+  useEffect(() => {
+    if (!videoRef.current || !media || media.type !== 'video') return;
+
+    // Manejo de Play/Pause
+    if (media.playing) videoRef.current.play().catch(e => console.warn(e));
+    else videoRef.current.pause();
+
+    // Manejo de comandos de búsqueda (Seek)
+    if (media.seekRequest) {
+      const { type, time } = media.seekRequest;
+      // Solo procesamos si es una petición nueva (basado en el timestamp 'time')
+      if (videoRef.current._lastSeekTime !== time) {
+        videoRef.current._lastSeekTime = time;
+        if (type === 'start') videoRef.current.currentTime = 0;
+        if (type === 'back10') videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10);
+        if (type === 'fwd10') videoRef.current.currentTime = Math.min(videoRef.current.duration, videoRef.current.currentTime + 10);
+      }
+    }
+  }, [media?.playing, media?.seekRequest]);
+
+  // Lógica de Fade-in de Volumen automático al cargar video
+  useEffect(() => {
+    if (videoRef.current && media?.url && media.type === 'video') {
+      const targetVolume = media.volume ?? 1;
+      setFadeVolume(0);
+      videoRef.current.volume = 0;
+
+      let current = 0;
+      const interval = setInterval(() => {
+        current += 0.05;
+        if (current >= targetVolume) {
+          videoRef.current.volume = targetVolume;
+          clearInterval(interval);
+        } else {
+          videoRef.current.volume = current;
+        }
+      }, 100); // Sube volumen cada 100ms
+      return () => clearInterval(interval);
+    }
+  }, [media?.url]);
 
   // Efecto maestro para controlar la salida y entrada de la letra de forma sincronizada
   useEffect(() => {
@@ -108,7 +150,8 @@ const Proyector = () => {
     window.location.reload();
   };
 
-  if (apagar || !displaySlide) {
+  // Permitir renderizar si hay video principal, aunque no haya letras
+  if (apagar || (!displaySlide && !media && !showLogo)) {
     return <div className="fixed inset-0 bg-black animate-in fade-in duration-700"></div>;
   }
 
@@ -131,7 +174,7 @@ const Proyector = () => {
   }
 
   return (
-    <div className={`fixed inset-0 text-white flex flex-col font-sans selection:bg-transparent overflow-hidden transition-colors duration-500 ${modoTransmision ? 'bg-[#00FF00] justify-end items-start pb-12 md:pb-20' : 'bg-black items-center justify-center p-8 md:p-16'} ${!showControls ? 'cursor-none' : ''}`}>
+    <div className={`fixed inset-0 text-white flex flex-col font-sans selection:bg-transparent overflow-hidden transition-colors duration-500 ${modoTransmision ? 'bg-[#00FF00] justify-end items-start pb-12 md:pb-20' : 'bg-black items-center justify-center p-8 md:p-16'} ${!showControls ? 'cursor-none' : ''} ${media?.mode === 'foreground' ? 'z-[60]' : ''}`}>
       
       {/* Botones de Control (Ocultos por defecto, aparecen al mover el mouse) */}
       <div className={`fixed top-4 right-4 z-[100] flex gap-2 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
@@ -162,13 +205,29 @@ const Proyector = () => {
         </div>
       )}
 
+      {/* 🎬 Capa de Video Principal (Foreground) - Tapa todo lo demás */}
+      {media && (
+        <div className={`absolute inset-0 z-40 bg-black animate-in fade-in duration-500 ${media.mode === 'foreground' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+          {media.type === 'video' ? (
+            <video 
+              ref={videoRef}
+              src={media.url} 
+              className="w-full h-full object-cover" 
+              playsInline 
+              autoPlay
+              muted={false}
+            />
+          ) : <img src={media.url} className="w-full h-full object-contain" />}
+        </div>
+      )}
+
       {/* Capa de Texto */}
       {showLogo ? (
         <div className="relative z-20 flex flex-col items-center justify-center h-full animate-in zoom-in duration-500">
           <img src="/KADOSH_APP.jpg" alt="Logo Kadosh" className="w-48 h-48 md:w-64 md:h-64 lg:w-80 lg:h-80 rounded-full shadow-[0_0_80px_rgba(255,255,255,0.2)] object-cover ring-8 ring-white/10" />
           <h1 className="mt-8 text-5xl md:text-7xl font-black tracking-tighter text-white drop-shadow-2xl">KADOSH</h1>
         </div>
-      ) : (
+      ) : displaySlide ? (
         <div className={`relative z-10 w-full max-w-none flex flex-col ${modoTransmision ? 'justify-end items-start pl-8 md:pl-16' : 'justify-center items-center h-full mx-auto text-center'}`}>
           <div 
             // Eliminamos la prop 'key' para que React no destruya el elemento, sino que aplique las clases de transición de CSS puro
@@ -177,7 +236,7 @@ const Proyector = () => {
             {displaySlide.texto}
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* 💡 Marquesina Pública (Ticker) */}
       {ticker && (

@@ -5,6 +5,7 @@ import Proyector from './components/live/Proyector';
 import ProyectorController from './components/live/ProyectorController';
 import StageDisplay from './components/live/StageDisplay';
 import StageDisplayMusicos from './components/live/StageDisplayMusicos';
+import MultimediaHub from './components/live/MultimediaHub';
 import AdminLayout from './components/layout/AdminLayout';
 import AdminDashboard from './components/admin/AdminDashboard';
 import Login from './components/layout/Login';
@@ -191,6 +192,7 @@ function App() {
         <Route path="/editar/:id" element={<AdminLayout user={user}><EditSong user={user} /></AdminLayout>} />
         <Route path="/equipo" element={<AdminLayout user={user}><UserManagement user={user} /></AdminLayout>} />
         <Route path="/eventos" element={<AdminLayout user={user}><EventManagement user={user} /></AdminLayout>} />
+        <Route path="/multimedia-hub" element={<AdminLayout user={user}><MultimediaHub user={user} /></AdminLayout>} />
         <Route path="/setlist/:id" element={<AdminLayout user={user}><SetlistViewer user={user} /></AdminLayout>} />
         <Route path="/perfil" element={<AdminLayout user={user}><UserProfile user={user} /></AdminLayout>} />
         

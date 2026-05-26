@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell } from 'lucide-react';
+import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell, Monitor } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, signOut } from 'firebase/auth';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
@@ -18,6 +18,7 @@ const AdminLayout = ({ children, user }) => {
     { name: 'Dashboard', path: '/', icon: <Home size={20} /> },
     { name: 'Repertorio', path: '/canciones', icon: <Music size={20} /> },
     { name: 'Eventos', path: '/eventos', icon: <Calendar size={20} /> },
+    { name: 'Controlador Multimedia', path: '/multimedia-hub', icon: <Monitor size={20} className="text-violet-500" /> },
     { name: 'Mi Perfil', path: '/perfil', icon: <User size={20} /> },
   ];
 

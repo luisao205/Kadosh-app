@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { parsearCancion } from '../../utils/songParser';
-import { Monitor, Play, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight } from 'lucide-react';
+import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2 } from 'lucide-react';
 import { traducirAcorde } from '../../utils/musicCore';
 
 const ProyectorController = ({ user }) => {
@@ -24,6 +24,7 @@ const ProyectorController = ({ user }) => {
   
   const [activeSongId, setActiveSongId] = useState(null);
   const [previewSlide, setPreviewSlide] = useState(null); // { texto, titulo }
+  const [previewMedia, setPreviewMedia] = useState(null); // { url, type, mode }
   const [liveSlide, setLiveSlide] = useState(null);
   const [isBlackout, setIsBlackout] = useState(false);
   const [modoTransmision, setModoTransmision] = useState(false);
@@ -34,6 +35,11 @@ const ProyectorController = ({ user }) => {
   const [fondoActivo, setFondoActivo] = useState(null);
   const [transicionActiva, setTransicionActiva] = useState('fade');
   const [guardarEnCancion, setGuardarEnCancion] = useState(true);
+  const [mediaActive, setMediaActive] = useState(null); // { url, type, playing, volume }
+  const [multimediaLib, setMultimediaLib] = useState([]);
+  const [multimediaFolders, setMultimediaFolders] = useState([]); // ['Carpeta 1', 'Carpeta 2']
+  const [currentFolder, setCurrentFolder] = useState(null); // null = root
+  const [upcomingEvents, setUpcomingEvents] = useState([]);
 
   const [displayLiveSlide, setDisplayLiveSlide] = useState(null);
   const [fadeState, setFadeState] = useState('in');
@@ -44,7 +50,20 @@ const ProyectorController = ({ user }) => {
 
   useEffect(() => {
     let unsubEvento;
+
+    const fetchUpcoming = async () => {
+      const hoy = new Date().toISOString().slice(0, 10);
+      const q = query(collection(db, 'eventos'), where('fecha', '>=', hoy), orderBy('fecha', 'asc'), limit(5));
+      const snap = await getDocs(q);
+      setUpcomingEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    };
+    fetchUpcoming();
+
     const fetchEvent = async () => {
+      if (eventoId === 'global') {
+        setLoading(false);
+        return;
+      }
       try {
         const eventoSnap = await getDoc(doc(db, 'eventos', eventoId));
         if (eventoSnap.exists()) {
@@ -57,6 +76,8 @@ const ProyectorController = ({ user }) => {
             const snaps = await Promise.all(uniqueIds.map(id => getDoc(doc(db, 'canciones', id))));
             setCanciones(snaps.map(s => ({ id: s.id, ...s.data() })));
           }
+          // Cargar biblioteca de medios global
+          setMultimediaLib(evData.multimediaLib || []);
         }
       } catch (err) {
         console.error(err);
@@ -77,6 +98,8 @@ const ProyectorController = ({ user }) => {
         if (data.proyectorTransicion !== undefined) setTransicionActiva(data.proyectorTransicion);
         if (data.proyectorModoTransmision !== undefined) setModoTransmision(data.proyectorModoTransmision);
         if (data.proyectorLogo !== undefined) setIsLogoActive(data.proyectorLogo);
+        if (data.proyectorMedia !== undefined) setMediaActive(data.proyectorMedia);
+        if (data.multimediaFolders !== undefined) setMultimediaFolders(data.multimediaFolders);
       }
     });
 
@@ -183,42 +206,103 @@ const ProyectorController = ({ user }) => {
       }
     }
 
-    try {
-      await updateDoc(doc(db, 'eventos', eventoId), {
-        proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
-        proyectorSongId: activeSongId,
-        proyectorSlideIndex: slide.originalIndex ?? -1,
-        proyectorNextSlide: nextSlide ? { titulo: nextSlide.titulo, texto: nextSlide.texto, lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null } : null,
-        proyectorNextSong: nextSongInfo,
-        proyectorOffset: offset,
-        proyectorLogo: false, // Quitar logo al proyectar una nueva letra
-        proyectorApagado: false
-      });
-    } catch (e) { console.error("Error al proyectar diapositiva:", e); }
+    const updates = {
+      proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
+      proyectorSongId: activeSongId,
+      proyectorSlideIndex: slide.originalIndex ?? -1,
+      proyectorNextSlide: nextSlide ? { titulo: nextSlide.titulo, texto: nextSlide.texto, lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null } : null,
+      proyectorNextSong: nextSongInfo,
+      proyectorOffset: offset,
+      proyectorLogo: false,
+      proyectorApagado: false
+    };
+
+    // Si hay un media en preview, lo mandamos a Live también
+    if (previewMedia) {
+      updates.proyectorMedia = { ...previewMedia, playing: true, volume: 1 };
+    }
+
+    try { await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true }); } 
+    catch (e) { console.error("Error al proyectar:", e); }
+  };
+
+  const handleTransicionChange = async (e) => {
+    const nuevaTransicion = e.target.value;
+    setTransicionActiva(nuevaTransicion);
+    try { await setDoc(doc(db, 'eventos', eventoId), { proyectorTransicion: nuevaTransicion }, { merge: true }); } catch(e) { console.error(e); }
   };
 
   const toggleBlackout = async () => {
-    try {
-      await updateDoc(doc(db, 'eventos', eventoId), {
-        proyectorApagado: !isBlackout
-      });
-    } catch (e) { console.error(e); }
+    try { await setDoc(doc(db, 'eventos', eventoId), { proyectorApagado: !isBlackout }, { merge: true }); } 
+    catch (e) { console.error(e); }
   };
 
   const toggleTransmision = async () => {
-    try {
-      await updateDoc(doc(db, 'eventos', eventoId), {
-        proyectorModoTransmision: !modoTransmision
-      });
-    } catch (e) { console.error(e); }
+    try { await setDoc(doc(db, 'eventos', eventoId), { proyectorModoTransmision: !modoTransmision }, { merge: true }); } 
+    catch (e) { console.error(e); }
   };
 
   const toggleLogo = async () => {
+    try { await setDoc(doc(db, 'eventos', eventoId), { proyectorLogo: !isLogoActive, proyectorApagado: false }, { merge: true }); } 
+    catch (e) { console.error(e); }
+  };
+
+  const handleMediaControl = async (updates) => {
     try {
-      await updateDoc(doc(db, 'eventos', eventoId), {
-        proyectorLogo: !isLogoActive,
-        proyectorApagado: false
-      });
+      const newMedia = { ...mediaActive, ...updates };
+      await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: newMedia }, { merge: true });
+    } catch (e) { console.error(e); }
+  };
+
+  const handleSeekCommand = async (type) => {
+    if (!mediaActive) return;
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: { ...mediaActive, seekRequest: { type, time: Date.now() } } }, { merge: true });
+    } catch (e) { console.error(e); }
+  };
+
+  const detenerMedia = async () => {
+    await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: null }, { merge: true });
+  };
+
+  const botonPanico = async () => {
+    await setDoc(doc(db, 'eventos', eventoId), { 
+      proyectorSlide: null, proyectorMedia: null, proyectorLogo: false, proyectorApagado: true, proyectorAlerta: null, proyectorTicker: null 
+    }, { merge: true });
+    setPreviewMedia(null);
+    setLiveSlide(null);
+  };
+
+  const borrarArchivo = async (e, url) => {
+    e.stopPropagation();
+    if (!window.confirm("¿Estás seguro de eliminar este archivo de la boveda?")) return;
+    const nuevaLib = multimediaLib.filter(m => m.url !== url);
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), { multimediaLib: nuevaLib }, { merge: true });
+    } catch (e) { console.error(e); }
+  };
+
+  const borrarCarpeta = async (e, folderName) => {
+    e.stopPropagation();
+    if (!window.confirm(`¿Eliminar la carpeta "${folderName}" y todo su contenido?`)) return;
+    const nuevasCarpetas = multimediaFolders.filter(f => f !== folderName);
+    const nuevaLib = multimediaLib.filter(m => m.folder !== folderName);
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), { 
+        multimediaFolders: nuevasCarpetas,
+        multimediaLib: nuevaLib
+      }, { merge: true });
+      if (currentFolder === folderName) setCurrentFolder(null);
+    } catch (e) { console.error(e); }
+  };
+
+  const crearCarpeta = async () => {
+    const nombre = prompt("Nombre de la nueva carpeta:");
+    if (!nombre || nombre.trim() === '') return;
+    
+    const nuevasCarpetas = [...multimediaFolders, nombre.trim()];
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), { multimediaFolders: nuevasCarpetas }, { merge: true });
     } catch (e) { console.error(e); }
   };
 
@@ -240,10 +324,22 @@ const ProyectorController = ({ user }) => {
       const data = await res.json();
       
       if (data.secure_url) {
-        await updateDoc(doc(db, 'eventos', eventoId), { proyectorFondo: data.secure_url });
+        // Solo guardamos la URL en Firestore, el archivo reside en Cloudinary
+        await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: data.secure_url }, { merge: true });
         
-        if (activeSongId && guardarEnCancion) {
-          await updateDoc(doc(db, 'canciones', activeSongId), { fondoUrl: data.secure_url });
+        // Añadir a biblioteca rápida del evento
+        const nuevaLib = [...multimediaLib, { 
+          url: data.secure_url, 
+          type: data.resource_type, 
+          name: file.name,
+          folder: currentFolder || 'root'
+        }];
+        await setDoc(doc(db, 'eventos', eventoId), { multimediaLib: nuevaLib }, { merge: true });
+        setMultimediaLib(nuevaLib);
+        
+        // Si es una canción real (no modo global), guardamos la referencia
+        if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
+          await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: data.secure_url }, { merge: true });
           setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: data.secure_url } : c));
         }
       }
@@ -257,10 +353,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const quitarFondo = async () => {
-    await updateDoc(doc(db, 'eventos', eventoId), { proyectorFondo: null });
+    await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: null }, { merge: true });
     
-    if (activeSongId && guardarEnCancion) {
-      await updateDoc(doc(db, 'canciones', activeSongId), { fondoUrl: null });
+    if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
+      await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: null }, { merge: true });
       setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: null } : c));
     }
     setShowFondosModal(false);
@@ -271,27 +367,27 @@ const ProyectorController = ({ user }) => {
     if (!alertaTarima.trim()) return;
     setIsSendingAlert(true);
     try {
-      await updateDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: alertaTarima });
+      await setDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: alertaTarima }, { merge: true });
       setAlertaTarima('');
       // Auto-limpiar alerta a los 10 segundos
       setTimeout(async () => {
-         await updateDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: null });
+         await setDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: null }, { merge: true });
       }, 10000);
     } catch (e) { console.error(e); } finally { setIsSendingAlert(false); }
   };
   const limpiarAlerta = async () => {
-    await updateDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: null });
+    await setDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: null }, { merge: true });
   };
 
   // Lógica para enviar Marquesina (Ticker) Público
   const enviarTicker = async () => {
     if (!tickerMsg.trim()) return;
     setIsSendingTicker(true);
-    try { await updateDoc(doc(db, 'eventos', eventoId), { proyectorTicker: tickerMsg }); setTickerMsg(''); } 
+    try { await setDoc(doc(db, 'eventos', eventoId), { proyectorTicker: tickerMsg }, { merge: true }); setTickerMsg(''); } 
     catch (e) { console.error(e); } finally { setIsSendingTicker(false); }
   };
   const limpiarTicker = async () => {
-    await updateDoc(doc(db, 'eventos', eventoId), { proyectorTicker: null });
+    await setDoc(doc(db, 'eventos', eventoId), { proyectorTicker: null }, { merge: true });
   };
 
   if (loading) return <div className="min-h-screen bg-zinc-950 flex justify-center items-center text-zinc-500 font-bold">Cargando Controlador...</div>;
@@ -333,7 +429,7 @@ const ProyectorController = ({ user }) => {
             <span className="text-xs text-zinc-400 font-bold">Animación:</span>
             <select 
               value={transicionActiva} 
-              onChange={async (e) => { setTransicionActiva(e.target.value); await updateDoc(doc(db, 'eventos', eventoId), { proyectorTransicion: e.target.value }); }}
+              onChange={handleTransicionChange}
               className="bg-transparent text-sm font-bold text-white outline-none cursor-pointer"
             >
               <option value="fade" className="bg-zinc-900">Suave (Fade)</option>
@@ -345,11 +441,11 @@ const ProyectorController = ({ user }) => {
           <button onClick={toggleTransmision} className={`hidden md:flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all border ${modoTransmision ? 'bg-emerald-600 text-white border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)] animate-pulse' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}>
             <Tv size={16}/> <span className="hidden sm:inline">{modoTransmision ? 'Modo OBS' : 'Transmisión'}</span>
           </button>
-          <button onClick={() => setShowFondosModal(true)} className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/40 rounded-lg font-bold text-xs sm:text-sm transition-colors border border-indigo-500/30">
-            <ImageIcon size={16}/> <span className="hidden sm:inline">Fondo</span>
-          </button>
           <button onClick={toggleBlackout} className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all ${isBlackout ? 'bg-red-600 text-white animate-pulse shadow-[0_0_15px_rgba(220,38,38,0.4)]' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}>
             <PowerOff size={16}/> <span className="hidden sm:inline">{isBlackout ? 'Apagado' : 'Apagar'}</span>
+          </button>
+          <button onClick={botonPanico} className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold text-xs sm:text-sm transition-all shadow-lg shadow-red-900/20 border border-red-500">
+            <Zap size={16} fill="currentColor"/> <span className="hidden sm:inline">PANIC</span>
           </button>
         </div>
       </header>
@@ -361,8 +457,18 @@ const ProyectorController = ({ user }) => {
           <div className="p-4 border-b border-zinc-800 bg-zinc-900">
             <h2 className="font-bold text-sm flex items-center gap-2"><Layers size={16} className="text-blue-500"/> Setlist del Evento</h2>
           </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-1 [&::-webkit-scrollbar]:hidden">
-            {(() => {
+          <div className="flex-1 overflow-y-auto p-3 space-y-1 [&::-webkit-scrollbar]:hidden">
+            {eventoId === 'global' ? (
+              <div className="space-y-3">
+                <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Cargar Setlist</p>
+                {upcomingEvents.map(ev => (
+                  <button key={ev.id} onClick={() => navigate(`/control-proyector/${ev.id}`)} className="w-full text-left p-3 rounded-xl bg-zinc-800/30 border border-zinc-700 hover:border-violet-500 transition-all">
+                    <p className="font-bold text-xs truncate">{ev.titulo}</p>
+                    <p className="text-[10px] text-zinc-500">{ev.fecha}</p>
+                  </button>
+                ))}
+              </div>
+            ) : (() => {
               const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
               return setlistItems.filter(i => i.type === 'song').map((item, idx) => {
                 const c = canciones.find(c => c.id === item.value);
@@ -374,7 +480,7 @@ const ProyectorController = ({ user }) => {
                       setActiveSongId(c.id); 
                       setPreviewSlide(null); 
                       if (c.fondoUrl) {
-                        try { await updateDoc(doc(db, 'eventos', eventoId), { proyectorFondo: c.fondoUrl }); } catch(e) { console.error(e); }
+                        try { await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: c.fondoUrl }, { merge: true }); } catch(e) { console.error(e); }
                       }
                     }}
                     className={`w-full text-left p-3 rounded-xl transition-all border ${activeSongId === c.id ? 'bg-violet-600/10 border-violet-500/50 text-white shadow-sm' : 'border-transparent hover:bg-zinc-800/50 text-zinc-400 hover:text-zinc-200'}`}
@@ -393,7 +499,118 @@ const ProyectorController = ({ user }) => {
           <div className="p-4 border-b border-zinc-800 bg-zinc-900 flex justify-between items-center">
             <h2 className="font-bold text-sm flex items-center gap-2"><Type size={16} className="text-amber-500"/> Diapositivas {activeSong && <span className="text-zinc-500">- {activeSong.titulo}</span>}</h2>
           </div>
-          <div className="flex-1 flex flex-col p-4 bg-zinc-950/50 overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden">
+            
+            {/* 📺 NUEVO: PANEL DE MULTIMEDIA RÁPIDA (Bóveda) */}
+            <div className="bg-zinc-900/50 border-b border-zinc-800 p-4">
+              <div className="flex justify-between items-center mb-3">
+                <div className="flex items-center gap-2">
+                  {currentFolder && (
+                    <button onClick={() => setCurrentFolder(null)} className="p-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-400 transition-colors">
+                      <ChevronLeft size={14}/>
+                    </button>
+                  )}
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500 flex items-center gap-2">
+                    <Folder size={12} className="text-amber-500"/> {currentFolder ? `Bóveda / ${currentFolder}` : 'Bóveda de Medios'}
+                  </h3>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={crearCarpeta} className="text-[10px] font-bold text-amber-500 hover:text-amber-400 flex items-center gap-1"><FolderPlus size={12}/> Nueva Carpeta</button>
+                  <button onClick={() => setShowFondosModal(true)} className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1"><Upload size={12}/> Subir Medios</button>
+                </div>
+              </div>
+
+              <div className="flex gap-3 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden">
+                {/* Mostrar Carpetas si estamos en el Root */}
+                {!currentFolder && multimediaFolders.map((folder, i) => (
+                  <div key={`folder-${i}`} className="group relative shrink-0">
+                    <button 
+                      onClick={() => setCurrentFolder(folder)}
+                      className="group flex flex-col items-center gap-1"
+                    >
+                      <div className="w-24 h-16 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center group-hover:bg-amber-500/20 transition-all">
+                        <Folder size={32} className="text-amber-500" fill="currentColor" fillOpacity={0.2}/>
+                      </div>
+                      <p className="text-[9px] font-bold text-zinc-400 truncate w-24 text-center">{folder}</p>
+                    </button>
+                    <button 
+                      onClick={(e) => borrarCarpeta(e, folder)}
+                      className="absolute -top-1 -right-1 p-1 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-10"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
+
+                {/* Mostrar Archivos filtrados por carpeta */}
+                {multimediaLib.filter(m => (m.folder || 'root') === (currentFolder || 'root')).map((m, i) => (
+                  <div key={i} className="group relative shrink-0">
+                    <button 
+                      onClick={() => { setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground' }); setPreviewSlide(null); }}
+                      className={`w-24 h-16 rounded-lg overflow-hidden border transition-all bg-black relative ${previewMedia?.url === m.url ? 'border-indigo-500 ring-2 ring-indigo-500/30' : 'border-zinc-700 hover:border-indigo-400'}`}
+                    >
+                      {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity"><Eye size={16} className="text-white"/></div>
+                    </button>
+                    <button 
+                      onClick={(e) => borrarArchivo(e, m.url)}
+                      className="absolute top-1 right-1 p-1 bg-zinc-900/80 text-zinc-400 hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-all"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                    <p className="text-[8px] text-zinc-500 mt-1 truncate w-24 text-center">{m.name || 'Sin nombre'}</p>
+                  </div>
+                ))}
+                {multimediaLib.filter(m => (m.folder || 'root') === (currentFolder || 'root')).length === 0 && !currentFolder && multimediaFolders.length === 0 && <p className="text-xs text-zinc-700 italic">No hay medios guardados aún.</p>}
+              </div>
+            </div>
+
+            {/* 🎛️ CONSOLA DE MEDIOS (Control de reproducción) */}
+            {mediaActive && (
+              <div className="bg-indigo-600/10 border-b border-indigo-500/30 p-4 flex items-center gap-4 animate-in slide-in-from-top-2 relative group/console">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-500/20">
+                  <Film size={24} className="text-white"/>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-center mb-2">
+                    <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest truncate max-w-[200px]">
+                      {mediaActive.playing ? 'EN VIVO:' : 'PAUSADO:'} {mediaActive.name || 'Video'}
+                    </p>
+                    <button onClick={detenerMedia} className="p-1 text-zinc-500 hover:text-red-500 transition-colors" title="Cerrar Media">
+                      <X size={16}/>
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Controles de Transporte */}
+                    <div className="flex items-center gap-1 bg-zinc-950/60 p-1 rounded-xl border border-white/5 shadow-inner">
+                      <button onClick={() => handleSeekCommand('start')} className="p-2 text-zinc-400 hover:text-white transition-colors" title="Reiniciar"><RotateCcw size={16}/></button>
+                      <button onClick={() => handleSeekCommand('back10')} className="p-2 text-zinc-400 hover:text-white transition-colors" title="-10s"><Rewind size={16}/></button>
+                      <button 
+                        onClick={() => handleMediaControl({ playing: !mediaActive.playing })}
+                        className="w-10 h-10 flex items-center justify-center bg-white text-zinc-950 rounded-lg hover:bg-indigo-50 transition-all active:scale-95 shadow-md"
+                      >
+                        {mediaActive.playing ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor" className="ml-0.5" />}
+                      </button>
+                      <button onClick={() => handleSeekCommand('fwd10')} className="p-2 text-zinc-400 hover:text-white transition-colors" title="+10s"><FastForward size={16}/></button>
+                    </div>
+                    
+                    {/* Mezclador de Volumen Local */}
+                    <div className="flex items-center gap-3 bg-zinc-950/60 px-4 py-2 rounded-xl border border-white/5 shadow-inner">
+                      <Volume2 size={16} className={mediaActive.volume === 0 ? "text-zinc-600" : "text-indigo-400"} />
+                      <input 
+                        type="range" min="0" max="1" step="0.01" 
+                        value={mediaActive.volume ?? 1} 
+                        onChange={(e) => handleMediaControl({ volume: parseFloat(e.target.value) })}
+                        className="w-24 h-1.5 bg-zinc-800 rounded-full appearance-none cursor-pointer accent-indigo-500"
+                      />
+                      <span className="text-[10px] font-mono font-black text-zinc-500 w-8 text-right">{Math.round((mediaActive.volume ?? 1) * 100)}%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex-1 flex flex-col p-4 bg-zinc-950/50 overflow-hidden">
             {!activeSong ? (
               <div className="h-full flex items-center justify-center text-zinc-600 font-medium">Selecciona una canción del setlist</div>
             ) : (
@@ -441,7 +658,8 @@ const ProyectorController = ({ user }) => {
               </>
             )}
           </div>
-        </div>
+          </div> 
+        </div> 
 
         {/* Columna Derecha: Vista Previa y En Vivo */}
         <div className="w-1/3 min-w-[320px] bg-zinc-900/30 flex flex-col">
@@ -452,7 +670,15 @@ const ProyectorController = ({ user }) => {
               <h2 className="font-bold text-sm flex items-center gap-2 text-zinc-400"><Eye size={16}/> Pre-proyección</h2>
             </div>
             <div className="flex-1 p-5 flex flex-col">
-              <div className="flex-1 bg-black rounded-2xl border border-zinc-700 shadow-inner flex items-center justify-center p-6 text-center overflow-hidden relative">
+              <div className="flex-1 bg-black rounded-3xl border-2 border-zinc-700 shadow-inner flex items-center justify-center p-6 text-center overflow-hidden relative">
+                {previewMedia ? (
+                  <div className="absolute inset-0 z-0 animate-in fade-in zoom-in-95 duration-300">
+                    {previewMedia.type === 'video' ? <video src={previewMedia.url} autoPlay loop muted className="w-full h-full object-cover opacity-80" /> : <img src={previewMedia.url} className="w-full h-full object-cover opacity-80" />}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+                    <button onClick={() => setPreviewMedia(null)} className="absolute top-2 right-2 p-1 bg-red-600 rounded-full text-white shadow-lg"><X size={14}/></button>
+                  </div>
+                ) : null}
+
                 {previewSlide ? (
                   <>
                     {fondoActivo && (fondoActivo.match(/\.(mp4|webm|mov)$/i) || fondoActivo.includes('video/upload')) ? (
@@ -464,16 +690,16 @@ const ProyectorController = ({ user }) => {
                       {previewSlide.texto.trim() === '' ? <span className="text-white/30 italic font-medium">🎶 Instrumental</span> : previewSlide.texto}
                     </p>
                   </>
-                ) : (
+                ) : !previewMedia && (
                   <p className="text-zinc-700 font-bold uppercase tracking-widest text-xs">Sin Selección</p>
                 )}
               </div>
               <button 
-                onClick={() => handleProyectar(previewSlide)} 
-                disabled={!previewSlide}
+                onClick={() => previewSlide ? handleProyectar(previewSlide) : handleProyectar({ titulo: 'Media', texto: ' ' })} 
+                disabled={!previewSlide && !previewMedia}
                 className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-50 transition-all active:scale-95 shadow-lg shadow-violet-900/20"
               >
-                <Monitor size={18} /> Proyectar Diapositiva
+                <Monitor size={18} /> {previewMedia ? 'Proyectar Contenido' : 'Proyectar Diapositiva'}
               </button>
             </div>
           </div>
@@ -567,7 +793,7 @@ const ProyectorController = ({ user }) => {
                   onClick={async () => { 
                     setActiveSongId(c.id); 
                     if (c.fondoUrl) {
-                      try { await updateDoc(doc(db, 'eventos', eventoId), { proyectorFondo: c.fondoUrl }); } catch(e) { console.error(e); }
+                      try { await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: c.fondoUrl }, { merge: true }); } catch(e) { console.error(e); }
                     }
                   }}
                   className={`inline-flex items-center px-4 py-2 rounded-xl text-sm font-bold transition-all border shadow-sm ${activeSongId === c.id ? 'bg-violet-600 text-white border-violet-500' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}
