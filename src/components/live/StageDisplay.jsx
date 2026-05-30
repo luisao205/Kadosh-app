@@ -9,6 +9,7 @@ const StageDisplay = () => {
   const navigate = useNavigate();
   const [slide, setSlide] = useState(null);
   const [nextSlide, setNextSlide] = useState(null);
+  const [media, setMedia] = useState(null);
   const [alerta, setAlerta] = useState(null);
   const [nextSong, setNextSong] = useState(null);
   const [showLogo, setShowLogo] = useState(false);
@@ -27,6 +28,7 @@ const StageDisplay = () => {
         const data = snap.data();
         setSlide(data.proyectorSlide || null);
         setNextSlide(data.proyectorNextSlide || null);
+        setMedia(data.proyectorMedia || null);
         setAlerta(data.proyectorAlerta || null);
         setNextSong(data.proyectorNextSong || null);
         setShowLogo(data.proyectorLogo || false);
@@ -46,6 +48,19 @@ const StageDisplay = () => {
 
       {/* Fondo de Cuadrícula (Estudio TV) */}
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:100px_100px] pointer-events-none"></div>
+
+      {/* 🎬 PREVIEW BÓVEDA */}
+      {media && media.url && (
+        <div className="fixed top-24 right-8 w-48 aspect-video z-50 rounded-xl overflow-hidden border-2 border-white/20 shadow-2xl">
+          <div className="absolute inset-0 bg-black">
+            {media.type === 'video' ? (
+              <video src={media.url} autoPlay loop muted className="w-full h-full object-cover" />
+            ) : (
+              <img src={media.url} className="w-full h-full object-cover" />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Header: Reloj y Estado */}
       <header className="relative z-10 flex justify-between items-center px-3 py-2 lg:px-8 lg:py-6 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm shrink-0 shadow-sm">

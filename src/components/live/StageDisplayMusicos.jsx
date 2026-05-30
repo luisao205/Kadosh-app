@@ -12,6 +12,7 @@ const StageDisplayMusicos = () => {
   const [songId, setSongId] = useState(null);
   const [slide, setSlide] = useState(null);
   const [nextSlide, setNextSlide] = useState(null);
+  const [media, setMedia] = useState(null); // Para ver videos/fotos de la bóveda
   const [alerta, setAlerta] = useState(null);
   const [nextSong, setNextSong] = useState(null);
   const [showLogo, setShowLogo] = useState(false);
@@ -19,6 +20,8 @@ const StageDisplayMusicos = () => {
   const [formato, setFormato] = useState('american');
   const [notacion, setNotacion] = useState('sharps'); // Asumimos 'sharps' por defecto si no hay preferencias de usuario
   const [hora, setHora] = useState(new Date());
+  const [previewOpacity, setPreviewOpacity] = useState(0.8);
+  const [showConfig, setShowConfig] = useState(false);
   
   // Estados para Modo Vistazo (Peeking)
   const [secciones, setSecciones] = useState([]);
@@ -44,6 +47,12 @@ const StageDisplayMusicos = () => {
     fetchFullSong();
   }, [songId]);
 
+  // RESET DE TONO AUTOMÁTICO
+  useEffect(() => {
+    // Al cambiar de canción, reseteamos el ajuste local manual
+    setOffset(0);
+  }, [songId]);
+
   // Lógica de Auto-Scroll en modo Sincronizado
   useEffect(() => {
     if (!manualMode && currentIndex !== -1) {
@@ -67,6 +76,7 @@ const StageDisplayMusicos = () => {
         setSlide(data.proyectorSlide || null);
         setSongId(data.proyectorSongId || null);
         setCurrentIndex(data.proyectorSlideIndex ?? -1);
+        setMedia(data.proyectorMedia || null);
         setNextSlide(data.proyectorNextSlide || null);
         setAlerta(data.proyectorAlerta || null);
         setNextSong(data.proyectorNextSong || null);
@@ -80,12 +90,56 @@ const StageDisplayMusicos = () => {
     return () => unsub();
   }, [eventoId]);
 
+  const hasLyrics = (secciones && secciones.length > 0) || (slide && slide.texto && slide.texto.trim() !== '');
+
   return (
     <div className="fixed inset-0 bg-zinc-950 text-white flex flex-col font-sans overflow-hidden selection:bg-transparent" onWheel={handleUserScroll} onTouchMove={handleUserScroll}>
-      {/* Botón oculto para cambiar formato de acordes (TV) */}
-      <button onClick={() => setFormato(f => f === 'american' ? 'latin' : 'american')} className="absolute bottom-4 right-4 z-50 p-2 bg-zinc-800/30 hover:bg-zinc-700 text-zinc-500 hover:text-white rounded-full transition-all">
-        <Settings2 size={16}/>
-      </button>
+      {/* Panel de Configuración Local (Tono, Formato y Opacidad) */}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+        {showConfig && (
+          <div className="bg-zinc-900/90 backdrop-blur-md p-5 rounded-3xl border border-white/10 shadow-2xl flex flex-col gap-5 animate-in slide-in-from-bottom-2 duration-300">
+            {/* Corregir Tono */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Corregir Tono (Local)</span>
+              <div className="flex items-center gap-4 bg-zinc-950/50 p-2 rounded-xl border border-white/5">
+                <button onClick={() => setOffset(prev => prev - 1)} className="w-10 h-10 bg-zinc-800 hover:bg-zinc-700 rounded-lg flex items-center justify-center font-bold text-xl transition-colors">-</button>
+                <div className="flex flex-col items-center min-w-[3rem]">
+                  <span className="text-yellow-400 font-black text-lg leading-none">{offset > 0 ? `+${offset}` : offset}</span>
+                  <span className="text-[8px] text-zinc-500 font-bold">SEM</span>
+                </div>
+                <button onClick={() => setOffset(prev => prev + 1)} className="w-10 h-10 bg-zinc-800 hover:bg-zinc-700 rounded-lg flex items-center justify-center font-bold text-xl transition-colors">+</button>
+              </div>
+            </div>
+
+            {/* Formato de Acordes */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Sistema</span>
+              <button 
+                onClick={() => setFormato(f => f === 'american' ? 'latin' : 'american')}
+                className="py-2 px-4 bg-zinc-800 hover:bg-zinc-700 rounded-xl text-xs font-bold transition-colors border border-white/5"
+              >
+                {formato === 'american' ? 'CIFRADO AMERICANO' : 'SISTEMA LATINO (DO RE MI)'}
+              </button>
+            </div>
+
+            {/* Opacidad Video */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Opacidad Video: {Math.round(previewOpacity * 100)}%</span>
+              <input 
+                type="range" min="0" max="1" step="0.1" 
+                value={previewOpacity} onChange={(e) => setPreviewOpacity(parseFloat(e.target.value))}
+                className="w-full accent-violet-500 cursor-pointer h-1.5 bg-zinc-800 rounded-lg appearance-none"
+              />
+            </div>
+          </div>
+        )}
+        <button 
+          onClick={() => setShowConfig(!showConfig)} 
+          className={`p-4 rounded-full transition-all shadow-xl border flex items-center justify-center ${showConfig ? 'bg-violet-600 border-violet-400 text-white rotate-90' : 'bg-zinc-800/80 border-white/10 text-zinc-400 hover:text-white hover:bg-zinc-700'}`}
+        >
+          <Settings2 size={24}/>
+        </button>
+      </div>
 
       {/* Botão de Re-Sincronización (Solo aparece si el músico movió la pantalla) */}
       {manualMode && (
@@ -98,6 +152,23 @@ const StageDisplayMusicos = () => {
       )}
 
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:100px_100px] pointer-events-none"></div>
+
+      {/* 🎬 MINI-PREVIEW DE BÓVEDA PARA MÚSICOS (Solo Foreground Media) */}
+      {media && media.url && !hasLyrics && (
+        <div 
+          className="fixed top-24 right-8 w-64 aspect-video z-50 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl animate-in slide-in-from-right-10 duration-500 transition-opacity"
+          style={{ opacity: previewOpacity }}
+        >
+          <div className="absolute inset-0 bg-black">
+            {media.type === 'video' ? (
+              <video src={media.url} autoPlay loop muted className="w-full h-full object-cover" />
+            ) : (
+              <img src={media.url} className="w-full h-full object-cover" />
+            )}
+          </div>
+          <div className="absolute top-0 left-0 bg-violet-600 text-[8px] font-black px-2 py-1 uppercase">En Proyección</div>
+        </div>
+      )}
 
       <header className="relative z-10 flex justify-between items-center px-3 py-2 lg:px-8 lg:py-6 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-sm shrink-0 shadow-sm">
          <div className="flex items-center gap-2 lg:gap-4">

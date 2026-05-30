@@ -151,8 +151,14 @@ const Proyector = () => {
   };
 
   // Permitir renderizar si hay video principal, aunque no haya letras
-  if (apagar || (!displaySlide && !media && !showLogo)) {
-    return <div className="fixed inset-0 bg-black animate-in fade-in duration-700"></div>;
+  if (apagar) return <div className="fixed inset-0 bg-black animate-in fade-in duration-700"></div>;
+
+  if (!displaySlide && !media && !showLogo) {
+    return (
+      <div className="fixed inset-0 bg-black flex items-center justify-center">
+        <div className="text-zinc-900 font-black text-8xl tracking-tighter select-none opacity-20">KADOSH STANDBY</div>
+      </div>
+    );
   }
 
   // Clases dinámicas basadas en el estado de transición (fadeState)
@@ -207,11 +213,12 @@ const Proyector = () => {
 
       {/* 🎬 Capa de Video Principal (Foreground) - Tapa todo lo demás */}
       {media && (
-        <div className={`absolute inset-0 z-40 bg-black animate-in fade-in duration-500 ${media.mode === 'foreground' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <div key={media.url} className={`absolute inset-0 z-40 bg-black animate-in fade-in duration-500 ${media.mode === 'foreground' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           {media.type === 'video' ? (
             <video 
               ref={videoRef}
               src={media.url} 
+              key={media.url}
               className="w-full h-full object-cover" 
               playsInline 
               autoPlay

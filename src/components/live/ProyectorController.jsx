@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { parsearCancion } from '../../utils/songParser';
-import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2 } from 'lucide-react';
+import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon } from 'lucide-react';
 import { traducirAcorde } from '../../utils/musicCore';
 
 const ProyectorController = ({ user }) => {
@@ -37,9 +37,19 @@ const ProyectorController = ({ user }) => {
   const [guardarEnCancion, setGuardarEnCancion] = useState(true);
   const [mediaActive, setMediaActive] = useState(null); // { url, type, playing, volume }
   const [multimediaLib, setMultimediaLib] = useState([]);
+  const [largePreview, setLargePreview] = useState(null); // Para el visualizador grande
+  const [searchTerm, setSearchTerm] = useState('');
+  const [uploadingFiles, setUploadingFiles] = useState([]); // [{id, name, type}]
   const [multimediaFolders, setMultimediaFolders] = useState([]); // ['Carpeta 1', 'Carpeta 2']
   const [currentFolder, setCurrentFolder] = useState(null); // null = root
+  const [availableScreens, setAvailableScreens] = useState([]);
   const [upcomingEvents, setUpcomingEvents] = useState([]);
+  const [outputs, setOutputs] = useState({}); // { id: { label, type } }
+  const [showOutputsModal, setShowOutputsModal] = useState(false);
+
+  // Estados para Modals Personalizados
+  const [confirmModal, setConfirmModal] = useState({ show: false, title: '', message: '', onConfirm: null });
+  const [inputModal, setInputModal] = useState({ show: false, title: '', value: '', onConfirm: null, error: '' });
 
   const [displayLiveSlide, setDisplayLiveSlide] = useState(null);
   const [fadeState, setFadeState] = useState('in');
@@ -47,6 +57,21 @@ const ProyectorController = ({ user }) => {
   const [isSendingAlert, setIsSendingAlert] = useState(false);
   const [tickerMsg, setTickerMsg] = useState('');
   const [isSendingTicker, setIsSendingTicker] = useState(false);
+
+  // Detectar monitores físicos (Para lanzar a pantalla específica)
+  useEffect(() => {
+    const detectarPantallas = async () => {
+      try {
+        if (!window.getScreenDetails) return;
+        const screenDetails = await window.getScreenDetails();
+        setAvailableScreens(screenDetails.screens);
+        screenDetails.onscreenschange = () => setAvailableScreens(screenDetails.screens);
+      } catch (e) {
+        console.error("Error detectando pantallas:", e);
+      }
+    };
+    detectarPantallas();
+  }, []);
 
   useEffect(() => {
     let unsubEvento;
@@ -60,24 +85,20 @@ const ProyectorController = ({ user }) => {
     fetchUpcoming();
 
     const fetchEvent = async () => {
-      if (eventoId === 'global') {
-        setLoading(false);
-        return;
-      }
       try {
         const eventoSnap = await getDoc(doc(db, 'eventos', eventoId));
         if (eventoSnap.exists()) {
           const evData = eventoSnap.data();
           
-          // Cargar canciones
-          const songIds = evData.setlist ? evData.setlist.filter(i => i.type === 'song').map(i => i.value) : (evData.canciones || []);
-          const uniqueIds = [...new Set(songIds)];
-          if (uniqueIds.length > 0) {
-            const snaps = await Promise.all(uniqueIds.map(id => getDoc(doc(db, 'canciones', id))));
-            setCanciones(snaps.map(s => ({ id: s.id, ...s.data() })));
+          // Cargar canciones (solo si no es modo global)
+          if (eventoId !== 'global') {
+            const songIds = evData.setlist ? evData.setlist.filter(i => i.type === 'song').map(i => i.value) : (evData.canciones || []);
+            const uniqueIds = [...new Set(songIds)];
+            if (uniqueIds.length > 0) {
+              const snaps = await Promise.all(uniqueIds.map(id => getDoc(doc(db, 'canciones', id))));
+              setCanciones(snaps.map(s => ({ id: s.id, ...s.data() })));
+            }
           }
-          // Cargar biblioteca de medios global
-          setMultimediaLib(evData.multimediaLib || []);
         }
       } catch (err) {
         console.error(err);
@@ -87,6 +108,32 @@ const ProyectorController = ({ user }) => {
     };
     
     fetchEvent();
+
+    // 1. Escuchar la Bóveda Multimedia Global
+    const unsubLib = onSnapshot(doc(db, 'sistema', 'multimedia'), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setMultimediaLib(data.multimediaLib || []);
+        setMultimediaFolders(data.multimediaFolders || []);
+      } else {
+        // MIGRACIÓN: Si el nuevo documento no existe, intentamos recuperar del antiguo 'global'
+        getDoc(doc(db, 'eventos', 'global')).then(oldSnap => {
+          if (oldSnap.exists() && oldSnap.data().multimediaLib) {
+            setDoc(doc(db, 'sistema', 'multimedia'), {
+              multimediaLib: oldSnap.data().multimediaLib || [],
+              multimediaFolders: oldSnap.data().multimediaFolders || []
+            }, { merge: true });
+          }
+        });
+      }
+    });
+
+    // 2. Escuchar la Matriz de Salidas siempre desde 'global'
+    const unsubOutputs = onSnapshot(doc(db, 'eventos', 'global'), (snap) => {
+      if (snap.exists()) {
+        setOutputs(snap.data().outputs || {});
+      }
+    });
 
     unsubEvento = onSnapshot(doc(db, 'eventos', eventoId), (snap) => {
       if (snap.exists()) {
@@ -99,11 +146,14 @@ const ProyectorController = ({ user }) => {
         if (data.proyectorModoTransmision !== undefined) setModoTransmision(data.proyectorModoTransmision);
         if (data.proyectorLogo !== undefined) setIsLogoActive(data.proyectorLogo);
         if (data.proyectorMedia !== undefined) setMediaActive(data.proyectorMedia);
-        if (data.multimediaFolders !== undefined) setMultimediaFolders(data.multimediaFolders);
       }
     });
 
-    return () => { if(unsubEvento) unsubEvento(); }
+     return () => { 
+      if(unsubEvento) unsubEvento(); 
+      unsubLib();
+      unsubOutputs();
+    }
   }, [eventoId]);
 
   // Sincronizar la animación del proyector en la vista del controlador
@@ -139,6 +189,57 @@ const ProyectorController = ({ user }) => {
     ).join('\n');
     slides.push({ titulo: sec.titulo, texto: texto.trim() || ' ', lineas: sec.lineas, originalIndex: slides.length });
   });
+
+  const formatFriendlyDate = (dateValue) => {
+    if (!dateValue) return "Fecha pendiente";
+    let d;
+    if (dateValue.toDate) d = dateValue.toDate(); // Si es Timestamp de Firebase
+    else d = new Date(String(dateValue).includes('T') ? dateValue : `${dateValue}T12:00:00`);
+    
+    if (isNaN(d.getTime())) return "Por programar";
+    return d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+  };
+
+  const lanzarSalidaGlobal = (id) => {
+    const out = outputs[id];
+    if (!out) return;
+    
+    const path = `/output/${eventoId}/${id}`;
+    const windowName = `output_${id}`;
+    
+    let features = 'width=1280,height=720,menubar=no,toolbar=no';
+    
+    if (out.screenId && availableScreens.length > 0) {
+      const target = availableScreens.find(s => s.id === out.screenId);
+      if (target) {
+        features = `left=${target.availLeft},top=${target.availTop},width=${target.availWidth},height=${target.availHeight},menubar=no,toolbar=no,fullscreen=yes`;
+      }
+    }
+    
+    window.open(path, windowName, features);
+  };
+
+  // Funciones para gestionar la Matriz de Salidas desde el Controlador
+  const handleUpdateOutput = async (id, data) => {
+    const newOutputs = { ...outputs, [id]: { ...outputs[id], ...data } };
+    await setDoc(doc(db, 'eventos', 'global'), { outputs: newOutputs }, { merge: true });
+  };
+
+  const crearOutput = async () => {
+    const id = `out_${Date.now()}`;
+    const newOutputs = { ...outputs, [id]: { label: `Nueva Salida`, type: 'proyector' } };
+    await setDoc(doc(db, 'eventos', 'global'), { outputs: newOutputs }, { merge: true });
+  };
+
+  const eliminarOutput = async (id) => {
+    const newOutputs = { ...outputs }; delete newOutputs[id];
+    await setDoc(doc(db, 'eventos', 'global'), { outputs: newOutputs }, { merge: true });
+  };
+
+  const handleIdentifyOutput = async (id) => {
+    const newOutputs = { ...outputs, [id]: { ...outputs[id], identifyAt: Date.now() } };
+    await setDoc(doc(db, 'eventos', 'global'), { outputs: newOutputs }, { merge: true });
+  };
 
   // Función para avanzar a la siguiente diapositiva automáticamente
   const handleNextSlide = () => {
@@ -275,41 +376,124 @@ const ProyectorController = ({ user }) => {
 
   const borrarArchivo = async (e, url) => {
     e.stopPropagation();
-    if (!window.confirm("¿Estás seguro de eliminar este archivo de la boveda?")) return;
-    const nuevaLib = multimediaLib.filter(m => m.url !== url);
-    try {
-      await setDoc(doc(db, 'eventos', eventoId), { multimediaLib: nuevaLib }, { merge: true });
-    } catch (e) { console.error(e); }
+    setConfirmModal({
+      show: true,
+      title: 'Eliminar Archivo',
+      message: '¿Estás seguro de que deseas eliminar este archivo de la bóveda? Esta acción no se puede deshacer.',
+      onConfirm: async () => {
+        const nuevaLib = multimediaLib.filter(m => m.url !== url);
+        try {
+          await setDoc(doc(db, 'sistema', 'multimedia'), { multimediaLib: nuevaLib }, { merge: true });
+        } catch (e) { console.error(e); }
+        setConfirmModal({ ...confirmModal, show: false });
+      }
+    });
   };
 
   const borrarCarpeta = async (e, folderName) => {
     e.stopPropagation();
-    if (!window.confirm(`¿Eliminar la carpeta "${folderName}" y todo su contenido?`)) return;
-    const nuevasCarpetas = multimediaFolders.filter(f => f !== folderName);
-    const nuevaLib = multimediaLib.filter(m => m.folder !== folderName);
-    try {
-      await setDoc(doc(db, 'eventos', eventoId), { 
-        multimediaFolders: nuevasCarpetas,
-        multimediaLib: nuevaLib
-      }, { merge: true });
-      if (currentFolder === folderName) setCurrentFolder(null);
-    } catch (e) { console.error(e); }
+    setConfirmModal({
+      show: true,
+      title: 'Eliminar Carpeta',
+      message: `¿Deseas eliminar la carpeta "${folderName}"? También se eliminarán todos los archivos vinculados a ella.`,
+      onConfirm: async () => {
+        const nuevasCarpetas = multimediaFolders.filter(f => f !== folderName);
+        const nuevaLib = multimediaLib.filter(m => m.folder !== folderName);
+        try {
+          await setDoc(doc(db, 'sistema', 'multimedia'), { 
+            multimediaFolders: nuevasCarpetas,
+            multimediaLib: nuevaLib
+          }, { merge: true });
+          if (currentFolder === folderName) setCurrentFolder(null);
+        } catch (e) { console.error(e); }
+        setConfirmModal({ ...confirmModal, show: false });
+      }
+    });
+  };
+
+  const renombrarArchivo = async (e, url) => {
+    e.stopPropagation();
+    const item = multimediaLib.find(m => m.url === url);
+    if (!item) return;
+
+    setInputModal({
+      show: true,
+      title: 'Renombrar Archivo',
+      value: item.name || "",
+      error: '',
+      onConfirm: async (newName) => {
+        if (!newName || newName.trim() === "" || newName.trim() === item.name) {
+          setInputModal(prev => ({ ...prev, show: false }));
+          return;
+        }
+        const nuevaLib = multimediaLib.map(m => m.url === url ? { ...m, name: newName.trim() } : m);
+        try {
+          await setDoc(doc(db, 'sistema', 'multimedia'), { multimediaLib: nuevaLib }, { merge: true });
+          setInputModal(prev => ({ ...prev, show: false }));
+        } catch (e) { console.error(e); }
+      }
+    });
+  };
+
+  const renombrarCarpeta = async (e, folderName) => {
+    e.stopPropagation();
+    setInputModal({
+      show: true,
+      title: 'Renombrar Carpeta',
+      value: folderName,
+      error: '',
+      onConfirm: async (newName) => {
+        const trimmedName = newName.trim();
+        if (!trimmedName || trimmedName === "" || trimmedName === folderName) {
+          setInputModal(prev => ({ ...prev, show: false }));
+          return;
+        }
+        if (multimediaFolders.includes(trimmedName)) {
+          setInputModal(prev => ({ ...prev, error: 'Ya existe una carpeta con ese nombre.' }));
+          return;
+        }
+        const nuevasCarpetas = multimediaFolders.map(f => f === folderName ? trimmedName : f);
+        const nuevaLib = multimediaLib.map(m => m.folder === folderName ? { ...m, folder: trimmedName } : m);
+        try {
+          await setDoc(doc(db, 'sistema', 'multimedia'), { multimediaFolders: nuevasCarpetas, multimediaLib: nuevaLib }, { merge: true });
+          setInputModal(prev => ({ ...prev, show: false }));
+        } catch (e) { console.error(e); }
+      }
+    });
   };
 
   const crearCarpeta = async () => {
-    const nombre = prompt("Nombre de la nueva carpeta:");
-    if (!nombre || nombre.trim() === '') return;
-    
-    const nuevasCarpetas = [...multimediaFolders, nombre.trim()];
-    try {
-      await setDoc(doc(db, 'eventos', eventoId), { multimediaFolders: nuevasCarpetas }, { merge: true });
-    } catch (e) { console.error(e); }
+    setInputModal({
+      show: true,
+      title: 'Nueva Carpeta',
+      value: '',
+      error: '',
+      onConfirm: async (name) => {
+        const trimmedName = name.trim();
+        if (!trimmedName) {
+          setInputModal(prev => ({ ...prev, show: false }));
+          return;
+        }
+        if (multimediaFolders.includes(trimmedName)) {
+          setInputModal(prev => ({ ...prev, error: 'La carpeta ya existe.' }));
+          return;
+        }
+        const nuevasCarpetas = [...multimediaFolders, trimmedName];
+        try {
+          await setDoc(doc(db, 'sistema', 'multimedia'), { multimediaFolders: nuevasCarpetas }, { merge: true });
+          setInputModal(prev => ({ ...prev, show: false }));
+        } catch (e) { console.error(e); }
+      }
+    });
   };
 
   const handleUploadCloudinary = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     
+    const uploadId = Date.now();
+    const fileType = file.type.startsWith('video') ? 'video' : 'image';
+    setUploadingFiles(prev => [...prev, { id: uploadId, name: file.name, type: fileType, folder: currentFolder || 'root' }]);
     setIsUploadingFondo(true);
     const formData = new FormData();
     formData.append("file", file);
@@ -324,18 +508,20 @@ const ProyectorController = ({ user }) => {
       const data = await res.json();
       
       if (data.secure_url) {
-        // Solo guardamos la URL en Firestore, el archivo reside en Cloudinary
-        await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: data.secure_url }, { merge: true });
-        
-        // Añadir a biblioteca rápida del evento
         const nuevaLib = [...multimediaLib, { 
           url: data.secure_url, 
           type: data.resource_type, 
           name: file.name,
           folder: currentFolder || 'root'
         }];
-        await setDoc(doc(db, 'eventos', eventoId), { multimediaLib: nuevaLib }, { merge: true });
-        setMultimediaLib(nuevaLib);
+
+        // Actualizamos el fondo del evento actual, pero los archivos a la Bóveda Global
+        await setDoc(doc(db, 'eventos', eventoId), { 
+          proyectorFondo: data.secure_url
+        }, { merge: true });
+        await setDoc(doc(db, 'sistema', 'multimedia'), { 
+          multimediaLib: nuevaLib 
+        }, { merge: true });
         
         // Si es una canción real (no modo global), guardamos la referencia
         if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
@@ -349,6 +535,7 @@ const ProyectorController = ({ user }) => {
     } finally {
       setIsUploadingFondo(false);
       setShowFondosModal(false);
+      setUploadingFiles(prev => prev.filter(f => f.id !== uploadId));
     }
   };
 
@@ -389,6 +576,14 @@ const ProyectorController = ({ user }) => {
   const limpiarTicker = async () => {
     await setDoc(doc(db, 'eventos', eventoId), { proyectorTicker: null }, { merge: true });
   };
+
+  // Filtrar archivos para el buscador
+  const filteredMedia = multimediaLib.filter(m => {
+    const matchFolder = (m.folder || 'root') === (currentFolder || 'root');
+    const name = (m.name || '').toLowerCase();
+    const search = searchTerm.toLowerCase();
+    return matchFolder && name.includes(search);
+  });
 
   if (loading) return <div className="min-h-screen bg-zinc-950 flex justify-center items-center text-zinc-500 font-bold">Cargando Controlador...</div>;
 
@@ -462,9 +657,9 @@ const ProyectorController = ({ user }) => {
               <div className="space-y-3">
                 <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Cargar Setlist</p>
                 {upcomingEvents.map(ev => (
-                  <button key={ev.id} onClick={() => navigate(`/control-proyector/${ev.id}`)} className="w-full text-left p-3 rounded-xl bg-zinc-800/30 border border-zinc-700 hover:border-violet-500 transition-all">
+                  <button key={ev.id} onClick={() => navigate(`/control-proyector/${ev.id}`)} className="w-full text-left p-3 rounded-xl bg-zinc-800/30 border border-zinc-700 hover:border-violet-500 transition-all group">
                     <p className="font-bold text-xs truncate">{ev.titulo}</p>
-                    <p className="text-[10px] text-zinc-500">{ev.fecha}</p>
+                    <p className="text-[10px] text-zinc-500 group-hover:text-zinc-300">{formatFriendlyDate(ev.fecha)}</p>
                   </button>
                 ))}
               </div>
@@ -505,6 +700,13 @@ const ProyectorController = ({ user }) => {
             <div className="bg-zinc-900/50 border-b border-zinc-800 p-4">
               <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center gap-2">
+                  <div className="relative mr-2">
+                    <input 
+                      type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                      placeholder="Buscar en bóveda..."
+                      className="bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1 text-[10px] w-32 focus:border-indigo-500 outline-none transition-all"
+                    />
+                  </div>
                   {currentFolder && (
                     <button onClick={() => setCurrentFolder(null)} className="p-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-400 transition-colors">
                       <ChevronLeft size={14}/>
@@ -533,35 +735,73 @@ const ProyectorController = ({ user }) => {
                       </div>
                       <p className="text-[9px] font-bold text-zinc-400 truncate w-24 text-center">{folder}</p>
                     </button>
-                    <button 
-                      onClick={(e) => borrarCarpeta(e, folder)}
-                      className="absolute -top-1 -right-1 p-1 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-10"
-                    >
-                      <X size={10} />
-                    </button>
+                    <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-all z-10">
+                      <button 
+                        onClick={(e) => renombrarCarpeta(e, folder)}
+                        className="p-1 bg-zinc-900/80 text-zinc-400 hover:text-indigo-400 rounded-md shadow-lg"
+                      >
+                        <Edit2 size={10} />
+                      </button>
+                      <button 
+                        onClick={(e) => borrarCarpeta(e, folder)}
+                        className="p-1 bg-zinc-900/80 text-zinc-400 hover:text-red-500 rounded-md shadow-lg"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Indicadores de carga individuales */}
+                {uploadingFiles.filter(f => f.folder === (currentFolder || 'root')).map((f) => (
+                  <div key={f.id} className="shrink-0 flex flex-col items-center gap-1">
+                    <div className="w-24 h-16 rounded-lg bg-zinc-800 border border-zinc-700 flex flex-col items-center justify-center relative overflow-hidden">
+                      <div className="absolute inset-0 bg-indigo-500/10 animate-pulse"></div>
+                      <Loader2 size={16} className="text-indigo-500 animate-spin mb-1 z-10" />
+                      <span className="text-[8px] text-indigo-400 font-bold z-10">SUBIENDO</span>
+                    </div>
+                    <p className="text-[8px] text-zinc-600 truncate w-24 text-center">{f.name}</p>
                   </div>
                 ))}
 
                 {/* Mostrar Archivos filtrados por carpeta */}
-                {multimediaLib.filter(m => (m.folder || 'root') === (currentFolder || 'root')).map((m, i) => (
+                {filteredMedia.map((m, i) => (
                   <div key={i} className="group relative shrink-0">
                     <button 
-                      onClick={() => { setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground' }); setPreviewSlide(null); }}
+                      onClick={() => { setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name }); setPreviewSlide(null); }}
                       className={`w-24 h-16 rounded-lg overflow-hidden border transition-all bg-black relative ${previewMedia?.url === m.url ? 'border-indigo-500 ring-2 ring-indigo-500/30' : 'border-zinc-700 hover:border-indigo-400'}`}
                     >
                       {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity"><Eye size={16} className="text-white"/></div>
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Play size={16} className="text-white"/>
+                      </div>
                     </button>
+                    {/* Botón de Lupa para Previsualización Grande */}
                     <button 
-                      onClick={(e) => borrarArchivo(e, m.url)}
-                      className="absolute top-1 right-1 p-1 bg-zinc-900/80 text-zinc-400 hover:text-red-500 rounded-md opacity-0 group-hover:opacity-100 transition-all"
+                      onClick={(e) => { e.stopPropagation(); setLargePreview(m); }}
+                      className="absolute bottom-1 left-1 p-1 bg-zinc-900/80 text-zinc-300 rounded-md opacity-0 group-hover:opacity-100 transition-all border border-white/10"
+                      title="Vista Previa Grande"
                     >
-                      <Trash2 size={12} />
+                      <Eye size={10} />
                     </button>
+                    <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                      <button 
+                        onClick={(e) => renombrarArchivo(e, m.url)}
+                        className="p-1 bg-zinc-900/80 text-zinc-400 hover:text-indigo-400 rounded-md shadow-lg"
+                      >
+                        <Edit2 size={10} />
+                      </button>
+                      <button 
+                        onClick={(e) => borrarArchivo(e, m.url)}
+                        className="p-1 bg-zinc-900/80 text-zinc-400 hover:text-red-500 rounded-md shadow-lg"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    </div>
                     <p className="text-[8px] text-zinc-500 mt-1 truncate w-24 text-center">{m.name || 'Sin nombre'}</p>
                   </div>
                 ))}
-                {multimediaLib.filter(m => (m.folder || 'root') === (currentFolder || 'root')).length === 0 && !currentFolder && multimediaFolders.length === 0 && <p className="text-xs text-zinc-700 italic">No hay medios guardados aún.</p>}
+                {filteredMedia.length === 0 && !currentFolder && multimediaFolders.length === 0 && <p className="text-xs text-zinc-700 italic">No hay medios guardados aún.</p>}
               </div>
             </div>
 
@@ -738,6 +978,28 @@ const ProyectorController = ({ user }) => {
           </div>
            {/* PANEL MEJORADO: Avisos a Tarima y Congregación */}
           <div className="border-t border-zinc-800 bg-zinc-900 p-4 shrink-0 flex flex-col gap-4 shadow-[0_-10px_20px_rgba(0,0,0,0.3)] z-10 relative overflow-y-auto max-h-[35vh]">
+            
+            {/* 📺 NUEVO: Matriz de Salidas (Quick Access) */}
+            <div className="flex flex-col gap-2">
+              <div className="flex justify-between items-center">
+                <h2 className="font-bold text-xs flex items-center gap-1.5 text-violet-400 uppercase tracking-widest"><Tv size={14}/> Matriz de Salidas</h2>
+                <button onClick={() => setShowOutputsModal(true)} className="text-[10px] font-bold text-zinc-500 hover:text-white transition-colors">Configurar</button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {Object.entries(outputs).map(([id, out]) => (
+                  <button 
+                    key={id}
+                    onClick={() => lanzarSalidaGlobal(id)}
+                    className="flex flex-col p-2 bg-zinc-950 border border-zinc-800 rounded-xl hover:border-violet-500 transition-all text-left group"
+                  >
+                    <span className="text-[9px] font-black text-zinc-500 uppercase truncate group-hover:text-violet-400 transition-colors">{out.label}</span>
+                    <span className="text-[10px] font-bold text-zinc-300 truncate">{out.type === 'proyector' ? 'Público' : out.type === 'retorno' ? 'Stage' : 'Banda'}</span>
+                  </button>
+                ))}
+                {Object.keys(outputs).length === 0 && <p className="col-span-2 text-[10px] text-zinc-600 italic text-center py-2">Configura tus pantallas en la Central Multimedia</p>}
+              </div>
+            </div>
+
             {/* Retorno a Tarima */}
             <div className="flex flex-col gap-2">
               <div className="flex justify-between items-center">
@@ -895,6 +1157,157 @@ const ProyectorController = ({ user }) => {
                   Quitar Fondo (Pantalla Negra)
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      {/* 🚀 MODAL DE CONFIRMACIÓN (Borrar) */}
+      {confirmModal.show && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="w-12 h-12 bg-red-500/10 rounded-2xl flex items-center justify-center mb-4">
+              <Trash2 className="text-red-500" size={24} />
+            </div>
+            <h3 className="text-lg font-black text-white mb-2">{confirmModal.title}</h3>
+            <p className="text-sm text-zinc-400 leading-relaxed mb-6">{confirmModal.message}</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmModal({ ...confirmModal, show: false })} className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold rounded-xl transition-colors">Cancelar</button>
+              <button onClick={confirmModal.onConfirm} className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl shadow-lg shadow-red-900/20 transition-colors">Eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📝 MODAL DE ENTRADA (Renombrar / Crear) */}
+      {inputModal.show && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in duration-200">
+          <form 
+            onSubmit={(e) => { e.preventDefault(); inputModal.onConfirm(inputModal.value); }}
+            className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-200"
+          >
+            <div className="w-12 h-12 bg-indigo-500/10 rounded-2xl flex items-center justify-center mb-4">
+              <Edit2 className="text-indigo-500" size={24} />
+            </div>
+            <h3 className="text-lg font-black text-white mb-4">{inputModal.title}</h3>
+            
+            <input 
+              autoFocus
+              type="text" 
+              value={inputModal.value}
+              onChange={(e) => setInputModal({ ...inputModal, value: e.target.value, error: '' })}
+              className={`w-full bg-zinc-950 border ${inputModal.error ? 'border-red-500' : 'border-zinc-700'} rounded-xl px-4 py-3 text-white outline-none focus:border-indigo-500 transition-all mb-1`}
+              placeholder="Escribe el nombre aquí..."
+            />
+            {inputModal.error && <p className="text-[10px] text-red-500 font-bold ml-1 mb-4">{inputModal.error}</p>}
+            
+            <div className="flex gap-3 mt-6">
+              <button 
+                type="button"
+                onClick={() => setInputModal({ ...inputModal, show: false })} 
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold rounded-xl transition-colors"
+              >
+                Cancelar
+              </button>
+              <button 
+                type="submit"
+                className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-indigo-900/20 transition-colors"
+              >
+                Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 🔍 MODAL: PREVISUALIZADOR GRANDE (Bóveda) */}
+      {largePreview && (
+        <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[150] p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className="relative max-w-4xl w-full flex flex-col items-center">
+            <button 
+              onClick={() => setLargePreview(null)}
+              className="absolute -top-12 right-0 p-2 text-zinc-400 hover:text-white flex items-center gap-2 font-bold"
+            >
+              <X size={24}/> CERRAR
+            </button>
+            <button 
+              onClick={() => { handleProyectar({ titulo: 'Media', texto: ' ', originalIndex: -1 }); setLargePreview(null); }}
+              className="absolute -top-12 left-0 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95"
+            >
+              <Send size={18}/> PROYECTAR AHORA
+            </button>
+
+            <div className="w-full aspect-video bg-zinc-900 rounded-3xl overflow-hidden border border-white/10 shadow-2xl">
+              {largePreview.type === 'video' ? (
+                <video src={largePreview.url} autoPlay loop controls className="w-full h-full object-contain" />
+              ) : (
+                <img src={largePreview.url} className="w-full h-full object-contain" />
+              )}
+            </div>
+            <p className="mt-4 text-zinc-400 font-bold">{largePreview.name}</p>
+          </div>
+        </div>
+      )}
+
+      {/* 📺 MODAL: GESTOR DE MATRIZ DE SALIDAS */}
+      {showOutputsModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-[150] p-4 animate-in fade-in duration-300">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] w-full max-w-4xl max-h-[90vh] shadow-2xl flex flex-col overflow-hidden">
+            <div className="p-8 border-b border-zinc-800 bg-zinc-900/50 flex justify-between items-center">
+              <div>
+                <h3 className="text-2xl font-black text-white flex items-center gap-3"><Tv className="text-violet-500" size={28} /> Configurar Matriz</h3>
+                <p className="text-zinc-500 text-sm font-medium mt-1">Define qué contenido se envía a cada pantalla física o virtual.</p>
+              </div>
+              <button onClick={() => setShowOutputsModal(false)} className="p-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-2xl transition-colors"><X size={24}/></button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-8 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {Object.entries(outputs).map(([id, out]) => (
+                  <div key={id} className="bg-zinc-950 border border-zinc-800 rounded-3xl p-5 space-y-4">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <input 
+                          type="text" value={out.label}
+                          onChange={(e) => handleUpdateOutput(id, { label: e.target.value })}
+                          className="bg-transparent border-none text-lg font-black text-white p-0 focus:ring-0 w-full"
+                        />
+                        <div className="flex gap-2 mt-2">
+                          {['proyector', 'retorno', 'musicos'].map(t => (
+                            <button 
+                              key={t} onClick={() => handleUpdateOutput(id, { type: t })}
+                              className={`px-2 py-1 rounded-md text-[9px] font-black uppercase border ${out.type === t ? 'bg-violet-600 border-violet-500 text-white' : 'border-zinc-800 text-zinc-600'}`}
+                            >
+                              {t === 'proyector' ? 'Público' : t === 'retorno' ? 'Stage' : 'Banda'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => handleIdentifyOutput(id)} className="p-2 text-zinc-800 hover:text-blue-500 transition-colors" title="Identificar Pantalla"><Fingerprint size={18}/></button>
+                        <button onClick={() => eliminarOutput(id)} className="p-2 text-zinc-800 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
+                      </div>
+                    </div>
+                    <select 
+                      value={out.screenId || ''}
+                      onChange={(e) => handleUpdateOutput(id, { screenId: e.target.value })}
+                      className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs font-bold text-zinc-400"
+                    >
+                      <option value="">Ventana normal</option>
+                      {availableScreens.map((s, idx) => (
+                        <option key={s.id || idx} value={s.id}>Monitor {idx + 1} ({s.width}x{s.height})</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+                <button 
+                  onClick={crearOutput}
+                  className="border-2 border-dashed border-zinc-800 rounded-3xl flex flex-col items-center justify-center p-8 text-zinc-600 hover:text-violet-500 transition-all gap-2"
+                >
+                  <Plus size={32} /> <span className="font-black text-xs uppercase">Añadir Salida</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
