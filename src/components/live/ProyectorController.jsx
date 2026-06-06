@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { parsearCancion } from '../../utils/songParser';
-import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon } from 'lucide-react';
+import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon, Search, SearchCode, Settings2, Clock } from 'lucide-react';
 import { traducirAcorde } from '../../utils/musicCore';
 
 const ProyectorController = ({ user }) => {
@@ -39,6 +39,12 @@ const ProyectorController = ({ user }) => {
   const [multimediaLib, setMultimediaLib] = useState([]);
   const [largePreview, setLargePreview] = useState(null); // Para el visualizador grande
   const [searchTerm, setSearchTerm] = useState('');
+  const [songSearchTerm, setSongSearchTerm] = useState(''); // Búsqueda de canciones
+  const [globalSearchResults, setGlobalSearchResults] = useState([]); // Resultados de la DB global
+  const [isSearchingGlobal, setIsSearchingGlobal] = useState(false);
+  const [showEventList, setShowEventList] = useState(false); // Modal rápido de eventos
+  const [showMobileControlsModal, setShowMobileControlsModal] = useState(false); // NEW STATE for mobile controls
+  const [mobileActiveTab, setMobileActiveTab] = useState('media'); // 'media' | 'liveControls'
   const [uploadingFiles, setUploadingFiles] = useState([]); // [{id, name, type}]
   const [multimediaFolders, setMultimediaFolders] = useState([]); // ['Carpeta 1', 'Carpeta 2']
   const [currentFolder, setCurrentFolder] = useState(null); // null = root
@@ -47,7 +53,6 @@ const ProyectorController = ({ user }) => {
   const [outputs, setOutputs] = useState({}); // { id: { label, type } }
   const [showOutputsModal, setShowOutputsModal] = useState(false);
 
-  // Estados para Modals Personalizados
   const [confirmModal, setConfirmModal] = useState({ show: false, title: '', message: '', onConfirm: null });
   const [inputModal, setInputModal] = useState({ show: false, title: '', value: '', onConfirm: null, error: '' });
 
@@ -57,6 +62,24 @@ const ProyectorController = ({ user }) => {
   const [isSendingAlert, setIsSendingAlert] = useState(false);
   const [tickerMsg, setTickerMsg] = useState('');
   const [isSendingTicker, setIsSendingTicker] = useState(false);
+  const liveVideoRef = useRef(null); // Ref para el video en la vista "En Vivo"
+  const livePreviewMediaRef = useRef(null); // Ref para el video en la vista "Pre-proyección"
+  const [countdownMinutes, setCountdownMinutes] = useState(5);
+
+  // 🔄 LIMPIADOR DE MEMORIA: Reiniciar estados cuando cambia el evento
+  useEffect(() => {
+    setActiveSongId(null);
+    setPreviewSlide(null);
+    setPreviewMedia(null);
+    setLiveSlide(null);
+    setMediaActive(null);
+    setFondoActivo(null);
+    setDisplayLiveSlide(null);
+    setCurrentFolder(null); // 📂 Resetear carpeta al cambiar de evento
+    setSearchTerm(''); // 🔍 Limpiar búsqueda
+    setIsLogoActive(false);
+    setIsBlackout(false);
+  }, [eventoId]);
 
   // Detectar monitores físicos (Para lanzar a pantalla específica)
   useEffect(() => {
@@ -115,7 +138,19 @@ const ProyectorController = ({ user }) => {
         const data = snap.data();
         setMultimediaLib(data.multimediaLib || []);
         setMultimediaFolders(data.multimediaFolders || []);
-      } else {
+        
+        // MIGRACIÓN REFORZADA: Si el doc existe pero las carpetas no, intentamos traerlas de 'global'
+        if (!data.multimediaFolders || data.multimediaFolders.length === 0) {
+          getDoc(doc(db, 'eventos', 'global')).then(oldSnap => {
+            if (oldSnap.exists() && oldSnap.data().multimediaFolders) {
+              setDoc(doc(db, 'sistema', 'multimedia'), {
+                multimediaFolders: oldSnap.data().multimediaFolders || []
+              }, { merge: true });
+            }
+          });
+        }
+      } 
+      else {
         // MIGRACIÓN: Si el nuevo documento no existe, intentamos recuperar del antiguo 'global'
         getDoc(doc(db, 'eventos', 'global')).then(oldSnap => {
           if (oldSnap.exists() && oldSnap.data().multimediaLib) {
@@ -139,13 +174,17 @@ const ProyectorController = ({ user }) => {
       if (snap.exists()) {
         const data = snap.data();
         setEvento(data);
-        if (data.proyectorSlide) setLiveSlide(data.proyectorSlide);
-        if (data.proyectorApagado !== undefined) setIsBlackout(data.proyectorApagado);
-        if (data.proyectorFondo !== undefined) setFondoActivo(data.proyectorFondo);
-        if (data.proyectorTransicion !== undefined) setTransicionActiva(data.proyectorTransicion);
-        if (data.proyectorModoTransmision !== undefined) setModoTransmision(data.proyectorModoTransmision);
-        if (data.proyectorLogo !== undefined) setIsLogoActive(data.proyectorLogo);
-        if (data.proyectorMedia !== undefined) setMediaActive(data.proyectorMedia);
+        setLiveSlide(data.proyectorSlide || null);
+        setIsBlackout(data.proyectorApagado ?? false);
+        setFondoActivo(data.proyectorFondo || null);
+        setTransicionActiva(data.proyectorTransicion || 'fade');
+        setModoTransmision(data.proyectorModoTransmision ?? false);
+        setIsLogoActive(data.proyectorLogo ?? false);
+        setMediaActive(data.proyectorMedia || null);
+        
+        // Si la media activa en el proyector es nula, limpiamos la previsualización local
+        if (!data.proyectorMedia) setPreviewMedia(null);
+        if (!data.proyectorSlide) setPreviewSlide(null);
       }
     });
 
@@ -172,11 +211,73 @@ const ProyectorController = ({ user }) => {
       const timeout = setTimeout(() => {
         setDisplayLiveSlide(liveSlide);
         setFadeState('in');
-      }, transicionActiva === 'fade' ? 500 : 300);
+      }, transicionActiva === 'fade' ? 250 : 150);
 
       return () => clearTimeout(timeout);
     }
   }, [liveSlide, transicionActiva, displayLiveSlide]);
+
+  // Sincronización del video en la vista "En Vivo" del controlador
+  useEffect(() => {
+    if (liveVideoRef.current && mediaActive && mediaActive.type === 'video') {
+      if (mediaActive.playing) {
+        liveVideoRef.current.play().catch(e => console.warn("Autoplay blocked in live preview:", e));
+      } else {
+        liveVideoRef.current.pause();
+      }
+      liveVideoRef.current.volume = mediaActive.volume ?? 1;
+
+      if (mediaActive.seekRequest) {
+        const { type, time } = mediaActive.seekRequest;
+        if (liveVideoRef.current._lastSeekTime !== time) { // Evitar re-seek en el mismo comando
+          liveVideoRef.current._lastSeekTime = time;
+          if (type === 'start') liveVideoRef.current.currentTime = 0;
+          if (type === 'back10') liveVideoRef.current.currentTime = Math.max(0, liveVideoRef.current.currentTime - 10);
+          if (type === 'fwd10') liveVideoRef.current.currentTime = Math.min(liveVideoRef.current.duration, liveVideoRef.current.currentTime + 10);
+        }
+      }
+    }
+  }, [mediaActive]);
+
+  // Sincronización del video en la vista "Pre-proyección" del controlador
+  useEffect(() => {
+    if (livePreviewMediaRef.current && previewMedia && previewMedia.type === 'video') {
+      livePreviewMediaRef.current.volume = previewMedia.volume ?? 1;
+    }
+  }, [previewMedia]);
+
+  // 🔍 Lógica de búsqueda global de canciones (Debounce)
+  useEffect(() => {
+    if (!songSearchTerm.trim()) {
+      setGlobalSearchResults([]);
+      setIsSearchingGlobal(false);
+      return;
+    }
+
+    const delayDebounceFn = setTimeout(async () => {
+      setIsSearchingGlobal(true);
+      try {
+        // En un entorno real, filtrarías en Firestore. Aquí buscamos una muestra rápida
+        // o puedes usar un índice de búsqueda. Por ahora, traeremos las más recientes
+        // y filtraremos localmente para mayor compatibilidad.
+        const qAll = query(collection(db, 'canciones'), limit(50));
+        const snap = await getDocs(qAll);
+        const results = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(c => 
+            c.titulo.toLowerCase().includes(songSearchTerm.toLowerCase()) || 
+            c.artista?.toLowerCase().includes(songSearchTerm.toLowerCase())
+          );
+        setGlobalSearchResults(results);
+      } catch (e) {
+        console.error("Error buscando canciones:", e);
+      } finally {
+        setIsSearchingGlobal(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [songSearchTerm]);
 
   const activeSong = canciones.find(c => c.id === activeSongId);
   const secciones = activeSong ? parsearCancion(activeSong.letraRaw) : [];
@@ -219,7 +320,7 @@ const ProyectorController = ({ user }) => {
     window.open(path, windowName, features);
   };
 
-  // Funciones para gestionar la Matriz de Salidas desde el Controlador
+  // Funciones para gestionar la Matriz de Salidas
   const handleUpdateOutput = async (id, data) => {
     const newOutputs = { ...outputs, [id]: { ...outputs[id], ...data } };
     await setDoc(doc(db, 'eventos', 'global'), { outputs: newOutputs }, { merge: true });
@@ -241,20 +342,25 @@ const ProyectorController = ({ user }) => {
     await setDoc(doc(db, 'eventos', 'global'), { outputs: newOutputs }, { merge: true });
   };
 
-  // Función para avanzar a la siguiente diapositiva automáticamente
-  const handleNextSlide = () => {
+  // Función para proyectar la siguiente diapositiva automáticamente
+  const projectNextSlide = () => {
     if (slides.length === 0) return;
-    // Usar el índice guardado en el documento del evento
-    const currentIndex = evento?.proyectorSlideIndex ?? -1;
+    
+    // Sincronizar con el índice real en Firestore para evitar saltos
+    const isSongLive = activeSongId === evento?.proyectorSongId;
+    const currentIndex = isSongLive ? (evento?.proyectorSlideIndex ?? -1) : -1;
+
     if (currentIndex < slides.length - 1) {
-      handleProyectar(slides[currentIndex + 1]);
+      projectSlide(slides[currentIndex + 1]);
+    } else if (currentIndex === slides.length - 1) {
+      projectSlide({ titulo: 'Instrumental', texto: ' ', originalIndex: -1 });
     } else {
-      handleProyectar({ titulo: 'Instrumental', texto: ' ', originalIndex: -1 }); // Al final, limpiar texto
+      projectSlide(slides[0]); // Por seguridad, si el índice es extraño, ir al inicio
     }
   };
 
-  const handleProyectar = async (slide = previewSlide) => {
-    if (!slide) return;
+  const projectSlide = async (slide) => {
+    if (!slide) { console.warn("No slide provided to projectSlide"); return; }
     
     let nextSlide = null;
     if (slide.originalIndex !== undefined && slide.originalIndex < slides.length - 1) {
@@ -315,16 +421,47 @@ const ProyectorController = ({ user }) => {
       proyectorNextSong: nextSongInfo,
       proyectorOffset: offset,
       proyectorLogo: false,
-      proyectorApagado: false
+      proyectorApagado: false,
+      proyectorMedia: null, // Limpiar cualquier media activa al proyectar una diapositiva
     };
-
-    // Si hay un media en preview, lo mandamos a Live también
-    if (previewMedia) {
-      updates.proyectorMedia = { ...previewMedia, playing: true, volume: 1 };
-    }
+    setPreviewMedia(null); // Limpiar la pre-selección de media localmente
 
     try { await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true }); } 
-    catch (e) { console.error("Error al proyectar:", e); }
+    catch (e) { console.error("Error al proyectar diapositiva:", e); }
+  };
+
+   // ➕ Agregar canción externa al evento actual
+  const agregarCancionAlSetlist = async (song) => {
+    if (!evento) return;
+    
+    const itemActualizado = { type: 'song', value: song.id, idLocal: `extra_${Date.now()}` };
+    const nuevoSetlist = [...(evento.setlist || []), itemActualizado];
+    
+    try {
+      await updateDoc(doc(db, 'eventos', eventoId), { setlist: nuevoSetlist });
+      // Actualizar estado local para que aparezca en la lista izquierda
+      setCanciones(prev => [...prev, song]);
+      setActiveSongId(song.id);
+      setSongSearchTerm(''); // Limpiar búsqueda
+    } catch (e) {
+      console.error("Error agregando canción de última hora:", e);
+    }
+  };
+
+  const projectMedia = async (mediaObj) => {
+    if (!mediaObj) return;
+    const updates = {
+      proyectorMedia: { ...mediaObj, playing: true, volume: 1, mode: 'foreground' },
+      proyectorSlide: null,
+      proyectorSongId: null,
+      proyectorSlideIndex: -1,
+      proyectorNextSlide: null,
+      proyectorNextSong: null,
+      proyectorLogo: false,
+      proyectorApagado: false,
+    };
+    try { await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true }); } 
+    catch (e) { console.error(e); }
   };
 
   const handleTransicionChange = async (e) => {
@@ -348,14 +485,14 @@ const ProyectorController = ({ user }) => {
     catch (e) { console.error(e); }
   };
 
-  const handleMediaControl = async (updates) => {
+  const handleMediaControl = async (updates) => { // Esta función ya estaba bien
     try {
       const newMedia = { ...mediaActive, ...updates };
       await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: newMedia }, { merge: true });
     } catch (e) { console.error(e); }
   };
 
-  const handleSeekCommand = async (type) => {
+  const handleSeekCommand = async (type) => { // Esta función ya estaba bien
     if (!mediaActive) return;
     try {
       await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: { ...mediaActive, seekRequest: { type, time: Date.now() } } }, { merge: true });
@@ -363,7 +500,18 @@ const ProyectorController = ({ user }) => {
   };
 
   const detenerMedia = async () => {
-    await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: null }, { merge: true });
+    await updateDoc(doc(db, 'eventos', eventoId), { proyectorMedia: null });
+    setPreviewMedia(null); // Limpiar también la vista previa local al detener
+  };
+
+  const toggleCountdown = async (active) => {
+    const mins = parseInt(countdownMinutes) || 5;
+    const endTimestamp = active ? Date.now() + (mins * 60000) : null;
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), {
+        proyectorCountdown: { active, endTimestamp: endTimestamp }
+      }, { merge: true });
+    } catch (e) { console.error(e); }
   };
 
   const botonPanico = async () => {
@@ -378,7 +526,7 @@ const ProyectorController = ({ user }) => {
     e.stopPropagation();
     setConfirmModal({
       show: true,
-      title: 'Eliminar Archivo',
+      title: 'Eliminar Archivo', // Mantener el título para archivos
       message: '¿Estás seguro de que deseas eliminar este archivo de la bóveda? Esta acción no se puede deshacer.',
       onConfirm: async () => {
         const nuevaLib = multimediaLib.filter(m => m.url !== url);
@@ -394,7 +542,7 @@ const ProyectorController = ({ user }) => {
     e.stopPropagation();
     setConfirmModal({
       show: true,
-      title: 'Eliminar Carpeta',
+      title: `Eliminar Carpeta "${folderName}"`, // Título específico para carpetas
       message: `¿Deseas eliminar la carpeta "${folderName}"? También se eliminarán todos los archivos vinculados a ella.`,
       onConfirm: async () => {
         const nuevasCarpetas = multimediaFolders.filter(f => f !== folderName);
@@ -590,8 +738,8 @@ const ProyectorController = ({ user }) => {
   let animationClass = '';
   if (transicionActiva !== 'none') {
     const baseTransition = transicionActiva === 'fade' 
-      ? 'transition-all duration-[500ms] ease-in-out' 
-      : 'transition-all duration-[300ms] ease-in-out';
+      ? 'transition-all duration-[250ms] ease-in-out' 
+      : 'transition-all duration-[150ms] ease-in-out';
       
     if (fadeState === 'out') {
       if (transicionActiva === 'slide') animationClass = `${baseTransition} opacity-0 translate-y-4`;
@@ -609,18 +757,31 @@ const ProyectorController = ({ user }) => {
       {/* Cabecera */}
       <header className="h-16 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-3 sm:px-6 shrink-0 shadow-sm z-10">
         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-          <button onClick={() => navigate(`/setlist/${eventoId}`)} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors shrink-0">
-            <ArrowLeft size={20} />
-          </button>
-          <div className="hidden sm:block truncate">
-            <h1 className="font-bold text-lg flex items-center gap-2"><Monitor size={18} className="text-violet-500"/> Controlador Multimedia</h1>
-            <p className="text-xs text-zinc-400 font-medium truncate">{evento?.titulo}</p>
+            <button onClick={() => navigate(`/setlist/${eventoId}`)} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors shrink-0">
+              <ArrowLeft size={20} />
+            </button>
+            <div className="truncate">
+              <h1 className="font-bold text-lg flex items-center gap-2 text-white">
+                <Monitor size={18} className="text-violet-500"/> 
+                Kadosh Pro
+              </h1>
+              <p className="text-[10px] text-zinc-500 font-bold truncate">{evento?.titulo}</p>
+            </div>
           </div>
-          <div className="sm:hidden font-bold text-sm truncate flex-1">{evento?.titulo}</div>
-        </div>
-        
+          <div className="flex items-center gap-2">
+            <button onClick={botonPanico} className="p-2.5 bg-red-600 text-white rounded-xl shadow-lg active:scale-90 transition-transform"><Zap size={18}/></button>
+            <button onClick={() => setShowMobileControlsModal(true)} className="p-2.5 bg-violet-600 text-white rounded-xl shadow-lg active:scale-90 transition-transform"><Settings2 size={18}/></button>
+          </div>
+
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          <div className="hidden md:flex items-center gap-2 bg-zinc-800/50 px-3 py-1.5 rounded-lg border border-zinc-700">
+          <button 
+            onClick={() => setShowEventList(!showEventList)}
+            className="flex items-center gap-2 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-xs font-bold transition-all border border-zinc-700"
+          >
+            <Layers size={14} className="text-blue-400"/>
+            <span className="hidden lg:inline">Cambiar Evento</span>
+          </button>
+          <div className="hidden md:flex items-center gap-2 bg-zinc-800/50 px-3 py-1.5 rounded-lg border border-zinc-700"> {/* Desktop only */}
             <span className="text-xs text-zinc-400 font-bold">Animación:</span>
             <select 
               value={transicionActiva} 
@@ -633,14 +794,22 @@ const ProyectorController = ({ user }) => {
               <option value="none" className="bg-zinc-900">Sin Animación</option>
             </select>
           </div>
-          <button onClick={toggleTransmision} className={`hidden md:flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all border ${modoTransmision ? 'bg-emerald-600 text-white border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)] animate-pulse' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}>
+          <button onClick={toggleTransmision} className={`hidden md:flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all border ${modoTransmision ? 'bg-emerald-600 text-white border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)] animate-pulse' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}> {/* Desktop only */}
             <Tv size={16}/> <span className="hidden sm:inline">{modoTransmision ? 'Modo OBS' : 'Transmisión'}</span>
           </button>
-          <button onClick={toggleBlackout} className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all ${isBlackout ? 'bg-red-600 text-white animate-pulse shadow-[0_0_15px_rgba(220,38,38,0.4)]' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}>
+          <button onClick={toggleBlackout} className={`hidden md:flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all ${isBlackout ? 'bg-red-600 text-white animate-pulse shadow-[0_0_15px_rgba(220,38,38,0.4)]' : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}> {/* Desktop only */}
             <PowerOff size={16}/> <span className="hidden sm:inline">{isBlackout ? 'Apagado' : 'Apagar'}</span>
           </button>
-          <button onClick={botonPanico} className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold text-xs sm:text-sm transition-all shadow-lg shadow-red-900/20 border border-red-500">
+          <button onClick={botonPanico} className="hidden md:flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold text-xs sm:text-sm transition-all shadow-lg shadow-red-900/20 border border-red-500"> {/* Desktop only */}
             <Zap size={16} fill="currentColor"/> <span className="hidden sm:inline">PANIC</span>
+          </button>
+          {/* NEW: Mobile Controls FAB for small screens */}
+          <button
+            onClick={() => setShowMobileControlsModal(true)}
+            className="md:hidden p-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg shadow-md transition-all active:scale-95"
+            title="Controles"
+          >
+            <Settings2 size={20} />
           </button>
         </div>
       </header>
@@ -650,9 +819,45 @@ const ProyectorController = ({ user }) => {
         {/* Columna Izquierda: Setlist */}
         <div className="w-1/4 min-w-[250px] bg-zinc-900/50 border-r border-zinc-800 flex flex-col">
           <div className="p-4 border-b border-zinc-800 bg-zinc-900">
-            <h2 className="font-bold text-sm flex items-center gap-2"><Layers size={16} className="text-blue-500"/> Setlist del Evento</h2>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={14} />
+              <input 
+                type="text"
+                value={songSearchTerm}
+                onChange={(e) => setSongSearchTerm(e.target.value)}
+                placeholder="Buscar canción global..."
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl pl-9 pr-4 py-2 text-xs focus:border-violet-500 outline-none transition-all"
+              />
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-3 space-y-1 [&::-webkit-scrollbar]:hidden">
+            {songSearchTerm.trim() !== '' ? (
+              <div className="space-y-2 animate-in fade-in duration-200">
+                <p className="text-[10px] font-black text-violet-400 uppercase tracking-widest px-1 flex justify-between">
+                  Resultados Globales {isSearchingGlobal && <Loader2 size={10} className="animate-spin"/>}
+                </p>
+                {globalSearchResults.map(song => (
+                  <button 
+                    key={song.id}
+                    onClick={() => agregarCancionAlSetlist(song)}
+                    className="w-full text-left p-3 rounded-xl bg-violet-600/10 border border-violet-500/30 hover:bg-violet-600/20 transition-all group flex justify-between items-center"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-bold text-xs truncate text-white">{song.titulo}</p>
+                      <p className="text-[10px] text-zinc-500 truncate">{song.artista}</p>
+                    </div>
+                    <Plus size={14} className="text-violet-400 group-hover:scale-125 transition-transform" />
+                  </button>
+                ))}
+                {globalSearchResults.length === 0 && !isSearchingGlobal && (
+                  <p className="text-[10px] text-zinc-600 italic text-center py-4">No se encontraron canciones</p>
+                )}
+                <div className="h-px bg-zinc-800 my-4"></div>
+              </div>
+            ) : null}
+
+            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1 mb-2">Setlist Actual</p>
+
             {eventoId === 'global' ? (
               <div className="space-y-3">
                 <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Cargar Setlist</p>
@@ -670,7 +875,7 @@ const ProyectorController = ({ user }) => {
                 if (!c) return null;
                 return (
                   <button 
-                    key={idx} 
+                    key={c.id} 
                     onClick={async () => { 
                       setActiveSongId(c.id); 
                       setPreviewSlide(null); 
@@ -724,7 +929,9 @@ const ProyectorController = ({ user }) => {
 
               <div className="flex gap-3 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden">
                 {/* Mostrar Carpetas si estamos en el Root */}
-                {!currentFolder && multimediaFolders.map((folder, i) => (
+                {!currentFolder && multimediaFolders
+                  .filter(f => f.toLowerCase().includes(searchTerm.toLowerCase())) // 🔍 Filtrar carpetas también
+                  .map((folder, i) => (
                   <div key={`folder-${i}`} className="group relative shrink-0">
                     <button 
                       onClick={() => setCurrentFolder(folder)}
@@ -806,7 +1013,7 @@ const ProyectorController = ({ user }) => {
             </div>
 
             {/* 🎛️ CONSOLA DE MEDIOS (Control de reproducción) */}
-            {mediaActive && (
+            {mediaActive && mediaActive.type === 'video' && (
               <div className="bg-indigo-600/10 border-b border-indigo-500/30 p-4 flex items-center gap-4 animate-in slide-in-from-top-2 relative group/console">
                 <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-500/20">
                   <Film size={24} className="text-white"/>
@@ -857,7 +1064,7 @@ const ProyectorController = ({ user }) => {
               <>
               <div className="flex gap-2 mb-4 shrink-0">
                 <button 
-                  onClick={() => handleProyectar({ titulo: 'Instrumental', texto: ' ' })}
+                  onClick={() => projectSlide({ titulo: 'Instrumental', texto: ' ' })}
                   className="flex-1 py-3 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 rounded-2xl flex items-center justify-center gap-2 font-bold text-zinc-300 transition-colors shadow-sm active:scale-95"
                 >
                   <Eraser size={18} className="text-zinc-400"/> Limpiar Texto
@@ -873,9 +1080,9 @@ const ProyectorController = ({ user }) => {
               <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden grid grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
                 {slides.map((s, idx) => (
                   <div 
-                    key={idx}
-                    onClick={() => setPreviewSlide(s)}
-                    onDoubleClick={() => handleProyectar(s)}
+                    key={s.titulo + idx} // Usar una key más robusta
+                    onClick={() => { setPreviewSlide(s); setPreviewMedia(null); }} // Al tocar una letra, quitamos el video de "Pre"
+                    onDoubleClick={() => projectSlide(s)}
                     className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-36 transition-all transform active:scale-95 ${previewSlide?.texto === s.texto ? 'border-violet-500 ring-2 ring-violet-500/30' : 'border-zinc-700 hover:border-zinc-500'} ${liveSlide?.texto === s.texto && !isBlackout ? 'bg-zinc-800 shadow-[0_0_15px_rgba(139,92,246,0.15)]' : 'bg-zinc-900'}`}
                   >
                     <div className="px-3 py-2 bg-zinc-950/80 border-b border-zinc-800 flex justify-between items-center shrink-0">
@@ -892,7 +1099,7 @@ const ProyectorController = ({ user }) => {
               </div>
               
               {/* Botón flotante para PC/Tablet de Siguiente */}
-              <button onClick={handleNextSlide} className="fixed bottom-32 right-1/3 mr-8 p-6 bg-orange-600 hover:bg-orange-500 text-white rounded-full shadow-2xl z-20 hover:scale-110 active:scale-95 transition-all flex items-center justify-center border-4 border-white/20">
+              <button onClick={projectNextSlide} className="fixed bottom-32 right-1/3 mr-8 p-6 bg-orange-600 hover:bg-orange-500 text-white rounded-full shadow-2xl z-20 hover:scale-110 active:scale-95 transition-all flex items-center justify-center border-4 border-white/20">
                 <ChevronRight size={40} />
               </button>
               </>
@@ -912,30 +1119,31 @@ const ProyectorController = ({ user }) => {
             <div className="flex-1 p-5 flex flex-col">
               <div className="flex-1 bg-black rounded-3xl border-2 border-zinc-700 shadow-inner flex items-center justify-center p-6 text-center overflow-hidden relative">
                 {previewMedia ? (
-                  <div className="absolute inset-0 z-0 animate-in fade-in zoom-in-95 duration-300">
-                    {previewMedia.type === 'video' ? <video src={previewMedia.url} autoPlay loop muted className="w-full h-full object-cover opacity-80" /> : <img src={previewMedia.url} className="w-full h-full object-cover opacity-80" />}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
-                    <button onClick={() => setPreviewMedia(null)} className="absolute top-2 right-2 p-1 bg-red-600 rounded-full text-white shadow-lg"><X size={14}/></button>
-                  </div>
-                ) : null}
-
-                {previewSlide ? (
+                  <>
+                    {previewMedia.type === 'video' ? (
+                      <video src={previewMedia.url} controls muted playsInline className="absolute inset-0 z-0 w-full h-full object-contain bg-zinc-900" />
+                    ) : (
+                      <img src={previewMedia.url} className="absolute inset-0 z-0 w-full h-full object-contain bg-zinc-900" />
+                    )}
+                    <button onClick={() => setPreviewMedia(null)} className="absolute top-4 right-4 p-2 bg-red-600/80 hover:bg-red-600 rounded-full text-white shadow-xl z-20 transition-all"><X size={18}/></button>
+                  </>
+                ) : previewSlide ? (
                   <>
                     {fondoActivo && (fondoActivo.match(/\.(mp4|webm|mov)$/i) || fondoActivo.includes('video/upload')) ? (
                       <video src={fondoActivo} autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     ) : fondoActivo && (
                       <img src={fondoActivo} className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     )}
-                    <p className="relative z-10 text-lg sm:text-xl font-black text-white leading-snug whitespace-pre-wrap drop-shadow-lg">
+                    <p className="relative z-10 text-[0.65rem] sm:text-[0.75rem] font-black text-white leading-tight whitespace-pre-wrap drop-shadow-lg">
                       {previewSlide.texto.trim() === '' ? <span className="text-white/30 italic font-medium">🎶 Instrumental</span> : previewSlide.texto}
                     </p>
                   </>
-                ) : !previewMedia && (
+                ) : (
                   <p className="text-zinc-700 font-bold uppercase tracking-widest text-xs">Sin Selección</p>
                 )}
               </div>
               <button 
-                onClick={() => previewSlide ? handleProyectar(previewSlide) : handleProyectar({ titulo: 'Media', texto: ' ' })} 
+                onClick={() => previewMedia ? projectMedia(previewMedia) : projectSlide(previewSlide)} 
                 disabled={!previewSlide && !previewMedia}
                 className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-50 transition-all active:scale-95 shadow-lg shadow-violet-900/20"
               >
@@ -948,6 +1156,15 @@ const ProyectorController = ({ user }) => {
           <div className="flex-1 flex flex-col">
             <div className="p-3 border-b border-zinc-800 bg-zinc-900/80 flex justify-between items-center">
               <h2 className="font-bold text-sm flex items-center gap-2 text-red-500"><Play size={16}/> En Vivo</h2>
+              
+              {/* ⏱️ CONTROL DE RELOJ (Countdown) SIEMPRE VISIBLE */}
+              <div className="flex items-center gap-2 bg-zinc-950 p-1 rounded-lg border border-zinc-800 scale-90">
+                <input type="number" value={countdownMinutes} onChange={e => setCountdownMinutes(parseInt(e.target.value))} className="w-8 bg-transparent text-center font-bold text-xs outline-none text-violet-400" />
+                <button onClick={() => toggleCountdown(!(evento?.proyectorCountdown?.active))} className={`px-2 py-1 rounded text-[8px] font-black uppercase transition-all ${evento?.proyectorCountdown?.active ? 'bg-red-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-white'}`}>
+                  {evento?.proyectorCountdown?.active ? 'PARAR' : 'RELOJ'}
+                </button>
+              </div>
+
               {isBlackout && <span className="text-[10px] bg-red-600 px-2 py-0.5 rounded-full font-bold uppercase tracking-widest">Apagado</span>}
             </div>
             <div className="flex-1 p-5">
@@ -955,16 +1172,34 @@ const ProyectorController = ({ user }) => {
                 {isBlackout ? (
                    <p className="relative z-10 text-red-900/50 font-black uppercase tracking-widest">Pantalla en Negro</p>
                 ) : displayLiveSlide ? (
-                  <>
+                  <> {/* LETRAS EN VIVO */}
                     {!modoTransmision && fondoActivo && (fondoActivo.match(/\.(mp4|webm|mov)$/i) || fondoActivo.includes('video/upload')) ? (
                       <video src={fondoActivo} autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     ) : !modoTransmision && fondoActivo && (
                       <img src={fondoActivo} className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     )}
-                    <p className={`relative z-10 font-black text-white whitespace-pre-wrap ${animationClass} ${modoTransmision ? 'text-sm sm:text-base text-left bg-black/80 border-l-[6px] border-violet-600 py-3 pr-4 pl-3 rounded-r-xl shadow-xl max-w-[90%]' : 'text-lg sm:text-xl leading-snug drop-shadow-lg'}`}>
+                    <p className={`relative z-10 font-black text-white whitespace-pre-wrap ${animationClass} ${modoTransmision ? 'text-[0.5rem] text-left bg-black/80 border-l-[4px] border-violet-600 py-2 pr-3 pl-2 rounded-r-lg shadow-xl max-w-[90%]' : 'text-[0.65rem] sm:text-[0.75rem] leading-tight drop-shadow-lg'}`}>
                       {displayLiveSlide.texto.trim() === '' ? <span className="text-white/30 italic font-medium">🎶 Instrumental</span> : displayLiveSlide.texto}
                     </p>
                   </>
+                ) : mediaActive?.url ? ( // MULTIMEDIA EN VIVO
+                  <div className="flex flex-col items-center gap-3 animate-in fade-in zoom-in-95 duration-300">
+                    <div className="absolute inset-0 z-0 opacity-40">
+                       {mediaActive.type === 'video' ? <video src={mediaActive.url} autoPlay loop muted playsInline className="w-full h-full object-contain" /> : <img src={mediaActive.url} className="w-full h-full object-contain" />}
+                    </div>
+                    <div className="relative z-10 text-center px-4 flex flex-col items-center justify-center h-full">
+                      <p className="text-indigo-400 font-black text-[11px] uppercase tracking-[0.2em] mb-1">
+                        {mediaActive.type === 'video' ? 'Proyectando Video' : 'Proyectando Imagen'}
+                      </p>
+                      <p className="text-white text-xs font-bold truncate max-w-[200px] mb-6 italic bg-black/50 px-3 py-1 rounded-full">"{mediaActive.name || 'Archivo'}"</p>
+                      <button 
+                        onClick={detenerMedia} 
+                        className="px-8 py-3 bg-red-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest shadow-2xl hover:bg-red-500 transition-all active:scale-95 border border-white/10"
+                      >
+                        Quitar Multimedia
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="flex flex-col items-center gap-2">
                     <div className="relative z-10 w-12 h-12 bg-gradient-to-br from-blue-600 to-violet-600 rounded-xl flex items-center justify-center transform -rotate-6 opacity-50">
@@ -1074,11 +1309,11 @@ const ProyectorController = ({ user }) => {
           ) : (
             <>
               <div className="sticky top-0 z-20 flex gap-2 bg-zinc-950/90 backdrop-blur-sm pb-3 pt-1 -mx-4 px-4">
-                <button onClick={() => handleProyectar({ titulo: 'Instrumental', texto: ' ' })} className="flex-1 py-3.5 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 rounded-xl flex items-center justify-center gap-2 font-bold text-zinc-300 transition-colors shadow-sm active:scale-95">
+                <button onClick={() => projectSlide({ titulo: 'Instrumental', texto: ' ' })} className="flex-1 py-3.5 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 rounded-xl flex items-center justify-center gap-2 font-bold text-zinc-300 transition-colors shadow-sm active:scale-95">
                   <Eraser size={16} className="text-zinc-400"/> Limpiar
                 </button>
                 <button 
-                  onClick={handleNextSlide} 
+                  onClick={projectNextSlide} 
                   className="flex-[2] py-3.5 bg-orange-600 text-white border border-orange-500 rounded-xl flex items-center justify-center gap-2 font-black text-sm uppercase shadow-lg shadow-orange-900/20 active:scale-95 transition-all"
                 >
                   Siguiente <ChevronRight size={20}/>
@@ -1089,7 +1324,7 @@ const ProyectorController = ({ user }) => {
                 {slides.map((s, idx) => (
                   <div 
                     key={idx}
-                    onClick={() => handleProyectar(s)}
+                    onClick={() => { projectSlide(s); setPreviewMedia(null); }} // En móvil, proyectar letra limpia el video
                     className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-32 transition-all transform active:scale-95 
                       ${evento?.proyectorSlideIndex === idx && !isBlackout ? 'border-violet-500 ring-2 ring-violet-500/50 bg-zinc-800 shadow-[0_0_15px_rgba(139,92,246,0.15)]' : 'border-zinc-800 bg-zinc-900'}
                       ${evento?.proyectorSlideIndex !== undefined && evento.proyectorSlideIndex + 1 === idx ? 'border-orange-500/60 border-2 dashed' : ''}`}
@@ -1121,6 +1356,76 @@ const ProyectorController = ({ user }) => {
            </div>
         </div>
       </div>
+
+      {/* 📱 MODAL: PANEL DE CONTROL MÓVIL (Bóveda + Cronómetro) */}
+      {showMobileControlsModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex flex-col z-[200] p-4 animate-in fade-in duration-300">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] w-full max-w-lg mx-auto shadow-2xl flex flex-col overflow-hidden flex-1">
+            <div className="p-6 border-b border-zinc-800 bg-zinc-900/50 flex justify-between items-center shrink-0">
+              <h3 className="text-xl font-black text-white flex items-center gap-3">
+                <Settings2 className="text-violet-500" size={24} /> Controles Móviles
+              </h3>
+              <button onClick={() => setShowMobileControlsModal(false)} className="p-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-2xl transition-colors"><X size={20}/></button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-zinc-800 shrink-0">
+              <button onClick={() => setMobileActiveTab('media')} className={`flex-1 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'media' ? 'border-violet-500 text-white bg-violet-500/5' : 'border-transparent text-zinc-500'}`}>Bóveda</button>
+              <button onClick={() => setMobileActiveTab('liveControls')} className={`flex-1 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'liveControls' ? 'border-amber-500 text-white bg-amber-500/5' : 'border-transparent text-zinc-500'}`}>En Vivo</button>
+            </div>
+
+            {mobileActiveTab === 'media' ? (
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 [&::-webkit-scrollbar]:hidden">
+                <div className="flex items-center gap-2 bg-zinc-950 p-2 rounded-2xl border border-zinc-800">
+                  <Search size={16} className="text-zinc-500 ml-2" />
+                  <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Buscar en la bóveda..." className="flex-1 bg-transparent border-none text-sm outline-none focus:ring-0" />
+                  {currentFolder && <button onClick={() => setCurrentFolder(null)} className="p-2 bg-zinc-800 rounded-xl text-white"><ChevronLeft size={16}/></button>}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pb-24">
+                  {!currentFolder && multimediaFolders.filter(f => f.toLowerCase().includes(searchTerm.toLowerCase())).map((folder, i) => (
+                    <button key={i} onClick={() => setCurrentFolder(folder)} className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-4 flex flex-col items-center gap-2">
+                      <Folder size={32} className="text-amber-500" fill="currentColor" fillOpacity={0.2}/>
+                      <span className="text-[10px] font-black uppercase text-zinc-400 truncate w-full text-center">{folder}</span>
+                    </button>
+                  ))}
+                  {filteredMedia.map((m, i) => (
+                    <button key={i} onClick={() => setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })} className={`relative aspect-video rounded-2xl overflow-hidden border-2 transition-all ${previewMedia?.url === m.url ? 'border-violet-500 scale-95' : 'border-zinc-800'}`}>
+                      {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
+                      <div className="absolute bottom-0 inset-x-0 bg-black/60 p-1"><p className="text-[8px] font-bold text-white truncate text-center">{m.name}</p></div>
+                    </button>
+                  ))}
+                </div>
+
+                {previewMedia && (
+                  <div className="absolute bottom-4 left-4 right-4 p-4 bg-zinc-900 border border-violet-500/50 rounded-[2rem] shadow-2xl animate-in slide-in-from-bottom-5">
+                    <div className="flex justify-between items-center mb-3">
+                      <p className="text-xs font-black text-white truncate pr-4">{previewMedia.name}</p>
+                      <button onClick={() => setPreviewMedia(null)}><X size={16} className="text-zinc-500"/></button>
+                    </div>
+                    <button onClick={() => { projectMedia(previewMedia); setShowMobileControlsModal(false); }} className="w-full py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase shadow-lg">🚀 PROYECTAR AHORA</button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                 <div className="grid grid-cols-2 gap-4">
+                    <button onClick={toggleBlackout} className={`p-6 rounded-[2rem] border-2 flex flex-col items-center gap-2 ${isBlackout ? 'bg-red-600 border-red-400' : 'bg-zinc-800 border-zinc-700 text-zinc-400'}`}><PowerOff size={28}/> <span className="text-[10px] font-black uppercase">Apagar</span></button>
+                    <button onClick={toggleLogo} className={`p-6 rounded-[2rem] border-2 flex flex-col items-center gap-2 ${isLogoActive ? 'bg-amber-600 border-amber-400' : 'bg-zinc-800 border-zinc-700 text-zinc-400'}`}><Star size={28}/> <span className="text-[10px] font-black uppercase">Logo</span></button>
+                 </div>
+                 <div className="bg-zinc-950 p-6 rounded-[2.5rem] border border-zinc-800">
+                    <h4 className="text-xs font-black text-violet-400 uppercase mb-4 flex items-center gap-2"><Clock size={16}/> Cronómetro</h4>
+                    <div className="flex items-center gap-4">
+                      <input type="number" value={countdownMinutes} onChange={e => setCountdownMinutes(e.target.value)} className="w-24 bg-zinc-900 border border-zinc-700 rounded-2xl py-3 text-center text-xl font-black text-white" />
+                      <button onClick={() => toggleCountdown(true)} className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black text-xs active:scale-95 shadow-lg shadow-emerald-900/20">INICIAR</button>
+                      <button onClick={() => toggleCountdown(false)} className="p-4 bg-zinc-800 text-zinc-500 rounded-2xl"><X size={20}/></button>
+                    </div>
+                 </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Modal para Subir/Seleccionar Fondos */}
       {showFondosModal && (
@@ -1228,15 +1533,15 @@ const ProyectorController = ({ user }) => {
             <button 
               onClick={() => setLargePreview(null)}
               className="absolute -top-12 right-0 p-2 text-zinc-400 hover:text-white flex items-center gap-2 font-bold"
-            >
+            > {/* Botón para cerrar la vista previa grande */}
               <X size={24}/> CERRAR
             </button>
             <button 
-              onClick={() => { handleProyectar({ titulo: 'Media', texto: ' ', originalIndex: -1 }); setLargePreview(null); }}
+              onClick={() => { projectMedia(largePreview); setLargePreview(null); }}
               className="absolute -top-12 left-0 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95"
             >
               <Send size={18}/> PROYECTAR AHORA
-            </button>
+            </button> {/* Botón para proyectar directamente desde la vista previa grande */}
 
             <div className="w-full aspect-video bg-zinc-900 rounded-3xl overflow-hidden border border-white/10 shadow-2xl">
               {largePreview.type === 'video' ? (
@@ -1308,6 +1613,54 @@ const ProyectorController = ({ user }) => {
                   <Plus size={32} /> <span className="font-black text-xs uppercase">Añadir Salida</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📅 MODAL: CAMBIAR DE EVENTO / SETLIST RÁPIDAMENTE */}
+      {showEventList && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex items-center justify-center z-[200] p-4 animate-in fade-in duration-300">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] w-full max-w-lg shadow-2xl flex flex-col overflow-hidden">
+            <div className="p-8 border-b border-zinc-800 bg-zinc-900/50 flex justify-between items-center">
+              <div>
+                <h3 className="text-2xl font-black text-white flex items-center gap-3">
+                  <Layers className="text-blue-500" size={28} /> Cambiar Setlist
+                </h3>
+                <p className="text-zinc-500 text-sm font-medium mt-1">Selecciona el evento que deseas controlar ahora.</p>
+              </div>
+              <button onClick={() => setShowEventList(false)} className="p-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-2xl transition-colors"><X size={24}/></button>
+            </div>
+
+            <div className="p-6 space-y-3 overflow-y-auto max-h-[60vh] [&::-webkit-scrollbar]:hidden">
+              {/* Opción para volver al modo Libre (Global) */}
+              <button 
+                onClick={() => { navigate('/control-proyector/global'); setShowEventList(false); }}
+                className={`w-full flex items-center justify-between p-5 rounded-3xl border transition-all group ${eventoId === 'global' ? 'bg-violet-600 border-violet-500 text-white' : 'bg-zinc-950 border-zinc-800 hover:border-zinc-600'}`}
+              >
+                <div className="text-left">
+                  <p className="font-black text-lg">Control Libre</p>
+                  <p className={`text-xs font-bold ${eventoId === 'global' ? 'text-violet-200' : 'text-zinc-500'}`}>Solo multimedia y logos</p>
+                </div>
+                <Monitor size={24} className={eventoId === 'global' ? 'text-white' : 'text-zinc-700'} />
+              </button>
+
+              <div className="h-px bg-zinc-800 my-4"></div>
+              <p className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em] px-2 mb-2">Próximos Eventos</p>
+
+              {upcomingEvents.map(ev => (
+                <button 
+                  key={ev.id}
+                  onClick={() => { navigate(`/control-proyector/${ev.id}`); setShowEventList(false); }}
+                  className={`w-full flex items-center justify-between p-5 rounded-3xl border transition-all group ${eventoId === ev.id ? 'bg-violet-600 border-violet-500 text-white' : 'bg-zinc-800/50 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800'}`}
+                >
+                  <div className="text-left">
+                    <p className="font-black text-base truncate max-w-[250px]">{ev.titulo}</p>
+                    <p className={`text-xs font-bold ${eventoId === ev.id ? 'text-violet-200' : 'text-zinc-500'}`}>{formatFriendlyDate(ev.fecha)}</p>
+                  </div>
+                  <ChevronRight size={20} className={eventoId === ev.id ? 'text-white' : 'text-zinc-600'} />
+                </button>
+              ))}
             </div>
           </div>
         </div>
