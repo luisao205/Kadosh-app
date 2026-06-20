@@ -15,6 +15,26 @@ const MAPA_LATINO = {
   'A#': 'La#', 'Bb': 'Sib', 'B': 'Si', 'Cb': 'Dob'
 };
 
+export const normalizarNota = (nota) => {
+  const match = String(nota || '').trim().match(/^[A-G][#b]?/);
+  if (!match) return '';
+  return EQUIVALENCIAS[match[0]] || match[0];
+};
+
+export const calcularOffsetSemitonos = (tonoOriginal, tonoDestino) => {
+  const origen = normalizarNota(tonoOriginal);
+  const destino = normalizarNota(tonoDestino);
+  const origIdx = NOTAS.indexOf(origen);
+  const targetIdx = NOTAS.indexOf(destino);
+
+  if (origIdx === -1 || targetIdx === -1) return 0;
+
+  let diff = targetIdx - origIdx;
+  if (diff > 6) diff -= 12;
+  if (diff < -5) diff += 12;
+  return diff;
+};
+
 /**
  * Traduce un acorde americano a formato latino si es necesario
  * Ahora respeta la preferencia de Sostenidos/Bemoles

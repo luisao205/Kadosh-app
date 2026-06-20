@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc, deleteDoc, deleteField } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { parsearCancion } from '../../utils/songParser';
-import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon, Search, SearchCode, Settings2, Clock } from 'lucide-react';
-import { traducirAcorde } from '../../utils/musicCore';
+import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon, Search, SearchCode, Settings2, Clock, ShieldCheck, MessageSquare } from 'lucide-react';
+import { calcularOffsetSemitonos, traducirAcorde } from '../../utils/musicCore';
+import { formatEventDate, parseAppDate } from '../../utils/dateUtils';
+import AutoFitText from './AutoFitText';
 
 const ProyectorController = ({ user }) => {
   const { eventoId } = useParams();
@@ -65,6 +67,19 @@ const ProyectorController = ({ user }) => {
   const liveVideoRef = useRef(null); // Ref para el video en la vista "En Vivo"
   const livePreviewMediaRef = useRef(null); // Ref para el video en la vista "Pre-proyección"
   const [countdownMinutes, setCountdownMinutes] = useState(5);
+  const [countdownTimeLeft, setCountdownTimeLeft] = useState('');
+  const [preacherDraft, setPreacherDraft] = useState({
+    tema: '',
+    puntoActual: '',
+    siguientePunto: '',
+    notasPrivadas: '',
+    versiculoActual: '',
+    tiempoRestante: '',
+    mensajesInternos: '',
+    indicaciones: ''
+  });
+  const [preacherLastUpdated, setPreacherLastUpdated] = useState(null);
+  const [preacherSendStatus, setPreacherSendStatus] = useState('');
 
   // 🔄 LIMPIADOR DE MEMORIA: Reiniciar estados cuando cambia el evento
   useEffect(() => {
@@ -79,6 +94,30 @@ const ProyectorController = ({ user }) => {
     setSearchTerm(''); // 🔍 Limpiar búsqueda
     setIsLogoActive(false);
     setIsBlackout(false);
+  }, [eventoId]);
+
+  useEffect(() => {
+    if (!eventoId) return undefined;
+    const unsub = onSnapshot(doc(db, 'eventos', eventoId, 'private', 'preacher'), (snap) => {
+      if (!snap.exists()) {
+        setPreacherLastUpdated(null);
+        return;
+      }
+      const data = snap.data();
+      setPreacherLastUpdated(data.updatedAt || null);
+      setPreacherDraft(prev => ({
+        ...prev,
+        tema: data.tema || '',
+        puntoActual: data.puntoActual || '',
+        siguientePunto: data.siguientePunto || '',
+        notasPrivadas: data.notasPrivadas || '',
+        versiculoActual: data.versiculoActual || '',
+        tiempoRestante: data.tiempoRestante || '',
+        mensajesInternos: data.mensajesInternos || '',
+        indicaciones: data.indicaciones || ''
+      }));
+    });
+    return () => unsub();
   }, [eventoId]);
 
   // Detectar monitores físicos (Para lanzar a pantalla específica)
@@ -103,7 +142,7 @@ const ProyectorController = ({ user }) => {
       const hoy = new Date().toISOString().slice(0, 10);
       const q = query(collection(db, 'eventos'), where('fecha', '>=', hoy), orderBy('fecha', 'asc'), limit(5));
       const snap = await getDocs(q);
-      setUpcomingEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setUpcomingEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(ev => parseAppDate(ev.fecha)));
     };
     fetchUpcoming();
 
@@ -217,6 +256,29 @@ const ProyectorController = ({ user }) => {
     }
   }, [liveSlide, transicionActiva, displayLiveSlide]);
 
+  useEffect(() => {
+    const countdown = evento?.proyectorCountdown;
+    if (!countdown?.active || !countdown?.endTimestamp) {
+      setCountdownTimeLeft('');
+      return;
+    }
+
+    const updateTimeLeft = () => {
+      const diff = countdown.endTimestamp - Date.now();
+      if (diff <= 0) {
+        setCountdownTimeLeft('00:00');
+        return;
+      }
+      const minutes = Math.floor(diff / 60000);
+      const seconds = Math.floor((diff % 60000) / 1000);
+      setCountdownTimeLeft(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+    };
+
+    updateTimeLeft();
+    const interval = setInterval(updateTimeLeft, 1000);
+    return () => clearInterval(interval);
+  }, [evento?.proyectorCountdown]);
+
   // Sincronización del video en la vista "En Vivo" del controlador
   useEffect(() => {
     if (liveVideoRef.current && mediaActive && mediaActive.type === 'video') {
@@ -292,13 +354,7 @@ const ProyectorController = ({ user }) => {
   });
 
   const formatFriendlyDate = (dateValue) => {
-    if (!dateValue) return "Fecha pendiente";
-    let d;
-    if (dateValue.toDate) d = dateValue.toDate(); // Si es Timestamp de Firebase
-    else d = new Date(String(dateValue).includes('T') ? dateValue : `${dateValue}T12:00:00`);
-    
-    if (isNaN(d.getTime())) return "Por programar";
-    return d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+    return formatEventDate(dateValue, { weekday: 'long', day: 'numeric', month: 'long' });
   };
 
   const lanzarSalidaGlobal = (id) => {
@@ -340,6 +396,43 @@ const ProyectorController = ({ user }) => {
   const handleIdentifyOutput = async (id) => {
     const newOutputs = { ...outputs, [id]: { ...outputs[id], identifyAt: Date.now() } };
     await setDoc(doc(db, 'eventos', 'global'), { outputs: newOutputs }, { merge: true });
+  };
+
+  const updatePreacherDraft = (field, value) => {
+    setPreacherDraft(prev => ({ ...prev, [field]: value }));
+  };
+
+  const sendToPreacher = async () => {
+    const now = Date.now();
+    const payload = {
+      ...preacherDraft,
+      updatedAt: now,
+      startedAt: preacherLastUpdated || now,
+      sentBy: user?.nombre || user?.email || 'Multimedia'
+    };
+    try {
+      await setDoc(doc(db, 'eventos', eventoId, 'private', 'preacher'), payload, { merge: true });
+      await updateDoc(doc(db, 'eventos', eventoId), { preacherState: deleteField() }).catch(() => {});
+      setPreacherLastUpdated(now);
+      setPreacherSendStatus('Enviado al Predicador');
+      setTimeout(() => setPreacherSendStatus(''), 3500);
+    } catch (e) {
+      console.error('Error enviando contenido privado al predicador:', e);
+      setPreacherSendStatus('No se pudo enviar');
+    }
+  };
+
+  const clearPreacherDisplay = async () => {
+    try {
+      await deleteDoc(doc(db, 'eventos', eventoId, 'private', 'preacher'));
+      await updateDoc(doc(db, 'eventos', eventoId), { preacherState: deleteField() }).catch(() => {});
+      setPreacherLastUpdated(null);
+      setPreacherSendStatus('Pantalla del Predicador limpia');
+      setTimeout(() => setPreacherSendStatus(''), 3500);
+    } catch (e) {
+      console.error('Error limpiando pantalla del predicador:', e);
+      setPreacherSendStatus('No se pudo limpiar');
+    }
   };
 
   // Función para proyectar la siguiente diapositiva automáticamente
@@ -400,21 +493,22 @@ const ProyectorController = ({ user }) => {
         const match = opciones.find(o => o.trim().toLowerCase().startsWith(cantanteActivo.toLowerCase() + ':'));
         if (match) {
           const tonoDestino = match.split(':')[1].trim();
-          const NOTAS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-          const oMatch = cancionActiva.tonoOriginal?.match(/^[A-G]#?/);
-          const tMatch = tonoDestino.match(/^[A-G]#?/);
-          if (oMatch && tMatch) {
-            let diff = NOTAS.indexOf(tMatch[0]) - NOTAS.indexOf(oMatch[0]);
-            if (diff > 6) diff -= 12;
-            if (diff < -5) diff += 12;
-            offset = diff;
-          }
+          offset = calcularOffsetSemitonos(cancionActiva.tonoOriginal, tonoDestino);
         }
       }
     }
 
     const updates = {
       proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
+      projectorState: {
+        type: 'lyrics',
+        title: slide.titulo,
+        content: slide.texto,
+        media: null,
+        timer: evento?.proyectorCountdown || null,
+        background: fondoActivo || null,
+        updatedAt: Date.now()
+      },
       proyectorSongId: activeSongId,
       proyectorSlideIndex: slide.originalIndex ?? -1,
       proyectorNextSlide: nextSlide ? { titulo: nextSlide.titulo, texto: nextSlide.texto, lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null } : null,
@@ -452,6 +546,15 @@ const ProyectorController = ({ user }) => {
     if (!mediaObj) return;
     const updates = {
       proyectorMedia: { ...mediaObj, playing: true, volume: 1, mode: 'foreground' },
+      projectorState: {
+        type: 'media',
+        title: mediaObj.name || 'Media',
+        content: '',
+        media: { ...mediaObj, playing: true, volume: 1, mode: 'foreground' },
+        timer: evento?.proyectorCountdown || null,
+        background: fondoActivo || null,
+        updatedAt: Date.now()
+      },
       proyectorSlide: null,
       proyectorSongId: null,
       proyectorSlideIndex: -1,
@@ -471,7 +574,21 @@ const ProyectorController = ({ user }) => {
   };
 
   const toggleBlackout = async () => {
-    try { await setDoc(doc(db, 'eventos', eventoId), { proyectorApagado: !isBlackout }, { merge: true }); } 
+    const nextBlackout = !isBlackout;
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), {
+        proyectorApagado: nextBlackout,
+        projectorState: {
+          type: nextBlackout ? 'blackout' : 'resume',
+          title: nextBlackout ? 'Pantalla negra' : 'Proyector activo',
+          content: '',
+          media: null,
+          timer: evento?.proyectorCountdown || null,
+          background: fondoActivo || null,
+          updatedAt: Date.now()
+        }
+      }, { merge: true });
+    } 
     catch (e) { console.error(e); }
   };
 
@@ -481,7 +598,22 @@ const ProyectorController = ({ user }) => {
   };
 
   const toggleLogo = async () => {
-    try { await setDoc(doc(db, 'eventos', eventoId), { proyectorLogo: !isLogoActive, proyectorApagado: false }, { merge: true }); } 
+    const nextLogo = !isLogoActive;
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), {
+        proyectorLogo: nextLogo,
+        proyectorApagado: false,
+        projectorState: {
+          type: nextLogo ? 'logo' : 'clearLogo',
+          title: nextLogo ? 'Logo' : 'Logo apagado',
+          content: '',
+          media: null,
+          timer: evento?.proyectorCountdown || null,
+          background: fondoActivo || null,
+          updatedAt: Date.now()
+        }
+      }, { merge: true });
+    } 
     catch (e) { console.error(e); }
   };
 
@@ -509,14 +641,25 @@ const ProyectorController = ({ user }) => {
     const endTimestamp = active ? Date.now() + (mins * 60000) : null;
     try {
       await setDoc(doc(db, 'eventos', eventoId), {
-        proyectorCountdown: { active, endTimestamp: endTimestamp }
+        proyectorCountdown: { active, endTimestamp: endTimestamp },
+        projectorState: {
+          ...(evento?.projectorState || {}),
+          type: evento?.projectorState?.type || 'timer',
+          title: evento?.projectorState?.title || 'Cronómetro',
+          content: evento?.projectorState?.content || '',
+          media: evento?.projectorState?.media || null,
+          background: evento?.projectorState?.background || fondoActivo || null,
+          timer: { active, endTimestamp: endTimestamp },
+          updatedAt: Date.now()
+        }
       }, { merge: true });
     } catch (e) { console.error(e); }
   };
 
   const botonPanico = async () => {
     await setDoc(doc(db, 'eventos', eventoId), { 
-      proyectorSlide: null, proyectorMedia: null, proyectorLogo: false, proyectorApagado: true, proyectorAlerta: null, proyectorTicker: null 
+      proyectorSlide: null, proyectorMedia: null, proyectorLogo: false, proyectorApagado: true, proyectorAlerta: null, proyectorTicker: null,
+      projectorState: { type: 'blackout', title: 'Pantalla negra', content: '', media: null, timer: null, background: null, updatedAt: Date.now() }
     }, { merge: true });
     setPreviewMedia(null);
     setLiveSlide(null);
@@ -768,11 +911,6 @@ const ProyectorController = ({ user }) => {
               <p className="text-[10px] text-zinc-500 font-bold truncate">{evento?.titulo}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={botonPanico} className="p-2.5 bg-red-600 text-white rounded-xl shadow-lg active:scale-90 transition-transform"><Zap size={18}/></button>
-            <button onClick={() => setShowMobileControlsModal(true)} className="p-2.5 bg-violet-600 text-white rounded-xl shadow-lg active:scale-90 transition-transform"><Settings2 size={18}/></button>
-          </div>
-
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <button 
             onClick={() => setShowEventList(!showEventList)}
@@ -806,10 +944,11 @@ const ProyectorController = ({ user }) => {
           {/* NEW: Mobile Controls FAB for small screens */}
           <button
             onClick={() => setShowMobileControlsModal(true)}
-            className="md:hidden p-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg shadow-md transition-all active:scale-95"
-            title="Controles"
+            className={`md:hidden px-3 py-2 rounded-lg shadow-md transition-all active:scale-95 flex items-center gap-2 text-xs font-black uppercase ${evento?.proyectorCountdown?.active ? 'bg-emerald-600 text-white ring-2 ring-emerald-300/50 animate-pulse' : 'bg-violet-600 hover:bg-violet-500 text-white'}`}
+            title={evento?.proyectorCountdown?.active ? 'Cronómetro activo' : 'Controles'}
           >
             <Settings2 size={20} />
+            {evento?.proyectorCountdown?.active && <span>{countdownTimeLeft || 'Activo'}</span>}
           </button>
         </div>
       </header>
@@ -1134,9 +1273,20 @@ const ProyectorController = ({ user }) => {
                     ) : fondoActivo && (
                       <img src={fondoActivo} className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     )}
-                    <p className="relative z-10 text-[0.65rem] sm:text-[0.75rem] font-black text-white leading-tight whitespace-pre-wrap drop-shadow-lg">
-                      {previewSlide.texto.trim() === '' ? <span className="text-white/30 italic font-medium">🎶 Instrumental</span> : previewSlide.texto}
-                    </p>
+                    {previewSlide.texto.trim() === '' ? (
+                      <span className="relative z-10 text-white/30 italic font-medium">Instrumental</span>
+                    ) : (
+                      <AutoFitText
+                        text={previewSlide.texto}
+                        minFontSize={10}
+                        maxFontSize={24}
+                        safeMaxWidth="92%"
+                        safeMaxHeight="82%"
+                        variant="preview"
+                        debounceMs={80}
+                        className="font-black text-white drop-shadow-lg"
+                      />
+                    )}
                   </>
                 ) : (
                   <p className="text-zinc-700 font-bold uppercase tracking-widest text-xs">Sin Selección</p>
@@ -1169,6 +1319,12 @@ const ProyectorController = ({ user }) => {
             </div>
             <div className="flex-1 p-5">
               <div className={`relative w-full h-full rounded-2xl border-2 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex flex-col p-6 overflow-hidden transition-colors ${isBlackout ? 'border-red-900/50 bg-black items-center justify-center' : modoTransmision ? 'border-emerald-500 bg-[#00FF00] items-start justify-end pb-8' : 'border-red-600 bg-black items-center justify-center text-center'}`}>
+                {countdownTimeLeft && (
+                  <div className="absolute top-3 right-3 z-30 px-3 py-1.5 rounded-xl bg-emerald-500/95 text-white shadow-lg border border-white/20">
+                    <p className="text-[8px] font-black uppercase tracking-widest leading-none mb-0.5">Cronómetro</p>
+                    <p className="font-mono text-lg font-black leading-none">{countdownTimeLeft}</p>
+                  </div>
+                )}
                 {isBlackout ? (
                    <p className="relative z-10 text-red-900/50 font-black uppercase tracking-widest">Pantalla en Negro</p>
                 ) : displayLiveSlide ? (
@@ -1178,9 +1334,24 @@ const ProyectorController = ({ user }) => {
                     ) : !modoTransmision && fondoActivo && (
                       <img src={fondoActivo} className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     )}
-                    <p className={`relative z-10 font-black text-white whitespace-pre-wrap ${animationClass} ${modoTransmision ? 'text-[0.5rem] text-left bg-black/80 border-l-[4px] border-violet-600 py-2 pr-3 pl-2 rounded-r-lg shadow-xl max-w-[90%]' : 'text-[0.65rem] sm:text-[0.75rem] leading-tight drop-shadow-lg'}`}>
-                      {displayLiveSlide.texto.trim() === '' ? <span className="text-white/30 italic font-medium">🎶 Instrumental</span> : displayLiveSlide.texto}
-                    </p>
+                    {displayLiveSlide.texto.trim() === '' ? (
+                      <span className="relative z-10 text-white/30 italic font-medium">Instrumental</span>
+                    ) : modoTransmision ? (
+                      <p className={`relative z-10 font-black text-white whitespace-pre-wrap ${animationClass} text-[0.5rem] text-left bg-black/80 border-l-[4px] border-violet-600 py-2 pr-3 pl-2 rounded-r-lg shadow-xl max-w-[90%]`}>
+                        {displayLiveSlide.texto}
+                      </p>
+                    ) : (
+                      <AutoFitText
+                        text={displayLiveSlide.texto}
+                        minFontSize={10}
+                        maxFontSize={24}
+                        safeMaxWidth="92%"
+                        safeMaxHeight="82%"
+                        variant="preview"
+                        debounceMs={80}
+                        className="font-black text-white drop-shadow-lg"
+                      />
+                    )}
                   </>
                 ) : mediaActive?.url ? ( // MULTIMEDIA EN VIVO
                   <div className="flex flex-col items-center gap-3 animate-in fade-in zoom-in-95 duration-300">
@@ -1228,10 +1399,48 @@ const ProyectorController = ({ user }) => {
                     className="flex flex-col p-2 bg-zinc-950 border border-zinc-800 rounded-xl hover:border-violet-500 transition-all text-left group"
                   >
                     <span className="text-[9px] font-black text-zinc-500 uppercase truncate group-hover:text-violet-400 transition-colors">{out.label}</span>
-                    <span className="text-[10px] font-bold text-zinc-300 truncate">{out.type === 'proyector' ? 'Público' : out.type === 'retorno' ? 'Stage' : 'Banda'}</span>
+                    <span className="text-[10px] font-bold text-zinc-300 truncate">{out.type === 'proyector' ? 'Público' : out.type === 'preacher' ? 'Predicador' : out.type === 'retorno' ? 'Stage' : 'Banda'}</span>
                   </button>
                 ))}
                 {Object.keys(outputs).length === 0 && <p className="col-span-2 text-[10px] text-zinc-600 italic text-center py-2">Configura tus pantallas en la Central Multimedia</p>}
+              </div>
+            </div>
+
+            {/* Pantalla privada del Predicador */}
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-bold text-xs flex items-center gap-1.5 text-amber-300 uppercase tracking-widest"><ShieldCheck size={14}/> Destino: Predicador</h2>
+                  <p className="text-[10px] text-amber-100/70 font-bold mt-1">Privado / Solo Predicador. No se enviará a Congregación.</p>
+                </div>
+                <button onClick={() => handleOpenScreen(`/predicador/${eventoId}`)} className="text-[10px] px-2 py-1 rounded-lg border border-amber-500/30 text-amber-200 hover:bg-amber-500/10 font-black uppercase">Abrir pantalla</button>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/20 bg-zinc-950/70 px-3 py-2">
+                <span className="text-[10px] font-black uppercase tracking-widest text-amber-200">Destino seleccionado: Predicador</span>
+                <span className="text-[10px] font-bold text-zinc-400">
+                  {preacherLastUpdated ? `Última actualización: ${new Date(preacherLastUpdated).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : 'Sin contenido enviado'}
+                </span>
+              </div>
+              {preacherSendStatus && (
+                <div className={`rounded-xl px-3 py-2 text-[11px] font-black uppercase tracking-widest border ${preacherSendStatus.includes('No se') ? 'bg-red-500/10 border-red-500/30 text-red-200' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'}`}>
+                  {preacherSendStatus}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <input value={preacherDraft.tema} onChange={e => updatePreacherDraft('tema', e.target.value)} placeholder="Tema" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                <input value={preacherDraft.tiempoRestante} onChange={e => updatePreacherDraft('tiempoRestante', e.target.value)} placeholder="Tiempo restante (ej. 20:00)" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                <input value={preacherDraft.puntoActual} onChange={e => updatePreacherDraft('puntoActual', e.target.value)} placeholder="Punto actual" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                <input value={preacherDraft.siguientePunto} onChange={e => updatePreacherDraft('siguientePunto', e.target.value)} placeholder="Siguiente punto" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+              </div>
+              <textarea value={preacherDraft.versiculoActual} onChange={e => updatePreacherDraft('versiculoActual', e.target.value)} placeholder="Versículo actual" rows={2} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-blue-500 resize-none" />
+              <textarea value={preacherDraft.notasPrivadas} onChange={e => updatePreacherDraft('notasPrivadas', e.target.value)} placeholder="Notas privadas del predicador (no salen al proyector)" rows={2} className="bg-zinc-950 border border-amber-500/20 rounded-lg px-3 py-2 text-xs text-amber-50 outline-none focus:border-amber-500 resize-none" />
+              <div className="grid grid-cols-2 gap-2">
+                <input value={preacherDraft.mensajesInternos} onChange={e => updatePreacherDraft('mensajesInternos', e.target.value)} placeholder="Mensaje interno" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-cyan-500" />
+                <input value={preacherDraft.indicaciones} onChange={e => updatePreacherDraft('indicaciones', e.target.value)} placeholder="Indicación: oración, llamado..." className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-red-500" />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={sendToPreacher} className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2"><MessageSquare size={14}/> Enviar a Predicador</button>
+                <button onClick={clearPreacherDisplay} className="px-3 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-black uppercase flex items-center gap-1"><X size={14}/> Limpiar Predicador</button>
               </div>
             </div>
 
@@ -1415,9 +1624,17 @@ const ProyectorController = ({ user }) => {
                  </div>
                  <div className="bg-zinc-950 p-6 rounded-[2.5rem] border border-zinc-800">
                     <h4 className="text-xs font-black text-violet-400 uppercase mb-4 flex items-center gap-2"><Clock size={16}/> Cronómetro</h4>
+                    {evento?.proyectorCountdown?.active && (
+                      <div className="mb-4 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-emerald-300">
+                        <p className="text-[10px] font-black uppercase tracking-widest">Cronómetro activo</p>
+                        <p className="font-mono text-2xl font-black">{countdownTimeLeft}</p>
+                      </div>
+                    )}
                     <div className="flex items-center gap-4">
                       <input type="number" value={countdownMinutes} onChange={e => setCountdownMinutes(e.target.value)} className="w-24 bg-zinc-900 border border-zinc-700 rounded-2xl py-3 text-center text-xl font-black text-white" />
-                      <button onClick={() => toggleCountdown(true)} className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black text-xs active:scale-95 shadow-lg shadow-emerald-900/20">INICIAR</button>
+                      <button onClick={() => toggleCountdown(true)} className={`flex-1 py-4 text-white rounded-2xl font-black text-xs active:scale-95 shadow-lg shadow-emerald-900/20 ${evento?.proyectorCountdown?.active ? 'bg-emerald-500 ring-2 ring-emerald-300/50' : 'bg-emerald-600'}`}>
+                        {evento?.proyectorCountdown?.active ? 'CRONÓMETRO ACTIVO' : 'INICIAR'}
+                      </button>
                       <button onClick={() => toggleCountdown(false)} className="p-4 bg-zinc-800 text-zinc-500 rounded-2xl"><X size={20}/></button>
                     </div>
                  </div>
@@ -1579,12 +1796,12 @@ const ProyectorController = ({ user }) => {
                           className="bg-transparent border-none text-lg font-black text-white p-0 focus:ring-0 w-full"
                         />
                         <div className="flex gap-2 mt-2">
-                          {['proyector', 'retorno', 'musicos'].map(t => (
+                          {['proyector', 'preacher', 'retorno', 'musicos'].map(t => (
                             <button 
                               key={t} onClick={() => handleUpdateOutput(id, { type: t })}
                               className={`px-2 py-1 rounded-md text-[9px] font-black uppercase border ${out.type === t ? 'bg-violet-600 border-violet-500 text-white' : 'border-zinc-800 text-zinc-600'}`}
                             >
-                              {t === 'proyector' ? 'Público' : t === 'retorno' ? 'Stage' : 'Banda'}
+                              {t === 'proyector' ? 'Público' : t === 'preacher' ? 'Predicador' : t === 'retorno' ? 'Stage' : 'Banda'}
                             </button>
                           ))}
                         </div>

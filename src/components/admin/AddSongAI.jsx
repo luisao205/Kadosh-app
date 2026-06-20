@@ -1,9 +1,57 @@
-import React, { useState, useEffect } from 'react';
-import { Sparkles, Search, Save, AlertCircle, X, Download } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Sparkles, Search, Save, AlertCircle, X, Download, Wand2, Eye, Scissors, Pilcrow } from 'lucide-react';
 import { buscarSugerenciasIA, buscarMetadatosIA } from '../../utils/geminiApi';
 import { collection, addDoc, onSnapshot } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
+import { traducirAcorde } from '../../utils/musicCore';
+import { parsearCancion } from '../../utils/songParser';
+
+const TONOS_DISPONIBLES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
+const SECTION_NAMES = ['Intro', 'Verso', 'Verse', 'Coro', 'Chorus', 'Puente', 'Bridge', 'Final', 'Outro', 'Instrumental', 'Espontáneo', 'Espontaneo'];
+const CHORD_REGEX = /^[A-G][#b]?(?:m|maj|min|dim|aug|sus|add)?(?:\d{0,2})?(?:[#b]?\d{0,2})?(?:\/[A-G][#b]?)?$/;
+const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|coro|chorus|puente|bridge|final|outro|instrumental|espont[aá]neo)(?:\s+\d+|\s*[:.-])?\s*$/i;
+
+const normalizeKey = (value, fallback = 'C') => {
+  const clean = String(value || '').trim();
+  const match = TONOS_DISPONIBLES.find(t => t.toLowerCase() === clean.toLowerCase());
+  return match || clean || fallback;
+};
+
+const isSectionTitle = (value) => SECTION_TITLE_REGEX.test(String(value || '').trim());
+
+const limpiarTextoCancion = (value) => String(value || '')
+  .replace(/\r\n?/g, '\n')
+  .replace(/[“”]/g, '"')
+  .replace(/[‘’]/g, "'")
+  .replace(/\u00a0/g, ' ')
+  .replace(/[ \t]+$/gm, '')
+  .replace(/[ \t]{2,}/g, ' ')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
+
+const detectarSeccionesTexto = (value) => {
+  const lines = String(value || '').split(/\r?\n/);
+  let hasSection = false;
+  const processed = lines.map(line => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#')) {
+      hasSection = true;
+      return line;
+    }
+    const bracketMatch = trimmed.match(/^\[(.*?)\]$/);
+    if (bracketMatch && isSectionTitle(bracketMatch[1])) {
+      hasSection = true;
+      return `# ${bracketMatch[1].trim()}`;
+    }
+    const match = isSectionTitle(trimmed);
+    if (!match) return line;
+    hasSection = true;
+    const title = trimmed.replace(/[:.-]\s*$/, '');
+    return `# ${title}`;
+  });
+  return { text: processed.join('\n').trim(), hasSection };
+};
 
 const AddSongAI = ({ user }) => {
   const [busqueda, setBusqueda] = useState('');
@@ -25,6 +73,15 @@ const AddSongAI = ({ user }) => {
   const [showImportModal, setShowImportModal] = useState(false);
   const notacion = user?.preferencias?.notacion || 'sharps';
   const [chordProText, setChordProText] = useState('');
+
+  const parsedPreview = useMemo(() => parsearCancion(letraGenerada), [letraGenerada]);
+  const chordWarnings = useMemo(() => {
+    const matches = [...String(letraGenerada || '').matchAll(/\[([^\]]+)\]/g)];
+    return matches
+      .map(match => match[1].trim())
+      .filter(chord => chord && !isSectionTitle(chord) && !CHORD_REGEX.test(chord))
+      .slice(0, 8);
+  }, [letraGenerada]);
 
   const showToast = (message, type = 'error') => {
     setToast({ message, type });
@@ -69,7 +126,7 @@ const AddSongAI = ({ user }) => {
     
     try {
       const metadatos = await buscarMetadatosIA(tituloSeleccionado, artistaSeleccionado);
-      if (metadatos.tono) setTono(metadatos.tono);
+      if (metadatos.tono) setTono(normalizeKey(metadatos.tono));
       if (metadatos.bpm) setBpm(metadatos.bpm);
     } catch (error) {
       console.error(error);
@@ -101,7 +158,7 @@ const AddSongAI = ({ user }) => {
     if (artistMatch) setArtista(artistMatch[1]);
     
     const keyMatch = t.match(/\{key:\s*(.*?)\}/i);
-    if (keyMatch) setTono(keyMatch[1]);
+    if (keyMatch) setTono(normalizeKey(keyMatch[1]));
     
     // Detección automática de acordes sin corchetes (si el usuario pega texto crudo)
     // Si no detectamos corchetes [], intentamos procesar línea por línea
@@ -149,14 +206,15 @@ const AddSongAI = ({ user }) => {
       }
 
       // Procesar solo a los cantantes a los que se les asignó un tono
+      const tonoNormalizado = normalizeKey(tono);
       const tonosAlternativos = Object.entries(tonosCantantes)
-        .map(([name, key]) => `${name}: ${key.trim() || tono}`)
+        .map(([name, key]) => `${name}: ${normalizeKey(key, tonoNormalizado)}`)
         .join(', ');
 
       await addDoc(collection(db, "canciones"), {
         titulo,
         artista,
-        tonoOriginal: tono,
+        tonoOriginal: tonoNormalizado,
         tonosAlternativos: tonosAlternativos,
         bpm: Number(bpm) || 0,
         letraRaw: letraGenerada,
@@ -181,6 +239,35 @@ const AddSongAI = ({ user }) => {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const toggleSingerTone = (cantante) => {
+    setTonosCantantes(prev => {
+      const next = { ...prev };
+      if (next[cantante] !== undefined) delete next[cantante];
+      else next[cantante] = '';
+      return next;
+    });
+  };
+
+  const handleCleanFormat = () => {
+    const cleaned = limpiarTextoCancion(letraGenerada);
+    if (!cleaned) return;
+    const hasHeavyCleanup = /\n{3,}|[“”‘’\u00a0]|\r/.test(letraGenerada);
+    if (hasHeavyCleanup && !window.confirm('Esto limpiará espacios excesivos y caracteres pegados, manteniendo máximo una línea vacía entre bloques. ¿Continuar?')) return;
+    setLetraGenerada(cleaned);
+    showToast('Formato limpiado. Revisa la vista previa antes de guardar.', 'success');
+  };
+
+  const handleDetectSections = () => {
+    const result = detectarSeccionesTexto(letraGenerada);
+    if (!result.text) return;
+    setLetraGenerada(result.hasSection && !result.text.startsWith('#') ? `# Inicio\n${result.text}` : result.text);
+    showToast(result.hasSection ? 'Secciones detectadas.' : 'No se encontraron secciones claras.', result.hasSection ? 'success' : 'info');
+  };
+
+  const insertBlankLine = () => {
+    setLetraGenerada(prev => `${prev}${prev.endsWith('\n') || !prev ? '' : '\n'}\n`);
   };
 
   if (user?.rol === 'musico') {
@@ -282,7 +369,10 @@ const AddSongAI = ({ user }) => {
              </div>
              <div className="col-span-1">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Tono Original</label>
-                <input type="text" value={tono} onChange={(e)=>setTono(e.target.value)} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" placeholder="Ej. G" />
+                <select value={TONOS_DISPONIBLES.includes(tono) ? tono : ''} onChange={(e)=>setTono(e.target.value || tono)} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 font-bold">
+                  {!TONOS_DISPONIBLES.includes(tono) && <option value="">{tono || 'Seleccionar'}</option>}
+                  {TONOS_DISPONIBLES.map(key => <option key={key} value={key}>{key}</option>)}
+                </select>
              </div>
              <div className="col-span-1">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1 flex justify-between items-end">
@@ -345,6 +435,17 @@ const AddSongAI = ({ user }) => {
                   + {tag}
                 </button>
               ))}
+              <button type="button" onClick={insertBlankLine} className="px-3 py-1 text-xs font-bold bg-zinc-100 text-zinc-700 hover:bg-zinc-200 rounded-lg border border-zinc-200 transition-colors active:scale-95 flex items-center gap-1">
+                <Pilcrow size={12}/> Separar bloque
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button type="button" onClick={handleCleanFormat} disabled={!letraGenerada.trim()} className="px-3 py-1.5 text-xs font-bold bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg border border-amber-200 transition-colors disabled:opacity-50 flex items-center gap-1">
+                <Scissors size={13}/> Limpiar formato
+              </button>
+              <button type="button" onClick={handleDetectSections} disabled={!letraGenerada.trim()} className="px-3 py-1.5 text-xs font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg border border-emerald-200 transition-colors disabled:opacity-50 flex items-center gap-1">
+                <Wand2 size={13}/> Detectar secciones
+              </button>
             </div>
             
             {showExample && (
@@ -364,7 +465,15 @@ const AddSongAI = ({ user }) => {
             className="flex-1 w-full p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-blue-500 bg-zinc-50 dark:bg-zinc-950 dark:text-white text-sm font-mono whitespace-pre-wrap resize-none"
             placeholder="Pega aquí la letra y haz clic en los botones de arriba para agregar las secciones..."
           ></textarea>
-          
+          {chordWarnings.length > 0 && (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              <p className="font-black mb-1 flex items-center gap-1"><AlertCircle size={14}/> Revisa estos acordes:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {chordWarnings.map(chord => <span key={chord} className="font-mono font-bold bg-white/70 border border-amber-200 rounded px-1.5 py-0.5">[{chord}]</span>)}
+              </div>
+            </div>
+          )}
+
           <button 
             onClick={handleSave}
             disabled={!letraGenerada || isSaving}
@@ -375,6 +484,50 @@ const AddSongAI = ({ user }) => {
           </button>
         </div>
       </div>
+
+      <section className="mt-8 bg-white dark:bg-zinc-900 p-5 md:p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-sm font-black text-zinc-900 dark:text-white flex items-center gap-2"><Eye size={16} className="text-blue-600"/> Vista previa para músicos</h2>
+          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{parsedPreview.length} secciones</span>
+        </div>
+        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 p-4 max-h-[420px] overflow-y-auto">
+          <div className="mb-5">
+            <p className="text-xl font-black text-zinc-900 dark:text-white">{titulo || 'Título sin definir'}</p>
+            <p className="text-sm font-bold text-zinc-500">{artista || 'Artista sin definir'} · Tono {traducirAcorde(normalizeKey(tono), user?.preferencias?.formatoAcordes, notacion)}</p>
+          </div>
+          {parsedPreview.length === 0 ? (
+            <p className="text-sm text-zinc-500 italic">La vista previa aparecerá cuando escribas letra o acordes.</p>
+          ) : (
+            <div className="space-y-6">
+              {parsedPreview.map((seccion, idx) => (
+                <div key={`${seccion.titulo}-${idx}`}>
+                  <span className="inline-block mb-3 text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 border border-blue-200">{seccion.titulo}</span>
+                  <div className="space-y-2 font-medium text-zinc-800 dark:text-zinc-100">
+                    {seccion.lineas.map((linea, lineIdx) => (
+                      linea.length === 0 ? (
+                        <div key={lineIdx} className="h-4" />
+                      ) : (
+                        <div key={lineIdx} className="flex flex-wrap items-end gap-x-2 gap-y-3">
+                          {linea.map((palabra, palabraIdx) => (
+                            <div key={palabraIdx} className="flex items-end whitespace-nowrap">
+                              {palabra.map((silaba, silabaIdx) => (
+                                <div key={silabaIdx} className="flex flex-col items-start">
+                                  <span className="min-h-[1rem] text-[0.75rem] font-black text-blue-600">{silaba.acorde ? traducirAcorde(silaba.acorde, user?.preferencias?.formatoAcordes, notacion) : ''}</span>
+                                  <span>{silaba.texto}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Modal Importar ChordPro */}
       {showImportModal && (
@@ -407,18 +560,13 @@ const AddSongAI = ({ user }) => {
                 cantantesDisponibles.map(cantante => {
                   const isSelected = tonosCantantes[cantante] !== undefined;
                   return (
-                    <div key={cantante} className={`flex items-center gap-2 p-2 rounded-lg border transition-colors ${isSelected ? 'bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30' : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
+                    <div key={cantante} onClick={() => toggleSingerTone(cantante)} className={`flex items-center gap-2 p-2 rounded-lg border transition-colors cursor-pointer ${isSelected ? 'bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30' : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
                       <label className="flex items-center gap-2 flex-1 cursor-pointer">
-                        <input type="checkbox" checked={isSelected} onChange={(e) => {
-                          const newTonos = { ...tonosCantantes };
-                          if (e.target.checked) newTonos[cantante] = '';
-                          else delete newTonos[cantante];
-                          setTonosCantantes(newTonos);
-                        }} className="rounded text-blue-600 focus:ring-blue-500 border-zinc-300" />
+                        <input type="checkbox" checked={isSelected} onChange={() => toggleSingerTone(cantante)} onClick={(e) => e.stopPropagation()} className="rounded text-blue-600 focus:ring-blue-500 border-zinc-300" />
                         <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300 truncate">{cantante}</span>
                       </label>
                       {isSelected && (
-                        <input type="text" placeholder="Tono" value={tonosCantantes[cantante]} onChange={(e) => setTonosCantantes({...tonosCantantes, [cantante]: e.target.value})} className="w-16 p-1 border border-zinc-200 dark:border-zinc-700 rounded text-xs focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-zinc-950 dark:text-white text-center font-bold uppercase" maxLength={3} title="Tono para este cantante" />
+                        <input type="text" placeholder="Tono" value={tonosCantantes[cantante] || ''} onClick={(e) => e.stopPropagation()} onChange={(e) => setTonosCantantes({...tonosCantantes, [cantante]: e.target.value})} className="w-16 p-1 border border-zinc-200 dark:border-zinc-700 rounded text-xs focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-zinc-950 dark:text-white text-center font-bold uppercase" maxLength={3} title="Tono para este cantante" />
                       )}
                     </div>
                   );

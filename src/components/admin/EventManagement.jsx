@@ -4,6 +4,7 @@ import { db } from '../../config/firebase';
 import { Calendar, Music, Users, Save, Trash2, Clock, CheckSquare, AlertCircle, GripVertical, Plus, FileText, AlignLeft, X, Tag, Share2, Copy, Search, Edit3, CheckCircle, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { traducirAcorde } from '../../utils/musicCore';
+import { formatEventDate, formatEventTime, parseAppDate } from '../../utils/dateUtils';
 
 const PLANTILLA_NOTAS = `👗 Vestimenta: 
 ⏰ Llegada: 
@@ -60,18 +61,27 @@ const EventManagement = ({ user }) => {
   useEffect(() => {
     const unsubEventos = onSnapshot(collection(db, 'eventos'), (snap) => {
       let data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      data.sort((a, b) => new Date(a.fecha) - new Date(b.fecha)); // Ordenar por fecha
+      data.sort((a, b) => {
+        const dateA = parseAppDate(a.fecha);
+        const dateB = parseAppDate(b.fecha);
+        if (!dateA && !dateB) return 0;
+        if (!dateA) return 1;
+        if (!dateB) return -1;
+        return dateA - dateB;
+      }); // Ordenar por fecha
       setEventos(data);
 
       // Calcular la última vez que se tocó cada canción (Idea 4: Anti-Repetición)
       const map = {};
       const hoy = new Date();
       data.forEach(ev => {
-        const eventDate = new Date(ev.fecha);
+        const eventDate = parseAppDate(ev.fecha);
+        if (!eventDate) return;
         if (eventDate <= hoy) { // Solo evaluamos eventos que ya pasaron
           const ids = ev.setlist ? ev.setlist.filter(i => i.type === 'song').map(i => i.value) : (ev.canciones || []);
           ids.forEach(id => {
-            if (!map[id] || eventDate > new Date(map[id])) {
+            const lastDate = parseAppDate(map[id]);
+            if (!lastDate || eventDate > lastDate) {
               map[id] = ev.fecha;
             }
           });
@@ -273,9 +283,13 @@ const EventManagement = ({ user }) => {
   // Compartir por WhatsApp
   const handleShareWhatsApp = (evento) => {
     let mensaje = `🎵 *${evento.titulo}*\n`;
-    mensaje += `📅 *Evento:* ${new Date(evento.fecha).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })} - ${new Date(evento.fecha).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}\n`;
+    const fechaEvento = formatEventDate(evento.fecha, { weekday: 'short', day: 'numeric', month: 'short' });
+    const horaEvento = formatEventTime(evento.fecha);
+    mensaje += `📅 *Evento:* ${fechaEvento}${horaEvento ? ` - ${horaEvento}` : ''}\n`;
     if (evento.fechaEnsayo) {
-      mensaje += `🎸 *Ensayo:* ${new Date(evento.fechaEnsayo).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })} - ${new Date(evento.fechaEnsayo).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}\n`;
+      const fechaEnsayoTexto = formatEventDate(evento.fechaEnsayo, { weekday: 'short', day: 'numeric', month: 'short' });
+      const horaEnsayoTexto = formatEventTime(evento.fechaEnsayo);
+      mensaje += `🎸 *Ensayo:* ${fechaEnsayoTexto}${horaEnsayoTexto ? ` - ${horaEnsayoTexto}` : ''}\n`;
     }
     
     if (evento.equipo && evento.equipo.length > 0) {
@@ -317,7 +331,12 @@ const EventManagement = ({ user }) => {
   const toggleCompletado = async (evento) => {
     if (evento.completado) {
       // Calcular días pasados desde la fecha del evento
-      const diasPasados = (new Date() - new Date(evento.fecha)) / (1000 * 60 * 60 * 24);
+      const eventDate = parseAppDate(evento.fecha);
+      if (!eventDate) {
+        showToast("No se puede reabrir un evento sin fecha válida.");
+        return;
+      }
+      const diasPasados = (new Date() - eventDate) / (1000 * 60 * 60 * 24);
       if (diasPasados > 3) {
         showToast("No se puede reabrir un evento que pasó hace más de 3 días.");
         return;
@@ -412,14 +431,18 @@ const EventManagement = ({ user }) => {
   const eventosCompletados = eventos.filter(e => e.completado).reverse(); // Los más recientes completados arriba
 
   // Componente interno para evitar código duplicado de la tarjeta
-  const renderEventoCard = (evento) => (
+  const renderEventoCard = (evento) => {
+    const fechaTexto = formatEventDate(evento.fecha, { weekday: 'short', day: 'numeric', month: 'short' });
+    const horaTexto = formatEventTime(evento.fecha);
+
+    return (
     <div key={evento.id} className={`bg-white dark:bg-zinc-900 p-5 md:p-6 rounded-2xl shadow-sm border border-zinc-200 dark:border-zinc-800 hover:border-rose-200 dark:hover:border-rose-500/50 transition-all flex flex-col md:flex-row gap-4 justify-between items-start md:items-center group ${evento.completado ? 'opacity-60 saturate-50 hover:saturate-100 hover:opacity-100' : ''}`}>
       <div>
         <div className="flex items-center gap-2 mb-1">
           <span className={`${evento.completado ? 'bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400' : 'bg-rose-100 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400'} text-xs font-black uppercase px-2.5 py-1 rounded-lg tracking-wider`}>
-            {new Date(evento.fecha).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })}
+            {fechaTexto}
           </span>
-          <span className="text-zinc-400 text-sm font-bold">{new Date(evento.fecha).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</span>
+          {horaTexto && <span className="text-zinc-400 text-sm font-bold">{horaTexto}</span>}
         </div>
         <h3 className={`text-xl font-black ${evento.completado ? 'text-zinc-600 dark:text-zinc-500 line-through decoration-zinc-300 dark:decoration-zinc-600' : 'text-zinc-900 dark:text-zinc-100'}`}>{evento.titulo}</h3>
         {evento.tipoEvento && (
@@ -449,7 +472,8 @@ const EventManagement = ({ user }) => {
         )}
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="max-w-6xl mx-auto animate-in fade-in duration-500 pb-12">

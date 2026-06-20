@@ -3,9 +3,11 @@ import { useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { Minimize, RefreshCw } from 'lucide-react';
+import AutoFitText from './AutoFitText';
 
-const Proyector = () => {
-  const { eventoId } = useParams();
+const Proyector = ({ eventoIdOverride }) => {
+  const { eventoId: routeEventoId } = useParams();
+  const eventoId = eventoIdOverride || routeEventoId;
   const [slide, setSlide] = useState(null);
   const [apagar, setApagar] = useState(false);
   const [fondoUrl, setFondoUrl] = useState(null);
@@ -223,15 +225,6 @@ const Proyector = () => {
     }
   }
 
-  // Lógica de auto-ajuste de tamaño de letra basado en longitud
-  const getDynamicFontSize = (text) => {
-    if (!text) return "";
-    const length = text.length;
-    if (length > 140) return "text-[min(8vw,7vh)] sm:text-[min(7vw,7vh)] md:text-[min(6vw,6vh)] leading-[1.1]";
-    if (length > 80) return "text-[min(10vw,9vh)] sm:text-[min(9vw,9vh)] md:text-[min(8vw,8vh)] leading-[1.1]";
-    return "text-[min(12vw,11vh)] sm:text-[min(10vw,11vh)] md:text-[min(9vw,11vh)] xl:text-[min(7vw,10.5vh)] leading-[1.1]";
-  };
-
   return (
     <div className={`fixed inset-0 text-white flex flex-col font-sans selection:bg-transparent overflow-hidden transition-colors duration-500 ${modoTransmision ? 'bg-[#00FF00] justify-end items-start pb-12 md:pb-20' : 'bg-black items-center justify-center p-8 md:p-16'} ${!showControls ? 'cursor-none' : ''}`}>
       
@@ -324,9 +317,21 @@ const Proyector = () => {
         <div className={`relative z-10 w-full max-w-none flex flex-col ${modoTransmision ? 'justify-end items-start pl-8 md:pl-16' : 'justify-center items-center h-full mx-auto text-center'}`}>
           <div 
             // Eliminamos la prop 'key' para que React no destruya el elemento, sino que aplique las clases de transición de CSS puro
-            className={`font-black tracking-tight whitespace-pre-wrap break-words text-outline ${animationClass} ${modoTransmision ? 'bg-black/80 border-l-[12px] border-violet-600 py-4 md:py-6 pr-8 pl-6 md:pl-8 rounded-r-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] inline-block text-left text-[min(6vw,6vh)] sm:text-[min(5vw,5vh)] md:text-[min(4vw,4vh)] leading-[1.2] max-w-[90vw] lg:max-w-5xl' : `w-full max-w-[98vw] px-4 md:px-8 drop-shadow-[0_0_60px_rgba(0,0,0,1)] ${getDynamicFontSize(displaySlide.texto)}`}`}
+            className={`font-black tracking-tight whitespace-pre-wrap break-words text-outline ${animationClass} ${modoTransmision ? 'bg-black/80 border-l-[12px] border-violet-600 py-4 md:py-6 pr-8 pl-6 md:pl-8 rounded-r-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] inline-block text-left text-[min(6vw,6vh)] sm:text-[min(5vw,5vh)] md:text-[min(4vw,4vh)] leading-[1.2] max-w-[90vw] lg:max-w-5xl' : 'w-full h-full flex items-center justify-center overflow-hidden drop-shadow-[0_0_60px_rgba(0,0,0,1)]'}`}
           >
-            <span translate="no">{displaySlide.texto}</span>
+            {modoTransmision ? (
+              <span translate="no">{displaySlide.texto}</span>
+            ) : (
+              <AutoFitText
+                text={displaySlide.texto}
+                minFontSize={36}
+                maxFontSize={240}
+                safeMaxWidth="90vw"
+                safeMaxHeight="78vh"
+                variant="projector"
+                className="font-black tracking-tight text-outline"
+              />
+            )}
           </div>
         </div>
       ) : null}

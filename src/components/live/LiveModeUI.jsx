@@ -3,7 +3,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { transponerNota, traducirAcorde } from '../../utils/musicCore';
+import { calcularOffsetSemitonos, transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, VolumeX, FileText, X, Save, Activity, Maximize, Minimize, Library, Video, ExternalLink, SlidersHorizontal, Headphones, Square, Crown } from 'lucide-react';
 
@@ -13,6 +13,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
   const [searchParams] = useSearchParams();
   const eventoId = searchParams.get('evento'); // Mensaje oculto en la URL
   const cantanteQuery = searchParams.get('cantante'); // Cantante asignado
+  const returnPath = eventoId ? `/setlist/${eventoId}` : '/canciones';
   
   const [cancion, setCancion] = useState(null);
   const [evento, setEvento] = useState(null);
@@ -64,24 +65,12 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
             const opcionMatch = opciones.find(opt => opt.trim().toLowerCase().startsWith(cantanteQuery.toLowerCase() + ':'));
             if (opcionMatch) {
               const tonoDestino = opcionMatch.split(':')[1].trim();
-              const NOTAS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-              const origMatch = data.tonoOriginal.match(/^[A-G]#?/);
-              const targetMatch = tonoDestino.match(/^[A-G]#?/);
-              if (origMatch && targetMatch) {
-                const origIdx = NOTAS.indexOf(origMatch[0]);
-                const targetIdx = NOTAS.indexOf(targetMatch[0]);
-                if (origIdx !== -1 && targetIdx !== -1) {
-                  let diff = targetIdx - origIdx;
-                  if (diff > 6) diff -= 12; // Buscar la ruta más corta (ej. subir 7 = bajar 5)
-                  if (diff < -5) diff += 12;
-                  setSemitonosOffset(diff);
-                }
-              }
+              setSemitonosOffset(calcularOffsetSemitonos(data.tonoOriginal, tonoDestino));
             }
           }
         } else {
           alert("La canción no existe");
-          navigate('/canciones');
+          navigate(returnPath);
         }
       } catch (error) {
         console.error("Error al cargar la canción para Live Mode:", error);
@@ -560,7 +549,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
       <header className="border-b border-zinc-800 sticky top-0 bg-zinc-900/95 backdrop-blur-md z-10 shadow-sm flex flex-col">
         <div className="p-3 sm:p-4 md:px-8 flex justify-between items-start sm:items-center w-full gap-2 sm:gap-4">
           <div className="flex items-start sm:items-center gap-2 sm:gap-3 w-full min-w-0">
-            <button onClick={() => navigate('/canciones')} className="p-2 -ml-2 rounded-full hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors" title="Volver al Repertorio">
+            <button onClick={() => navigate(returnPath)} className="p-2 -ml-2 rounded-full hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors" title={eventoId ? "Volver al Setlist" : "Volver al Repertorio"}>
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
             </button>
             <div className="min-w-0 flex-1">
@@ -770,7 +759,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
           <span className="text-[9px] mt-1">Reducir</span>
         </button>
         <button className="flex flex-col items-center text-red-500 font-bold">
-          <div onClick={() => navigate('/canciones')} className="bg-red-500/20 p-1.5 rounded-full shadow-[0_0_10px_rgba(239,68,68,0.5)] hover:bg-red-500/30 transition-colors cursor-pointer">
+          <div onClick={() => navigate(returnPath)} className="bg-red-500/20 p-1.5 rounded-full shadow-[0_0_10px_rgba(239,68,68,0.5)] hover:bg-red-500/30 transition-colors cursor-pointer">
              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
           </div>
           <span className="text-[9px] mt-0.5">Cerrar</span>

@@ -1,0 +1,106 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/usuarios/$(uid);
+    }
+
+    function hasUserDoc() {
+      return signedIn() && exists(userPath(request.auth.uid));
+    }
+
+    function currentRole() {
+      return hasUserDoc() ? get(userPath(request.auth.uid)).data.rol : null;
+    }
+
+    function hasAnyRole(roles) {
+      return signedIn() && currentRole() in roles;
+    }
+
+    function isAdminLike() {
+      return hasAnyRole(['dueño', 'admin']);
+    }
+
+    function isMediaOrAdmin() {
+      return hasAnyRole(['dueño', 'admin', 'multimedia']);
+    }
+
+    function canUsePreacherPrivate() {
+      return hasAnyRole(['dueño', 'admin', 'multimedia', 'predicador']);
+    }
+
+    function isOwnerBootstrap() {
+      return signedIn()
+        && request.auth.token.email == 'luistorresdrums2024@gmail.com'
+        && request.resource.data.rol == 'dueño';
+    }
+
+    function isSafeSelfProfileUpdate(userId) {
+      return signedIn()
+        && request.auth.uid == userId
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['rol', 'sinAcceso']);
+    }
+
+    match /usuarios/{userId} {
+      allow read: if signedIn();
+      allow create: if isAdminLike()
+        || (signedIn() && request.auth.uid == userId && request.resource.data.rol == 'musico')
+        || (signedIn() && request.auth.uid == userId && isOwnerBootstrap());
+      allow update: if isSafeSelfProfileUpdate(userId) || isAdminLike();
+      allow delete: if isAdminLike();
+
+      match /notas/{noteId} {
+        allow read, write: if signedIn() && request.auth.uid == userId;
+      }
+    }
+
+    match /eventos/{eventoId} {
+      // Public ministry/event state used by setlists, projector, stage display,
+      // attendance, countdown, media, lyrics, announcements, and controller-free global.
+      // Private preacher data must never live here; it belongs in /private/preacher.
+      allow read: if signedIn();
+      allow create: if isAdminLike();
+      allow update: if signedIn();
+      allow delete: if isAdminLike();
+
+      match /private/preacher {
+        allow read, write: if canUsePreacherPrivate();
+      }
+
+      match /private/{document=**} {
+        allow read, write: if canUsePreacherPrivate();
+      }
+    }
+
+    match /canciones/{songId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isMediaOrAdmin();
+    }
+
+    match /sistema/{document=**} {
+      allow read: if signedIn();
+      allow write: if isMediaOrAdmin();
+    }
+
+    match /notificaciones/{notificationId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();
+      allow delete: if isAdminLike();
+    }
+
+    match /plantillasEquipo/{templateId} {
+      allow read: if signedIn();
+      allow write: if isAdminLike();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

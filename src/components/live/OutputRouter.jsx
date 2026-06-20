@@ -5,9 +5,10 @@ import { db } from '../../config/firebase';
 import Proyector from './Proyector';
 import StageDisplay from './StageDisplay';
 import StageDisplayMusicos from './StageDisplayMusicos';
+import PreacherDisplay from './PreacherDisplay';
 import { Loader2 } from 'lucide-react';
 
-const OutputRouter = () => {
+const OutputRouter = ({ user }) => {
   const { eventoId, outputId } = useParams();
   const [type, setType] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -68,9 +69,10 @@ const OutputRouter = () => {
            </div>
         </div>
       )}
-      {type === 'proyector' && <Proyector />}
-      {type === 'retorno' && <StageDisplay />}
-      {type === 'musicos' && <StageDisplayMusicos />}
+      {type === 'proyector' && <Proyector eventoIdOverride={eventoId} />}
+      {type === 'retorno' && <StageDisplay eventoIdOverride={eventoId} />}
+      {type === 'musicos' && <StageDisplayMusicos eventoIdOverride={eventoId} />}
+      {type === 'preacher' && <PreacherDisplay eventoIdOverride={eventoId} user={user} />}
     </div>
   );
 };

@@ -3,6 +3,8 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import LiveModeUI from './components/live/LiveModeUI';
 import Proyector from './components/live/Proyector';
 import ProyectorController from './components/live/ProyectorController';
+import PreacherDisplay from './components/live/PreacherDisplay';
+import OutputRouter from './components/live/OutputRouter';
 import StageDisplay from './components/live/StageDisplay';
 import StageDisplayMusicos from './components/live/StageDisplayMusicos';
 import MultimediaHub from './components/live/MultimediaHub';
@@ -203,6 +205,8 @@ function App() {
         
         {/* Ruta Pública del Proyector para la Congregación */}
         <Route path="/proyector/:eventoId" element={<Proyector />} />
+        <Route path="/predicador/:eventoId" element={<PreacherDisplay user={user} />} />
+        <Route path="/output/:eventoId/:outputId" element={<OutputRouter user={user} />} />
         
         {/* Ruta Privada de Retorno para los Músicos en Tarima */}
         <Route path="/retorno/:eventoId" element={<StageDisplay />} />

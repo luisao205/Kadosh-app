@@ -8,6 +8,13 @@ import { traducirAcorde } from '../../utils/musicCore';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const INSTRUMENTOS_RECURSOS = ['General', 'Voz Principal', 'Coros', 'Batería', 'Piano', 'Bajo', 'Guitarra Acústica', 'Guitarra Eléctrica', 'Percusión'];
+const TONOS_DISPONIBLES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
+
+const normalizeKey = (value, fallback = 'C') => {
+  const clean = String(value || '').trim();
+  const match = TONOS_DISPONIBLES.find(t => t.toLowerCase() === clean.toLowerCase());
+  return match || clean || fallback;
+};
 
 const EditSong = ({ user }) => {
   const { id } = useParams();
@@ -267,15 +274,16 @@ const EditSong = ({ user }) => {
         newAudioUrl = await getDownloadURL(audioRef);
       }
 
+      const tonoNormalizado = normalizeKey(tono);
       const tonosAlternativosStr = Object.entries(tonosCantantes)
-        .map(([name, key]) => `${name}: ${key.trim() || tono}`)
+        .map(([name, key]) => `${name}: ${normalizeKey(key, tonoNormalizado)}`)
         .join(', ');
 
       const docRef = doc(db, 'canciones', id);
       await updateDoc(docRef, {
         titulo,
         artista,
-        tonoOriginal: tono,
+        tonoOriginal: tonoNormalizado,
         etiquetas,
         multitracks,
         recursos,
@@ -306,6 +314,15 @@ const EditSong = ({ user }) => {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const toggleSingerTone = (cantante) => {
+    setTonosCantantes(prev => {
+      const next = { ...prev };
+      if (next[cantante] !== undefined) delete next[cantante];
+      else next[cantante] = '';
+      return next;
+    });
   };
 
   if (isLoading) {
@@ -356,7 +373,10 @@ const EditSong = ({ user }) => {
             </div>
             <div className="col-span-1">
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Tono Original</label>
-              <input type="text" value={tono} onChange={(e)=>setTono(e.target.value)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" />
+              <select value={TONOS_DISPONIBLES.includes(tono) ? tono : ''} onChange={(e)=>setTono(e.target.value || tono)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 font-bold">
+                {!TONOS_DISPONIBLES.includes(tono) && <option value="">{tono || 'Seleccionar'}</option>}
+                {TONOS_DISPONIBLES.map(key => <option key={key} value={key}>{key}</option>)}
+              </select>
             </div>
             <div className="col-span-1">
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1 flex justify-between items-end">
@@ -609,18 +629,13 @@ const EditSong = ({ user }) => {
                 allSingers.map(cantante => {
                   const isSelected = tonosCantantes[cantante] !== undefined;
                   return (
-                    <div key={cantante} className={`flex items-center gap-2 p-2 rounded-lg border transition-colors ${isSelected ? 'bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30' : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
+                    <div key={cantante} onClick={() => toggleSingerTone(cantante)} className={`flex items-center gap-2 p-2 rounded-lg border transition-colors cursor-pointer ${isSelected ? 'bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30' : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
                       <label className="flex items-center gap-2 flex-1 cursor-pointer">
-                        <input type="checkbox" checked={isSelected} onChange={(e) => {
-                          const newTonos = { ...tonosCantantes };
-                          if (e.target.checked) newTonos[cantante] = '';
-                          else delete newTonos[cantante];
-                          setTonosCantantes(newTonos);
-                        }} className="rounded text-blue-600 focus:ring-blue-500 border-zinc-300" />
+                        <input type="checkbox" checked={isSelected} onChange={() => toggleSingerTone(cantante)} onClick={(e) => e.stopPropagation()} className="rounded text-blue-600 focus:ring-blue-500 border-zinc-300" />
                         <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300 truncate">{cantante}</span>
                       </label>
                       {isSelected && (
-                        <input type="text" placeholder="Tono" value={tonosCantantes[cantante]} onChange={(e) => setTonosCantantes({...tonosCantantes, [cantante]: e.target.value})} className="w-16 p-1 border border-zinc-200 dark:border-zinc-700 rounded text-xs focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-zinc-950 dark:text-white text-center font-bold uppercase" maxLength={3} title="Tono para este cantante" />
+                        <input type="text" placeholder="Tono" value={tonosCantantes[cantante] || ''} onClick={(e) => e.stopPropagation()} onChange={(e) => setTonosCantantes({...tonosCantantes, [cantante]: e.target.value})} className="w-16 p-1 border border-zinc-200 dark:border-zinc-700 rounded text-xs focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-zinc-950 dark:text-white text-center font-bold uppercase" maxLength={3} title="Tono para este cantante" />
                       )}
                     </div>
                   );

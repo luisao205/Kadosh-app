@@ -3,7 +3,7 @@ import { collection, onSnapshot, deleteDoc, doc, updateDoc, addDoc } from 'fireb
 import { db } from '../../config/firebase';
 import { Music, Search, Trash2, Edit, Mic2, Play, Heart, Layers, Plus, X, ChevronUp, ChevronDown, Download } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { traducirAcorde, transponerNota } from '../../utils/musicCore';
+import { calcularOffsetSemitonos, traducirAcorde, transponerNota } from '../../utils/musicCore';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 
@@ -125,23 +125,7 @@ const SongList = ({ user }) => {
     }));
   };
 
-  const calcularOffset = (tonoOriginal, tonoDestino) => {
-    if (!tonoOriginal || !tonoDestino) return 0;
-    const NOTAS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const origMatch = tonoOriginal.match(/^[A-G]#?/);
-    const targetMatch = tonoDestino.match(/^[A-G]#?/);
-    if (origMatch && targetMatch) {
-      const origIdx = NOTAS.indexOf(origMatch[0]);
-      const targetIdx = NOTAS.indexOf(targetMatch[0]);
-      if (origIdx !== -1 && targetIdx !== -1) {
-        let diff = targetIdx - origIdx;
-        if (diff > 6) diff -= 12;
-        if (diff < -5) diff += 12;
-        return diff;
-      }
-    }
-    return 0;
-  };
+  const calcularOffset = calcularOffsetSemitonos;
 
   const handleCreateMedley = async () => {
     if (medleySongs.length < 2) return showToast("Selecciona al menos 2 canciones para fusionar.");

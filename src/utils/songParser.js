@@ -12,11 +12,19 @@ export const parsearCancion = (textoRaw) => {
 
   lineas.forEach(linea => {
     const lineaLimpia = linea.trim();
-    if (!lineaLimpia) return;
+    if (!lineaLimpia) {
+      if (seccionActual) seccionActual.lineas.push([]);
+      return;
+    }
 
     // Detectar nueva sección (ej. "# Verso 1")
+    const bracketSectionMatch = lineaLimpia.match(/^\[(intro|verso|verse|coro|chorus|puente|bridge|final|outro|instrumental|espont[aá]neo|espontaneo)(?:\s+\d+)?\]$/i);
+
     if (lineaLimpia.startsWith('#')) {
       seccionActual = { titulo: lineaLimpia.substring(1).trim(), lineas: [] };
+      secciones.push(seccionActual);
+    } else if (bracketSectionMatch) {
+      seccionActual = { titulo: lineaLimpia.slice(1, -1).trim(), lineas: [] };
       secciones.push(seccionActual);
     } else {
       // Si hay texto antes de definir una sección, crear una por defecto

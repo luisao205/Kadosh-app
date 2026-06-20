@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX, Cake } from 'lucide-react';
-import { transponerNota, traducirAcorde } from '../../utils/musicCore';
+import { calcularOffsetSemitonos, transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 
 const SetlistViewer = ({ user }) => {
@@ -168,23 +168,7 @@ const SetlistViewer = ({ user }) => {
     }
   };
 
-  const calcularOffset = (tonoOriginal, tonoDestino) => {
-    if (!tonoOriginal || !tonoDestino) return 0;
-    const NOTAS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const origMatch = tonoOriginal.match(/^[A-G]#?/);
-    const targetMatch = tonoDestino.match(/^[A-G]#?/);
-    if (origMatch && targetMatch) {
-      const origIdx = NOTAS.indexOf(origMatch[0]);
-      const targetIdx = NOTAS.indexOf(targetMatch[0]);
-      if (origIdx !== -1 && targetIdx !== -1) {
-        let diff = targetIdx - origIdx;
-        if (diff > 6) diff -= 12;
-        if (diff < -5) diff += 12;
-        return diff;
-      }
-    }
-    return 0;
-  };
+  const calcularOffset = calcularOffsetSemitonos;
 
   const responderRSVP = async (respuesta) => {
     try {

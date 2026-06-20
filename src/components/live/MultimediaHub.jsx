@@ -3,6 +3,7 @@ import { collection, query, where, getDocs, orderBy, limit, doc, onSnapshot, set
 import { db } from '../../config/firebase';
 import { useNavigate } from 'react-router-dom';
 import { Monitor, Film, Layers, Play, Calendar, ExternalLink, Tv, Plus, Trash2, Settings2, X, Edit2, Loader2, Fingerprint } from 'lucide-react';
+import { formatEventDate, parseAppDate } from '../../utils/dateUtils';
 
 const MultimediaHub = () => {
   const navigate = useNavigate();
@@ -95,7 +96,7 @@ const MultimediaHub = () => {
           limit(10)
         );
         const snap = await getDocs(q);
-        setEventos(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        setEventos(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(ev => parseAppDate(ev.fecha)));
       } catch (e) {
         console.error(e);
       } finally {
@@ -106,13 +107,7 @@ const MultimediaHub = () => {
   }, []);
 
   const formatFriendlyDate = (dateValue) => {
-    if (!dateValue) return "Fecha pendiente";
-    let d;
-    if (dateValue.toDate) d = dateValue.toDate(); // Si es Timestamp de Firebase
-    else d = new Date(String(dateValue).includes('T') ? dateValue : `${dateValue}T12:00:00`);
-    
-    if (isNaN(d.getTime())) return "Por programar";
-    return d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+    return formatEventDate(dateValue, { weekday: 'long', day: 'numeric', month: 'long' });
   };
 
   const handleOpenScreen = (path) => {
@@ -165,17 +160,38 @@ const MultimediaHub = () => {
             ) : eventos.length === 0 ? (
               <p className="text-zinc-500 italic">No hay eventos próximos creados.</p>
             ) : eventos.map(ev => (
-              <button 
+              <div
                 key={ev.id}
-                onClick={() => navigate(`/control-proyector/${ev.id}`)}
-                className="w-full flex items-center justify-between p-4 bg-zinc-50 dark:bg-zinc-800/50 hover:bg-violet-50 dark:hover:bg-violet-500/10 rounded-2xl border border-zinc-100 dark:border-zinc-800 transition-all group"
+                className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl border border-zinc-100 dark:border-zinc-800"
               >
-                <div className="text-left">
-                  <p className="font-black text-zinc-800 dark:text-zinc-200 group-hover:text-violet-600 transition-colors">{ev.titulo}</p>
-                  <p className="text-xs text-zinc-500 font-bold">{formatFriendlyDate(ev.fecha)}</p>
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="text-left min-w-0">
+                    <p className="font-black text-zinc-800 dark:text-zinc-200 truncate">{ev.titulo}</p>
+                    <p className="text-xs text-zinc-500 font-bold">{formatFriendlyDate(ev.fecha)}</p>
+                  </div>
+                  <Layers size={20} className="text-zinc-400 shrink-0" />
                 </div>
-                <Layers size={20} className="text-zinc-400 group-hover:text-violet-500" />
-              </button>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    onClick={() => navigate(`/control-proyector/${ev.id}`)}
+                    className="px-3 py-2.5 rounded-xl bg-violet-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-violet-500 transition-colors"
+                  >
+                    Controlador
+                  </button>
+                  <button
+                    onClick={() => handleOpenScreen(`/proyector/${ev.id}`)}
+                    className="px-3 py-2.5 rounded-xl bg-zinc-900 dark:bg-zinc-950 text-white text-[10px] font-black uppercase tracking-widest hover:bg-zinc-800 transition-colors"
+                  >
+                    Abrir Proyector
+                  </button>
+                  <button
+                    onClick={() => handleOpenScreen(`/predicador/${ev.id}`)}
+                    className="px-3 py-2.5 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-amber-500 transition-colors"
+                  >
+                    Abrir Predicador
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         </div>
@@ -213,12 +229,12 @@ const MultimediaHub = () => {
                           className="bg-transparent border-none text-lg font-black text-white p-0 focus:ring-0 w-full"
                         />
                         <div className="flex gap-2 mt-2">
-                          {['proyector', 'retorno', 'musicos'].map(t => (
+                          {['proyector', 'preacher', 'retorno', 'musicos'].map(t => (
                             <button 
                               key={t} onClick={() => handleUpdateOutput(id, { type: t })}
                               className={`px-2 py-1 rounded-md text-[9px] font-black uppercase border ${out.type === t ? 'bg-violet-600 border-violet-500 text-white' : 'border-zinc-800 text-zinc-600'}`}
                             >
-                              {t === 'proyector' ? 'Público' : t === 'retorno' ? 'Stage' : 'Banda'}
+                              {t === 'proyector' ? 'Público' : t === 'preacher' ? 'Predicador' : t === 'retorno' ? 'Stage' : 'Banda'}
                             </button>
                           ))}
                         </div>
