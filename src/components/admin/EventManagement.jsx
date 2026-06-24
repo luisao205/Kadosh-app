@@ -434,13 +434,27 @@ const EventManagement = ({ user }) => {
   const renderEventoCard = (evento) => {
     const fechaTexto = formatEventDate(evento.fecha, { weekday: 'short', day: 'numeric', month: 'short' });
     const horaTexto = formatEventTime(evento.fecha);
+    const eventDate = parseAppDate(evento.fecha);
+    const now = new Date();
+    const isLiveCandidate = eventDate && !evento.completado && Math.abs(now - eventDate) < 6 * 60 * 60 * 1000;
+    const statusLabel = evento.completado ? 'Finalizado' : !eventDate ? 'Sin fecha' : isLiveCandidate ? 'En vivo' : 'Próximo';
+    const statusClass = evento.completado
+      ? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+      : !eventDate
+        ? 'bg-amber-500/10 text-amber-300 border-amber-500/25'
+        : isLiveCandidate
+          ? 'kp-live-badge'
+          : 'bg-blue-500/10 text-blue-300 border-blue-500/25';
 
     return (
-    <div key={evento.id} className={`bg-white dark:bg-zinc-900 p-5 md:p-6 rounded-2xl shadow-sm border border-zinc-200 dark:border-zinc-800 hover:border-rose-200 dark:hover:border-rose-500/50 transition-all flex flex-col md:flex-row gap-4 justify-between items-start md:items-center group ${evento.completado ? 'opacity-60 saturate-50 hover:saturate-100 hover:opacity-100' : ''}`}>
+    <div key={evento.id} className={`kp-card p-5 md:p-6 rounded-3xl transition-all flex flex-col md:flex-row gap-4 justify-between items-start md:items-center group hover:border-rose-400/35 ${evento.completado ? 'opacity-70 saturate-50 hover:saturate-100 hover:opacity-100' : ''}`}>
       <div>
         <div className="flex items-center gap-2 mb-1">
-          <span className={`${evento.completado ? 'bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400' : 'bg-rose-100 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400'} text-xs font-black uppercase px-2.5 py-1 rounded-lg tracking-wider`}>
-            {fechaTexto}
+          <span className={`${statusClass} border text-xs font-black uppercase px-2.5 py-1 rounded-lg tracking-wider`}>
+            {statusLabel}
+          </span>
+          <span className={`${evento.completado ? 'bg-zinc-500/10 text-zinc-400' : 'bg-rose-500/10 text-rose-300'} text-xs font-black uppercase px-2.5 py-1 rounded-lg tracking-wider`}>
+            {fechaTexto || 'Fecha sin definir'}
           </span>
           {horaTexto && <span className="text-zinc-400 text-sm font-bold">{horaTexto}</span>}
         </div>
@@ -456,8 +470,11 @@ const EventManagement = ({ user }) => {
         </div>
       </div>
       <div className="flex items-center gap-2 w-full md:w-auto mt-4 md:mt-0 flex-wrap justify-end">
-        <button onClick={() => navigate(`/setlist/${evento.id}`)} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95">
+        <button onClick={() => navigate(`/setlist/${evento.id}`)} className="kp-button-primary flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95">
           <CheckSquare size={16} /> Abrir
+        </button>
+        <button onClick={() => navigate(`/control-proyector/${evento.id}`)} className="kp-button-secondary flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95">
+          <Clock size={16} /> Controlador
         </button>
         {!evento.completado && <button onClick={() => handleShareWhatsApp(evento)} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-[#25D366] hover:bg-[#20bd5a] text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95" title="Compartir"><Share2 size={16} /></button>}
         {esAdmin && (
@@ -477,13 +494,13 @@ const EventManagement = ({ user }) => {
 
   return (
     <div className="max-w-6xl mx-auto animate-in fade-in duration-500 pb-12">
-      <header className="mb-8 flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
-        <div className="p-3 bg-rose-100 text-rose-700 rounded-2xl w-max">
+      <header className="mb-8 flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 md:p-6 backdrop-blur-sm">
+        <div className="p-3 bg-rose-500/10 text-rose-300 border border-rose-500/20 rounded-2xl w-max">
           <Calendar size={28} />
         </div>
         <div>
-          <h1 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">Eventos y Setlists</h1>
-          <p className="text-zinc-500 mt-1 text-sm font-medium">Planifica los cultos, selecciona canciones y convoca al equipo.</p>
+          <h1 className="text-3xl font-black text-white tracking-tight">Eventos y Setlists</h1>
+          <p className="text-zinc-400 mt-1 text-sm font-medium">Planifica cultos, selecciona canciones y convoca al equipo.</p>
         </div>
       </header>
 
@@ -495,7 +512,7 @@ const EventManagement = ({ user }) => {
             {/* Botón de despliegue para móviles */}
             <button 
               onClick={() => setShowMobileForm(!showMobileForm)}
-              className="lg:hidden w-full mb-4 p-4 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 flex justify-between items-center font-bold text-zinc-700 dark:text-zinc-200 shadow-sm active:scale-[0.98] transition-all"
+              className="kp-panel lg:hidden w-full mb-4 p-4 rounded-2xl flex justify-between items-center font-bold text-zinc-200 active:scale-[0.98] transition-all"
             >
               <div className="flex items-center gap-2">
                 <div className={`p-1.5 rounded-lg ${editingEventId ? 'bg-blue-100 text-blue-600' : 'bg-rose-100 text-rose-600'}`}>
@@ -507,7 +524,7 @@ const EventManagement = ({ user }) => {
             </button>
 
             {/* Contenedor del Formulario (Visible siempre en PC, toggle en móvil) */}
-            <div className={`${showMobileForm ? 'block' : 'hidden lg:block'} bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 h-fit sticky top-6 max-h-[90vh] overflow-y-auto mb-8 lg:mb-0 animate-in slide-in-from-top-2 duration-300`}>
+            <div className={`${showMobileForm ? 'block' : 'hidden lg:block'} kp-card p-6 rounded-3xl h-fit sticky top-6 max-h-[90vh] overflow-y-auto mb-8 lg:mb-0 animate-in slide-in-from-top-2 duration-300`}>
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
               <Clock size={20} className="text-rose-600" /> {editingEventId ? 'Editar Evento' : 'Programar Evento'}
             </h2>
@@ -515,11 +532,11 @@ const EventManagement = ({ user }) => {
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2 sm:col-span-1">
                   <label className="block text-xs font-bold text-zinc-500 mb-1">Nombre del Evento</label>
-                  <input type="text" value={titulo} onChange={(e) => setTitulo(e.target.value)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-rose-500 dark:text-white" placeholder="Ej. Culto Dominical" required />
+                  <input type="text" value={titulo} onChange={(e) => setTitulo(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" placeholder="Ej. Culto Dominical" required />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
                   <label className="block text-xs font-bold text-zinc-500 mb-1">Tipo de Evento</label>
-                  <select value={tipoEvento} onChange={(e) => setTipoEvento(e.target.value)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-rose-500 font-medium dark:text-white">
+                  <select value={tipoEvento} onChange={(e) => setTipoEvento(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm font-medium">
                     <option value="Servicio Dominical">Servicio Dominical</option>
                     <option value="Culto de Jóvenes">Culto de Jóvenes</option>
                     <option value="Ensayo General">Ensayo General</option>
@@ -532,16 +549,16 @@ const EventManagement = ({ user }) => {
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2 sm:col-span-1">
                   <label className="block text-xs font-bold text-zinc-500 mb-1">Fecha del Evento</label>
-                  <input type="datetime-local" value={fecha} onChange={(e) => setFecha(e.target.value)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-rose-500 dark:text-white" required />
+                  <input type="datetime-local" value={fecha} onChange={(e) => setFecha(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" required />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
                   <label className="block text-xs font-bold text-zinc-500 mb-1">Fecha de Ensayo (Opcional)</label>
-                  <input type="datetime-local" value={fechaEnsayo} onChange={(e) => setFechaEnsayo(e.target.value)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-rose-500 dark:text-white" />
+                  <input type="datetime-local" value={fechaEnsayo} onChange={(e) => setFechaEnsayo(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" />
                 </div>
               </div>
               <div>
                 <label className="block text-xs font-bold text-zinc-500 mb-1">Instrucciones / Notas Generales</label>
-              <textarea value={notasGenerales} onChange={(e) => setNotasGenerales(e.target.value)} placeholder="Añade instrucciones del evento..." className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-rose-500 resize-none h-36 dark:text-white"></textarea>
+              <textarea value={notasGenerales} onChange={(e) => setNotasGenerales(e.target.value)} placeholder="Añade instrucciones del evento..." className="kp-input w-full p-2.5 rounded-xl text-sm resize-none h-36"></textarea>
               </div>
 
               {/* Constructor de Setlist (Drag & Drop) */}
@@ -549,7 +566,7 @@ const EventManagement = ({ user }) => {
                 <label className="block text-xs font-bold text-zinc-500 mb-2 flex items-center gap-1"><AlignLeft size={14} /> Constructor de Setlist</label>
                 
                 {/* Lista Arrastrable */}
-                <div className="space-y-1.5 mb-3 min-h-[3rem] bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 border-dashed rounded-xl p-2">
+                <div className="kp-empty-state space-y-1.5 mb-3 min-h-[3rem] border-dashed rounded-xl p-2">
                   {setlist.length === 0 && <p className="text-xs text-zinc-400 text-center py-2 italic">Añade canciones o momentos aquí...</p>}
                   {setlist.map((item, idx) => (
                     <div 
@@ -592,7 +609,7 @@ const EventManagement = ({ user }) => {
                         onChange={(e) => { setSearchTerm(e.target.value); setShowDropdown(true); }} 
                         onFocus={() => setShowDropdown(true)}
                         onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
-                        className="w-full pl-8 p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-xs bg-zinc-50 dark:bg-zinc-950 focus:ring-rose-500 dark:text-white outline-none"
+                        className="kp-input w-full pl-8 p-2 rounded-lg text-xs"
                         placeholder="Buscar canción..."
                       />
                       {showDropdown && searchTerm && (
@@ -615,8 +632,8 @@ const EventManagement = ({ user }) => {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <input type="text" value={textoNota} onChange={(e) => setTextoNota(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addToSetlist('note', textoNota))} placeholder="Añadir momento (Ej. Predica)" className="flex-1 p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-xs bg-zinc-50 dark:bg-zinc-950 focus:ring-rose-500 dark:text-white" />
-                    <button type="button" onClick={() => addToSetlist('note', textoNota)} className="px-3 bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors"><Plus size={16}/></button>
+                    <input type="text" value={textoNota} onChange={(e) => setTextoNota(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addToSetlist('note', textoNota))} placeholder="Añadir momento (Ej. Predica)" className="kp-input flex-1 p-2 rounded-lg text-xs" />
+                    <button type="button" onClick={() => addToSetlist('note', textoNota)} className="kp-button-secondary px-3 rounded-lg transition-colors"><Plus size={16}/></button>
                   </div>
                   <div className="flex gap-2 flex-wrap mt-1">
                     <button type="button" onClick={() => addToSetlist('note', '🎤 BLOQUE DE EXALTACIÓN | Coros: ')} className="text-[10px] font-bold bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 px-2 py-1 rounded border border-indigo-100 dark:border-indigo-500/20 hover:bg-indigo-100 dark:hover:bg-indigo-500/30 transition-colors">+ Bloque Exaltación</button>
@@ -775,7 +792,7 @@ const EventManagement = ({ user }) => {
                     Cancelar
                   </button>
                 )}
-                <button type="submit" disabled={isSaving} className={`flex items-center justify-center gap-2 py-3 px-6 rounded-xl shadow-md text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 transition-all active:scale-95 ${editingEventId ? 'w-2/3' : 'w-full'}`}>
+                <button type="submit" disabled={isSaving} className={`kp-button-primary flex items-center justify-center gap-2 py-3 px-6 rounded-xl text-sm font-bold disabled:opacity-50 transition-all active:scale-95 ${editingEventId ? 'w-2/3' : 'w-full'}`}>
                   <Save size={18} /> {isSaving ? 'Guardando...' : (editingEventId ? 'Actualizar Cambios' : 'Agendar Evento')}
                 </button>
               </div>
@@ -786,13 +803,13 @@ const EventManagement = ({ user }) => {
 
         {/* Columna Derecha: Lista de Eventos */}
         <div className={`space-y-4 ${esAdmin ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
-          <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">Próximos Eventos</h2>
+          <h2 className="text-lg font-black text-zinc-100 mb-4">Próximos Eventos</h2>
           {loading ? (
             <div className="text-zinc-500 text-center py-8 animate-pulse">Cargando agenda...</div>
           ) : (
             <>
               {eventosPendientes.length === 0 ? (
-                <div className="text-center py-12 bg-zinc-50 dark:bg-zinc-800/30 rounded-3xl border border-dashed border-zinc-200 dark:border-zinc-800">
+                <div className="kp-empty-state text-center py-12 rounded-3xl">
                   <p className="text-zinc-500 font-medium">No hay eventos pendientes.</p>
                 </div>
               ) : (
@@ -801,7 +818,7 @@ const EventManagement = ({ user }) => {
 
               {eventosCompletados.length > 0 && (
                 <div className="mt-8 pt-6 border-t border-zinc-200 dark:border-zinc-800">
-                  <button onClick={() => setShowCompletados(!showCompletados)} className="flex items-center justify-between w-full p-4 bg-zinc-100 dark:bg-zinc-800/80 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-2xl transition-colors text-zinc-700 dark:text-zinc-300 font-bold active:scale-[0.99]">
+                  <button onClick={() => setShowCompletados(!showCompletados)} className="kp-panel flex items-center justify-between w-full p-4 rounded-2xl transition-colors text-zinc-300 font-bold active:scale-[0.99]">
                     <span className="flex items-center gap-2"><CheckCircle size={20} className="text-emerald-600"/> Historial: Eventos Completados ({eventosCompletados.length})</span>
                     {showCompletados ? <ChevronUp size={20}/> : <ChevronDown size={20}/>}
                   </button>

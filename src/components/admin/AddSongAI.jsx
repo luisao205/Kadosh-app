@@ -288,17 +288,17 @@ const AddSongAI = ({ user }) => {
 
   return (
     <div className="max-w-5xl mx-auto animate-in fade-in duration-500">
-      <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 md:p-6 backdrop-blur-sm">
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 rounded-2xl shrink-0">
+          <div className="p-3 bg-blue-500/10 text-blue-300 border border-blue-500/20 rounded-2xl shrink-0">
           <Sparkles size={28} />
         </div>
         <div>
-          <h1 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">Añadir Canción</h1>
-          <p className="text-zinc-500 dark:text-zinc-400 mt-1 text-sm font-medium">Añade canciones manualmente o usa el generador IA.</p>
+          <h1 className="text-3xl font-black text-white tracking-tight">Añadir Canción</h1>
+          <p className="text-zinc-400 mt-1 text-sm font-medium">Crea una canción con acordes, secciones, tonos y vista previa musical.</p>
         </div>
         </div>
-        <button onClick={() => setShowImportModal(true)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-xl font-bold text-sm shadow-sm hover:bg-zinc-800 dark:hover:bg-white transition-colors">
+        <button onClick={() => setShowImportModal(true)} className="kp-button-secondary flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors">
           <Download size={16}/> Importar Texto (ChordPro)
         </button>
       </header>
@@ -306,7 +306,7 @@ const AddSongAI = ({ user }) => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Columna Izquierda: Búsqueda y Metadatos */}
         <div className="space-y-6">
-          <div className="relative bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+          <div className="relative kp-card p-6 rounded-3xl overflow-hidden">
             {/* BLOQUEO VISUAL: "En Producción" SOLO PARA LA IA */}
             <div className="absolute inset-0 z-50 bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-[2px] flex items-center justify-center border border-zinc-200/50 dark:border-zinc-800/50">
               <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl shadow-xl border border-zinc-200 dark:border-zinc-800 text-center max-w-[250px] mx-4 animate-in zoom-in-95">
@@ -364,18 +364,18 @@ const AddSongAI = ({ user }) => {
             </div>
           </div>
 
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="kp-card p-6 rounded-3xl grid grid-cols-1 sm:grid-cols-2 gap-4">
              <div className="col-span-2">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Título de la Canción</label>
-                <input type="text" value={titulo} onChange={(e)=>setTitulo(e.target.value)} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" />
+                <input type="text" value={titulo} onChange={(e)=>setTitulo(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" />
              </div>
              <div className="col-span-2">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Artista / Banda</label>
-                <input type="text" value={artista} onChange={(e)=>setArtista(e.target.value)} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" />
+                <input type="text" value={artista} onChange={(e)=>setArtista(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" />
              </div>
              <div className="col-span-1">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Tono Original</label>
-                <select value={TONOS_DISPONIBLES.includes(tono) ? tono : ''} onChange={(e)=>setTono(e.target.value || tono)} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 font-bold">
+                <select value={TONOS_DISPONIBLES.includes(tono) ? tono : ''} onChange={(e)=>setTono(e.target.value || tono)} className="kp-input w-full p-2 rounded-xl text-sm font-bold">
                   {!TONOS_DISPONIBLES.includes(tono) && <option value="">{tono || 'Seleccionar'}</option>}
                   {TONOS_DISPONIBLES.map(key => <option key={key} value={key}>{key}</option>)}
                 </select>
@@ -412,21 +412,21 @@ const AddSongAI = ({ user }) => {
              </div>
              <div className="col-span-1">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">BPM</label>
-                <input type="number" value={bpm} onChange={(e)=>setBpm(e.target.value)} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" placeholder="Ej. 120" />
+                <input type="number" value={bpm} onChange={(e)=>setBpm(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" placeholder="Ej. 120" />
              </div>
              <div className="col-span-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Pista o Secuencia de Audio (MP3)</label>
-                <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files[0])} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-blue-50 dark:file:bg-blue-500/10 file:text-blue-700 dark:file:text-blue-400 hover:file:bg-blue-100 dark:hover:file:bg-blue-500/20 transition-all cursor-pointer" />
+                <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files[0])} className="kp-input w-full p-2 rounded-xl text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-blue-500/10 file:text-blue-300 hover:file:bg-blue-500/20 transition-all cursor-pointer" />
              </div>
              <div className="col-span-2 mt-1">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">O pega un Enlace de YouTube</label>
-                <input type="url" value={youtubeUrl} onChange={(e)=>setYoutubeUrl(e.target.value)} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" placeholder="https://www.youtube.com/watch?v=..." />
+                <input type="url" value={youtubeUrl} onChange={(e)=>setYoutubeUrl(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" placeholder="https://www.youtube.com/watch?v=..." />
              </div>
           </div>
         </div>
 
         {/* Columna Derecha: Resultado y Editor */}
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 flex flex-col h-[400px] md:h-[600px]">
+        <div className="kp-card p-6 rounded-3xl flex flex-col h-[430px] md:h-[640px]">
           <div className="mb-3">
             <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2 flex justify-between items-center">
               <span>Editor de Letra y Acordes</span>
@@ -486,14 +486,14 @@ const AddSongAI = ({ user }) => {
           <textarea 
             value={letraGenerada} 
             onChange={(e) => setLetraGenerada(e.target.value)} 
-            className="flex-1 w-full p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-blue-500 bg-zinc-50 dark:bg-zinc-950 dark:text-white text-sm font-mono whitespace-pre-wrap resize-none"
+            className="kp-input flex-1 w-full p-4 rounded-2xl text-sm font-mono whitespace-pre-wrap resize-none"
             placeholder="Pega aquí la letra y haz clic en los botones de arriba para agregar las secciones..."
           ></textarea>
           {chordWarnings.length > 0 && (
-            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-              <p className="font-black mb-1 flex items-center gap-1"><AlertCircle size={14}/> Revisa estos acordes:</p>
+            <div className="mt-3 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200">
+              <p className="font-black mb-2 flex items-center gap-1"><AlertCircle size={14}/> Revisa estos acordes:</p>
               <div className="flex flex-wrap gap-1.5">
-                {chordWarnings.map(chord => <span key={chord} className="font-mono font-bold bg-white/70 border border-amber-200 rounded px-1.5 py-0.5">[{chord}]</span>)}
+                {chordWarnings.map(chord => <span key={chord} className="font-mono font-bold bg-black/20 border border-amber-400/25 rounded-lg px-2 py-1">[{chord}]</span>)}
               </div>
             </div>
           )}
@@ -501,7 +501,7 @@ const AddSongAI = ({ user }) => {
           <button 
             onClick={handleSave}
             disabled={!letraGenerada || isSaving}
-            className="mt-4 w-full flex items-center justify-center gap-2 py-3 px-6 rounded-xl shadow-md text-sm font-bold text-white bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-white disabled:opacity-50 transition-all active:scale-95"
+            className="kp-button-primary mt-4 w-full flex items-center justify-center gap-2 py-3 px-6 rounded-xl text-sm font-bold disabled:opacity-50 transition-all active:scale-95"
           >
             <Save size={18} />
             {isSaving ? 'Guardando...' : 'Guardar Canción'}
@@ -509,12 +509,12 @@ const AddSongAI = ({ user }) => {
         </div>
       </div>
 
-      <section className="mt-8 bg-white dark:bg-zinc-900 p-5 md:p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800">
+      <section className="kp-card mt-8 p-5 md:p-6 rounded-3xl">
         <div className="flex items-center justify-between gap-3 mb-4">
           <h2 className="text-sm font-black text-zinc-900 dark:text-white flex items-center gap-2"><Eye size={16} className="text-blue-600"/> Vista previa para músicos</h2>
           <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{parsedPreview.length} secciones</span>
         </div>
-        <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 p-4 max-h-[420px] overflow-y-auto">
+        <div className="rounded-2xl border border-white/10 bg-zinc-950/60 p-4 max-h-[420px] overflow-y-auto">
           <div className="mb-5">
             <p className="text-xl font-black text-zinc-900 dark:text-white">{titulo || 'Título sin definir'}</p>
             <p className="text-sm font-bold text-zinc-500">{artista || 'Artista sin definir'} · Tono {traducirAcorde(normalizeKey(tono), user?.preferencias?.formatoAcordes, notacion)}</p>

@@ -1,3 +1,150 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --kp-bg: #050507;
+  --kp-bg-soft: #0b0b10;
+  --kp-surface: rgba(18, 18, 24, 0.88);
+  --kp-surface-2: rgba(28, 28, 36, 0.9);
+  --kp-border: rgba(255, 255, 255, 0.08);
+  --kp-border-strong: rgba(255, 255, 255, 0.16);
+  --kp-text: #ffffff;
+  --kp-muted: #9ca3af;
+  --kp-purple: #7c3aed;
+  --kp-green: #10b981;
+  --kp-blue: #3b82f6;
+  --kp-amber: #f59e0b;
+  --kp-red: #ef4444;
+}
+
+@layer base {
+  html {
+    background: var(--kp-bg);
+  }
+
+  body {
+    min-width: 320px;
+    background: var(--kp-bg);
+  }
+}
+
+@layer components {
+  .kp-app-shell {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(124, 58, 237, 0.16), transparent 32%),
+      linear-gradient(rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+      var(--kp-bg);
+    background-size: auto, 88px 88px, 88px 88px, auto;
+    color: var(--kp-text);
+  }
+
+  .kp-grid-bg {
+    background:
+      radial-gradient(circle at 50% 0%, rgba(124, 58, 237, 0.16), transparent 32%),
+      linear-gradient(rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px);
+    background-size: auto, 88px 88px, 88px 88px;
+  }
+
+  .kp-card {
+    border: 1px solid var(--kp-border);
+    background: var(--kp-surface);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(14px);
+  }
+
+  .kp-panel {
+    border: 1px solid var(--kp-border);
+    background: rgba(10, 10, 14, 0.72);
+    backdrop-filter: blur(14px);
+  }
+
+  .kp-input {
+    width: 100%;
+    border: 1px solid var(--kp-border-strong);
+    background: rgba(5, 5, 7, 0.72);
+    color: var(--kp-text);
+    outline: none;
+    transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+  }
+
+  .kp-input::placeholder {
+    color: rgba(156, 163, 175, 0.72);
+  }
+
+  .kp-input:focus {
+    border-color: rgba(124, 58, 237, 0.68);
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.18);
+    background: rgba(9, 9, 12, 0.92);
+  }
+
+  .kp-button-primary {
+    border: 1px solid rgba(124, 58, 237, 0.5);
+    background: linear-gradient(135deg, #7c3aed, #2563eb);
+    color: white;
+    box-shadow: 0 18px 45px rgba(37, 99, 235, 0.2);
+    transition: transform 160ms ease, filter 160ms ease, opacity 160ms ease;
+  }
+
+  .kp-button-primary:hover {
+    filter: brightness(1.08);
+  }
+
+  .kp-button-primary:active {
+    transform: scale(0.98);
+  }
+
+  .kp-button-secondary {
+    border: 1px solid var(--kp-border);
+    background: rgba(39, 39, 48, 0.72);
+    color: #e5e7eb;
+    transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+  }
+
+  .kp-button-secondary:hover {
+    border-color: var(--kp-border-strong);
+    background: rgba(63, 63, 70, 0.72);
+  }
+
+  .kp-button-secondary:active {
+    transform: scale(0.98);
+  }
+
+  .kp-button-danger {
+    border: 1px solid rgba(239, 68, 68, 0.36);
+    background: rgba(127, 29, 29, 0.42);
+    color: #fecaca;
+    transition: background 160ms ease, transform 160ms ease;
+  }
+
+  .kp-button-danger:hover {
+    background: rgba(185, 28, 28, 0.58);
+  }
+
+  .kp-badge {
+    border: 1px solid var(--kp-border);
+    background: rgba(255, 255, 255, 0.06);
+    color: #d4d4d8;
+  }
+
+  .kp-modal {
+    border: 1px solid var(--kp-border);
+    background: rgba(9, 9, 12, 0.96);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(18px);
+  }
+
+  .kp-empty-state {
+    border: 1px dashed var(--kp-border-strong);
+    background: rgba(255, 255, 255, 0.035);
+    color: var(--kp-muted);
+  }
+
+  .kp-live-badge {
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.13);
+    color: #6ee7b7;
+  }
+}

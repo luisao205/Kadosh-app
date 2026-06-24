@@ -154,7 +154,7 @@ const AdminLayout = ({ children, user }) => {
   }, [user?.uid]);
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex text-zinc-900 dark:text-zinc-100 transition-colors duration-300">
+    <div className="dark kp-app-shell min-h-screen flex text-zinc-100 transition-colors duration-300">
       {/* Fondo oscuro para móvil cuando el menú está abierto */}
       {isOpen && (
         <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsOpen(false)} />
@@ -176,8 +176,8 @@ const AdminLayout = ({ children, user }) => {
 
       {/* Panel de Notificaciones (Flotante) */}
       {showNotifs && (
-        <div className="fixed top-16 right-4 md:left-64 md:top-16 md:right-auto md:ml-4 w-80 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-          <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-800/50">
+        <div className="kp-modal fixed top-16 right-4 md:left-64 md:top-16 md:right-auto md:ml-4 w-80 rounded-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div className="p-4 border-b border-white/10 flex justify-between items-center bg-zinc-950/60">
             <h3 className="font-bold text-zinc-900 dark:text-zinc-100">Notificaciones</h3>
             <button onClick={() => setShowNotifs(false)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"><X size={16}/></button>
           </div>
@@ -188,7 +188,7 @@ const AdminLayout = ({ children, user }) => {
               sysNotifs.map(n => (
               <div key={n.id} 
                 onClick={() => { if(n.url) { navigate(n.url); setShowNotifs(false); } }} 
-                className={`p-4 border-b border-zinc-100 dark:border-zinc-800/50 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors ${n.url ? 'cursor-pointer' : ''}`}
+                className={`p-4 border-b border-white/5 hover:bg-white/5 transition-colors ${n.url ? 'cursor-pointer' : ''}`}
               >
                   <p className="text-xs font-black text-blue-600 dark:text-blue-400 mb-1">{n.titulo}</p>
                   <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 leading-tight">{n.mensaje}</p>
@@ -201,19 +201,19 @@ const AdminLayout = ({ children, user }) => {
       )}
 
       {/* Barra Lateral (Sidebar) */}
-      <aside className={`fixed inset-y-0 left-0 bg-white dark:bg-zinc-900 w-64 border-r border-zinc-200 dark:border-zinc-800 z-50 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:flex-shrink-0 shadow-lg md:shadow-none flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="h-16 flex items-center justify-between px-6 border-b border-zinc-200 dark:border-zinc-800">
+      <aside className={`fixed inset-y-0 left-0 bg-zinc-950/88 backdrop-blur-md w-64 border-r border-white/10 z-50 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:flex-shrink-0 shadow-2xl md:shadow-none flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="h-16 flex items-center justify-between px-6 border-b border-white/10">
           <div className="flex items-center gap-2">
             <span className="text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-violet-600 tracking-tight">Kadosh</span>
-            <span className="text-[10px] font-bold tracking-widest uppercase bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 px-2 py-0.5 rounded-md shadow-sm">App</span>
+            <span className="text-[10px] font-bold tracking-widest uppercase kp-badge px-2 py-0.5 rounded-md">Pro</span>
           </div>
           <div className="flex items-center gap-2">
             {/* Campanita Desktop */}
-            <button className="hidden md:flex relative p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors" onClick={() => {setShowNotifs(!showNotifs); setUnreadNotifs(0);}}>
+            <button className="hidden md:flex relative p-2 text-zinc-400 hover:bg-white/10 hover:text-white rounded-full transition-colors" onClick={() => {setShowNotifs(!showNotifs); setUnreadNotifs(0);}}>
               <Bell size={20} />
               {unreadNotifs > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-zinc-900"></span>}
             </button>
-            <button className="md:hidden text-zinc-500 hover:text-zinc-800" onClick={() => setIsOpen(false)}>
+            <button className="md:hidden text-zinc-400 hover:text-white" onClick={() => setIsOpen(false)}>
               <X size={24} />
             </button>
           </div>
@@ -226,7 +226,7 @@ const AdminLayout = ({ children, user }) => {
                 key={item.name}
                 to={item.path}
                 onClick={() => setIsOpen(false)}
-                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium ${isActive ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 shadow-sm' : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-100'}`}
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium ${isActive ? 'border border-violet-400/30 bg-violet-500/15 text-violet-100 shadow-[0_12px_35px_rgba(124,58,237,0.16)]' : 'text-zinc-400 hover:bg-white/[0.07] hover:text-zinc-100'}`}
               >
                 {item.icon}
                 {item.name}
@@ -234,10 +234,10 @@ const AdminLayout = ({ children, user }) => {
             );
           })}
         </nav>
-        <div className="p-4 border-t border-zinc-200 dark:border-zinc-800">
+        <div className="p-4 border-t border-white/10">
           <button 
             onClick={handleLogout}
-            className="flex items-center gap-3 px-4 py-3 w-full rounded-xl transition-all font-bold text-red-600 dark:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-700 dark:hover:text-red-400 active:scale-95"
+            className="kp-button-danger flex items-center gap-3 px-4 py-3 w-full rounded-xl transition-all font-bold active:scale-95"
           >
             <LogOut size={20} />
             Cerrar Sesión
@@ -248,18 +248,18 @@ const AdminLayout = ({ children, user }) => {
       {/* Contenido Principal */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Cabecera Móvil (Hamburguesa) */}
-        <header className="h-16 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between px-4 md:hidden shadow-sm transition-colors">
+        <header className="h-16 bg-zinc-950/88 backdrop-blur-md border-b border-white/10 flex items-center justify-between px-4 md:hidden shadow-sm transition-colors">
           <div className="flex items-center">
-            <button onClick={() => setIsOpen(true)} className="text-zinc-600 dark:text-zinc-400 p-2 -ml-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg">
+            <button onClick={() => setIsOpen(true)} className="text-zinc-400 p-2 -ml-2 hover:bg-white/10 hover:text-white rounded-lg">
               <Menu size={24} />
             </button>
             <div className="ml-2 flex items-center gap-1.5">
-              <span className="font-black text-zinc-800 dark:text-zinc-100 text-lg tracking-tight">Kadosh</span>
-              <span className="text-[10px] font-bold uppercase text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">App</span>
+              <span className="font-black text-zinc-100 text-lg tracking-tight">Kadosh</span>
+              <span className="text-[10px] font-bold uppercase kp-badge px-1.5 py-0.5 rounded">Pro</span>
             </div>
           </div>
           {/* Campanita Móvil */}
-          <button className="relative p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors" onClick={() => {setShowNotifs(!showNotifs); setUnreadNotifs(0);}}>
+          <button className="relative p-2 text-zinc-400 hover:bg-white/10 hover:text-white rounded-full transition-colors" onClick={() => {setShowNotifs(!showNotifs); setUnreadNotifs(0);}}>
             <Bell size={22} />
             {unreadNotifs > 0 && <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-zinc-900"></span>}
           </button>

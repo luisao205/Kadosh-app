@@ -200,36 +200,36 @@ const SongList = ({ user }) => {
 
   return (
     <div className="max-w-6xl mx-auto animate-in fade-in duration-500">
-      <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 md:p-6 backdrop-blur-sm">
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-2xl">
+          <div className="p-3 bg-blue-500/10 text-blue-300 border border-blue-500/20 rounded-2xl">
             <Music size={28} />
           </div>
           <div>
-            <h1 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">Repertorio</h1>
-            <p className="text-zinc-500 mt-1 text-sm font-medium">{canciones.length} canciones disponibles en la nube.</p>
+            <h1 className="text-3xl font-black text-white tracking-tight">Repertorio</h1>
+            <p className="text-zinc-400 mt-1 text-sm font-medium">{canciones.length} canciones disponibles en la nube.</p>
           </div>
         </div>
         
         <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
           {user?.rol !== 'musico' && (
-            <button onClick={handleExportBackup} className="flex items-center justify-center gap-2 px-3 py-2.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-xl font-bold text-sm shadow-sm transition-colors active:scale-95 w-full sm:w-max" title="Descargar Respaldo JSON">
+            <button onClick={handleExportBackup} className="kp-button-secondary flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl font-bold text-sm transition-colors active:scale-95 w-full sm:w-max" title="Descargar Respaldo JSON">
               <Download size={16} />
             </button>
           )}
           {user?.rol !== 'musico' && (
-            <button onClick={() => setShowMedleyModal(true)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-violet-100 text-violet-700 hover:bg-violet-200 rounded-xl font-bold text-sm shadow-sm transition-colors active:scale-95 w-full sm:w-max">
+            <button onClick={() => setShowMedleyModal(true)} className="kp-button-secondary flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors active:scale-95 w-full sm:w-max">
               <Layers size={16} /> Crear Medley
             </button>
           )}
           {user?.rol !== 'musico' && (
-            <button onClick={() => navigate('/añadir')} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-bold text-sm shadow-sm transition-colors active:scale-95 w-full sm:w-max">
+            <button onClick={() => navigate('/añadir')} className="kp-button-primary flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors active:scale-95 w-full sm:w-max">
               <Plus size={16} /> Añadir
             </button>
           )}
           <div className="relative w-full sm:w-64">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-400"><Search size={18} /></div>
-            <input type="text" value={filtro} onChange={(e) => setFiltro(e.target.value)} className="block w-full pl-10 pr-3 py-2.5 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-blue-500 bg-white dark:bg-zinc-900 dark:text-white text-sm font-medium shadow-sm" placeholder="Buscar canción..." />
+            <input type="text" value={filtro} onChange={(e) => setFiltro(e.target.value)} className="kp-input block w-full pl-10 pr-3 py-2.5 rounded-xl text-sm font-medium" placeholder="Buscar canción..." />
           </div>
         </div>
       </header>
@@ -254,7 +254,7 @@ const SongList = ({ user }) => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {cancionesFiltradas.map(cancion => (
-            <div key={cancion.id} className="bg-white dark:bg-zinc-900 p-5 rounded-2xl shadow-sm border border-zinc-200 dark:border-zinc-800 hover:border-blue-300 dark:hover:border-blue-500/50 transition-colors group flex flex-col">
+            <div key={cancion.id} className="kp-card p-5 rounded-2xl hover:border-blue-400/40 transition-colors group flex flex-col">
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-bold text-lg text-zinc-900 dark:text-zinc-100 leading-tight">{cancion.titulo}</h3>
@@ -296,7 +296,7 @@ const SongList = ({ user }) => {
           ))}
           
           {cancionesFiltradas.length === 0 && (
-            <div className="col-span-full text-center py-12 bg-zinc-50 dark:bg-zinc-800/30 rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-800">
+            <div className="kp-empty-state col-span-full text-center py-12 rounded-2xl">
               <p className="text-zinc-500 font-medium">No se encontraron canciones.</p>
             </div>
           )}

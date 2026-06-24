@@ -249,10 +249,10 @@ const UserProfile = ({ user }) => {
 
   return (
     <div className="max-w-4xl mx-auto animate-in fade-in duration-500 pb-12">
-      <header className="mb-8 flex items-center gap-3">
+      <header className="mb-8 flex flex-col gap-5 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 backdrop-blur-sm sm:flex-row sm:items-center md:p-6">
         
         <div className="relative group">
-          <div className="w-20 h-20 bg-violet-100 text-violet-700 rounded-3xl flex items-center justify-center overflow-hidden shadow-sm border border-violet-200">
+          <div className="w-20 h-20 bg-violet-500/10 text-violet-300 rounded-3xl flex items-center justify-center overflow-hidden shadow-2xl border border-violet-500/20">
             {isUploading ? (
               <Loader2 size={28} className="animate-spin text-violet-500" />
             ) : fotoUrl ? (
@@ -265,7 +265,7 @@ const UserProfile = ({ user }) => {
           <button 
             type="button"
             onClick={() => Capacitor.isNativePlatform() ? handleNativePhoto() : null}
-            className="absolute -bottom-2 -right-2 p-2 bg-zinc-900 text-white rounded-full shadow-lg cursor-pointer hover:bg-zinc-800 transition-colors active:scale-95 group-hover:scale-110"
+            className="absolute -bottom-2 -right-2 p-2 bg-violet-600 text-white rounded-full shadow-lg cursor-pointer hover:bg-violet-500 transition-colors active:scale-95 group-hover:scale-110"
           >
             <Camera size={14} />
             {!Capacitor.isNativePlatform() && (
@@ -275,14 +275,17 @@ const UserProfile = ({ user }) => {
         </div>
 
         <div className="ml-2">
-          <h1 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">Mi Perfil</h1>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h1 className="text-3xl font-black text-white tracking-tight">Mi Perfil</h1>
+            <span className="kp-badge rounded-lg px-2 py-1 text-[10px] font-black uppercase tracking-widest">{user?.rol || 'usuario'}</span>
+          </div>
           <p className="text-zinc-500 dark:text-zinc-400 mt-1 text-sm font-medium">
             Hola, <span className="text-violet-600 dark:text-violet-400 font-bold">{user?.nombre}</span>. Personaliza tu cuenta.
           </p>
         </div>
       </header>
 
-      <div className="bg-white dark:bg-zinc-900 p-6 md:p-8 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 transition-colors">
+      <div className="kp-card p-6 md:p-8 rounded-3xl transition-colors">
         <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-6 border-b border-zinc-100 dark:border-zinc-800 pb-4">Preferencias de la Aplicación</h2>
         
         <div className="space-y-8 max-w-md">
@@ -292,7 +295,7 @@ const UserProfile = ({ user }) => {
             <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2 flex items-center gap-2">
               <Quote size={18} className="text-violet-600" /> Biografía / Versículo
             </label>
-            <textarea value={biografia} onChange={(e) => setBiografia(e.target.value)} placeholder="Ej. Baterista de corazón | Salmos 150" className="w-full p-3 border border-zinc-200 dark:border-zinc-700 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 text-sm focus:ring-2 focus:ring-violet-500 outline-none resize-none h-20" />
+            <textarea value={biografia} onChange={(e) => setBiografia(e.target.value)} placeholder="Ej. Baterista de corazón | Salmos 150" className="kp-input w-full p-3 rounded-xl text-sm resize-none h-20" />
             <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">Esta información será visible para el equipo.</p>
           </div>
 
@@ -394,7 +397,7 @@ const UserProfile = ({ user }) => {
         </div>
 
         <div className="mt-10 pt-6 border-t border-zinc-100 dark:border-zinc-800">
-          <button onClick={handleSave} disabled={isSaving} className={`flex items-center justify-center gap-2 py-3 px-8 rounded-xl shadow-md text-sm font-bold disabled:opacity-50 transition-all active:scale-95 ${themeStyles[themeColor] || themeStyles.violet}`}>
+          <button onClick={handleSave} disabled={isSaving} className="kp-button-primary flex items-center justify-center gap-2 py-3 px-8 rounded-xl text-sm font-bold disabled:opacity-50 transition-all active:scale-95">
             <Save size={18} /> {isSaving ? 'Guardando...' : 'Guardar Preferencias'}
           </button>
         </div>

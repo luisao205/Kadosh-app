@@ -350,17 +350,17 @@ const EditSong = ({ user }) => {
 
   return (
     <div className="max-w-5xl mx-auto animate-in fade-in duration-500">
-      <header className="mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <header className="mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 md:p-6 backdrop-blur-sm">
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 rounded-2xl">
+          <div className="p-3 bg-amber-500/10 text-amber-300 border border-amber-500/20 rounded-2xl">
             <Edit3 size={28} />
           </div>
           <div>
-            <h1 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">Editar Canción</h1>
-          <p className="text-zinc-500 dark:text-zinc-400 mt-1 text-sm font-medium">Gestiona el contenido, pistas de audio y fondos de proyección.</p>
+            <h1 className="text-3xl font-black text-white tracking-tight">Editar Canción</h1>
+          <p className="text-zinc-400 mt-1 text-sm font-medium">Gestiona contenido, tonos, pistas de audio y recursos de ensayo.</p>
           </div>
         </div>
-        <button onClick={() => navigate('/canciones')} className="flex w-full md:w-auto justify-center items-center gap-2 px-4 py-2.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl hover:bg-zinc-50 dark:hover:bg-zinc-800 font-bold text-sm text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors active:scale-95">
+        <button onClick={() => navigate('/canciones')} className="kp-button-secondary flex w-full md:w-auto justify-center items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors active:scale-95">
           <ArrowLeft size={16} />
           Volver al Repertorio
         </button>
@@ -368,18 +368,18 @@ const EditSong = ({ user }) => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Metadatos */}
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 h-fit grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="kp-card p-6 rounded-3xl h-fit grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="col-span-2">
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Título de la Canción</label>
-              <input type="text" value={titulo} onChange={(e)=>setTitulo(e.target.value)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" />
+              <input type="text" value={titulo} onChange={(e)=>setTitulo(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" />
             </div>
             <div className="col-span-2">
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Artista / Banda</label>
-              <input type="text" value={artista} onChange={(e)=>setArtista(e.target.value)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" />
+              <input type="text" value={artista} onChange={(e)=>setArtista(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" />
             </div>
             <div className="col-span-1">
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Tono Original</label>
-              <select value={TONOS_DISPONIBLES.includes(tono) ? tono : ''} onChange={(e)=>setTono(e.target.value || tono)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 font-bold">
+              <select value={TONOS_DISPONIBLES.includes(tono) ? tono : ''} onChange={(e)=>setTono(e.target.value || tono)} className="kp-input w-full p-2.5 rounded-xl text-sm font-bold">
                 {!TONOS_DISPONIBLES.includes(tono) && <option value="">{tono || 'Seleccionar'}</option>}
                 {TONOS_DISPONIBLES.map(key => <option key={key} value={key}>{key}</option>)}
               </select>
@@ -416,7 +416,7 @@ const EditSong = ({ user }) => {
             </div>
             <div className="col-span-1">
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">BPM</label>
-              <input type="number" value={bpm} onChange={(e)=>setBpm(e.target.value)} className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500" />
+              <input type="number" value={bpm} onChange={(e)=>setBpm(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" />
             </div>
             <div className="col-span-2">
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Etiquetas (Filtros de Repertorio)</label>
@@ -455,7 +455,7 @@ const EditSong = ({ user }) => {
                   <audio ref={audioRef} src={audioUrl} onTimeUpdate={handleTimeUpdate} onLoadedMetadata={(e) => setDuration(e.target.duration)} onEnded={() => setIsPlaying(false)} onCanPlay={(e) => { e.target.volume = volume; e.target.muted = isMuted; }} className="hidden" />
                 </div>
               )}
-              <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files[0])} className="w-full p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg text-sm bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:bg-white dark:focus:bg-zinc-900 focus:ring-2 focus:ring-blue-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-amber-50 dark:file:bg-amber-500/10 file:text-amber-700 dark:file:text-amber-400 hover:file:bg-amber-100 dark:hover:file:bg-amber-500/20 transition-all cursor-pointer" />
+              <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files[0])} className="kp-input w-full p-2 rounded-xl text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-amber-500/10 file:text-amber-300 hover:file:bg-amber-500/20 transition-all cursor-pointer" />
             </div>
             
             {/* NUEVO PANEL: MULTITRACKS / STEMS */}
@@ -581,7 +581,7 @@ const EditSong = ({ user }) => {
             </div>
 
             <div className="col-span-2 pt-4 mt-2 border-t border-zinc-100 dark:border-zinc-800">
-              <button onClick={handleSave} disabled={isSaving} className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-xl shadow-md text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-50 transition-all active:scale-95">
+              <button onClick={handleSave} disabled={isSaving} className="kp-button-primary w-full flex items-center justify-center gap-2 py-3 px-6 rounded-xl text-sm font-bold disabled:opacity-50 transition-all active:scale-95">
                 <Save size={18} />
                 {isSaving ? 'Guardando...' : 'Guardar Cambios'}
               </button>
@@ -589,7 +589,7 @@ const EditSong = ({ user }) => {
         </div>
 
         {/* Editor de Letra */}
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 flex flex-col h-[400px] md:h-[600px]">
+        <div className="kp-card p-6 rounded-3xl flex flex-col h-[430px] md:h-[640px]">
           <div className="mb-3">
             <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2 flex justify-between items-center">
               <span>Estructura de la Canción</span>
@@ -633,7 +633,7 @@ const EditSong = ({ user }) => {
           <textarea 
             value={letraRaw} 
             onChange={(e) => setLetraRaw(e.target.value)} 
-            className="flex-1 w-full p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-blue-500 bg-zinc-50 dark:bg-zinc-950 dark:text-white text-sm font-mono whitespace-pre-wrap resize-none"
+            className="kp-input flex-1 w-full p-4 rounded-2xl text-sm font-mono whitespace-pre-wrap resize-none"
           ></textarea>
         </div>
       </div>

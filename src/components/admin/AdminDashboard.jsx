@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Calendar, Music, BarChart3, TrendingUp, Mic2, Bell, CheckCircle2, XCircle, Cake, Trash2, MessageCircle } from 'lucide-react';
+import { Users, Calendar, Music, BarChart3, TrendingUp, Mic2, Bell, CheckCircle2, XCircle, Cake, Trash2, MessageCircle, PlayCircle, Plus } from 'lucide-react';
 import { collection, query, where, orderBy, limit, onSnapshot, getDoc, doc, getDocs, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { traducirAcorde } from '../../utils/musicCore';
@@ -248,7 +248,7 @@ const AdminDashboard = ({ user }) => {
 
   return (
     <div className="max-w-6xl mx-auto animate-in fade-in duration-500">
-      <header className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <header className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 md:p-6 backdrop-blur-sm">
         <div>
           <h1 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">
             ¡Hola, <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-violet-600 dark:from-blue-400 dark:to-violet-400">{user?.nombre?.split(' ')[0] || 'Usuario'}</span>! 👋
@@ -259,6 +259,25 @@ const AdminDashboard = ({ user }) => {
           <img src={user.fotoPerfil} alt={user.nombre} className="w-14 h-14 rounded-full object-cover border-2 border-white dark:border-zinc-800 shadow-md hidden sm:block" />
         )}
       </header>
+
+      <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-4">
+        {[
+          { label: 'Repertorio', path: '/canciones', icon: Music, color: 'text-blue-300' },
+          { label: 'Eventos y Setlists', path: '/eventos', icon: Calendar, color: 'text-rose-300' },
+          { label: 'Controlador Multimedia', path: '/multimedia-hub', icon: PlayCircle, color: 'text-violet-300' },
+          { label: 'Añadir Canción', path: '/añadir', icon: Plus, color: 'text-emerald-300', adminOnly: true }
+        ].filter(item => !item.adminOnly || !esMusico).map(item => {
+          const Icon = item.icon;
+          return (
+            <button key={item.label} onClick={() => navigate(item.path)} className="kp-panel flex items-center gap-3 rounded-2xl px-4 py-3 text-left transition-all hover:border-white/20 hover:bg-white/[0.06] active:scale-[0.99]">
+              <span className={`flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.07] ${item.color}`}>
+                <Icon size={19} />
+              </span>
+              <span className="min-w-0 text-sm font-black text-zinc-100">{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
 
       {/* Alertas de RSVP */}
       {(invitaciones.length > 0 || cumpleanos.some(c => c.diffDays === 0)) && (
@@ -305,7 +324,7 @@ const AdminDashboard = ({ user }) => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Tarjeta de Próximo Evento (Ocupa 2 columnas en PC) */}
-        <div className="bg-white dark:bg-zinc-900 p-6 md:p-8 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 lg:col-span-2 transition-colors">
+        <div className="kp-card p-6 md:p-8 rounded-3xl lg:col-span-2 transition-colors">
           <h2 className="text-xl font-bold text-zinc-800 dark:text-zinc-100 mb-6">{proximoEvento ? `Próximo: ${proximoEvento.titulo}` : 'Próximos Eventos'}</h2>
           {proximoEvento ? (
             <>
@@ -339,7 +358,7 @@ const AdminDashboard = ({ user }) => {
                   return ( 
                   <div key={`${cancion.id}-${idx}`} onClick={() => {
                     navigate(`/setlist/${proximoEvento.id}`);
-                  }} className="flex items-center justify-between p-4 bg-zinc-50/50 dark:bg-zinc-800/50 rounded-2xl border border-zinc-100 dark:border-zinc-700 hover:border-blue-200 dark:hover:border-blue-500/50 transition-colors cursor-pointer group">
+                  }} className="flex items-center justify-between p-4 bg-white/[0.04] rounded-2xl border border-white/10 hover:border-blue-400/40 transition-colors cursor-pointer group">
                     <div>
                       <p className="font-bold text-zinc-800 dark:text-zinc-200 group-hover:text-blue-700 dark:group-hover:text-blue-400 transition-colors flex flex-wrap items-center gap-2">
                         {currentCount}. {cancion.titulo}
@@ -352,19 +371,19 @@ const AdminDashboard = ({ user }) => {
                     );
                   });
                 })()}
-                {(cancionesEvento.length === 0) && <p className="text-sm text-zinc-500 dark:text-zinc-400">No hay canciones agregadas a este evento.</p>}
+                {(cancionesEvento.length === 0) && <p className="kp-empty-state rounded-2xl p-5 text-sm font-bold">No hay canciones agregadas a este evento.</p>}
               </div>
             </>
           ) : (
-            <div className="text-center py-10 bg-zinc-50 dark:bg-zinc-800/30 rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-800">
+            <div className="kp-empty-state text-center py-10 rounded-2xl">
               <p className="text-zinc-500 dark:text-zinc-400 font-medium mb-2">No tienes eventos próximos programados.</p>
-              {!esMusico && <button onClick={() => navigate('/eventos')} className="text-blue-600 dark:text-blue-400 font-bold text-sm hover:underline">Agendar evento</button>}
+              {!esMusico && <button onClick={() => navigate('/eventos')} className="kp-button-secondary rounded-xl px-4 py-2 text-sm font-black">Agendar evento</button>}
             </div>
           )}
         </div>
 
         {/* Tarjeta de Estadísticas Rápidas (Destacada) */}
-        <div className="bg-gradient-to-br from-blue-600 to-violet-700 dark:from-blue-800 dark:to-violet-900 p-8 rounded-3xl shadow-lg text-white relative overflow-hidden transition-colors">
+        <div className="bg-gradient-to-br from-blue-600/95 to-violet-700/95 p-8 rounded-3xl shadow-2xl shadow-violet-950/25 border border-violet-400/20 text-white relative overflow-hidden transition-colors">
           <div className="absolute top-0 right-0 p-8 opacity-10">
             <svg className="w-24 h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
           </div>
@@ -384,7 +403,7 @@ const AdminDashboard = ({ user }) => {
 
         {/* Tarjeta de Gestión de Equipo */}
         {esDueno && (
-          <div className="bg-white dark:bg-zinc-900 p-6 md:p-8 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 flex flex-col justify-center transition-colors">
+          <div className="kp-card p-6 md:p-8 rounded-3xl flex flex-col justify-center transition-colors">
             <h2 className="text-xl font-bold text-zinc-800 dark:text-zinc-100 mb-2 flex items-center gap-2">
               <Users size={24} className="text-indigo-600" /> Tu Equipo
             </h2>
@@ -404,7 +423,7 @@ const AdminDashboard = ({ user }) => {
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in slide-in-from-bottom-5">
         
         {/* Top Canciones */}
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 transition-colors">
+        <div className="kp-card p-6 rounded-3xl transition-colors">
           <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
             <TrendingUp size={20} className="text-blue-500" /> Top Canciones
           </h3>
@@ -422,7 +441,7 @@ const AdminDashboard = ({ user }) => {
         </div>
 
         {/* Top Cantantes */}
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 transition-colors">
+        <div className="kp-card p-6 rounded-3xl transition-colors">
           <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
             <Mic2 size={20} className="text-rose-500" /> Participación Vocal
           </h3>
@@ -440,16 +459,16 @@ const AdminDashboard = ({ user }) => {
         </div>
 
         {/* Resumen de Actividad */}
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 transition-colors flex flex-col justify-center">
+        <div className="kp-card p-6 rounded-3xl transition-colors flex flex-col justify-center">
           <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
             <BarChart3 size={20} className="text-violet-500" /> Métricas Globales
           </h3>
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-zinc-50 dark:bg-zinc-800/50 p-4 rounded-2xl text-center border border-zinc-100 dark:border-zinc-800">
+            <div className="kp-panel p-4 rounded-2xl text-center">
               <p className="text-4xl font-black text-zinc-900 dark:text-white mb-1">{stats.totalEventos}</p>
               <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Eventos</p>
             </div>
-            <div className="bg-zinc-50 dark:bg-zinc-800/50 p-4 rounded-2xl text-center border border-zinc-100 dark:border-zinc-800">
+            <div className="kp-panel p-4 rounded-2xl text-center">
               <p className="text-4xl font-black text-zinc-900 dark:text-white mb-1">{totalCanciones}</p>
               <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Canciones</p>
             </div>
@@ -458,13 +477,13 @@ const AdminDashboard = ({ user }) => {
       </div>
 
       {/* Tarjeta de Cumpleaños */}
-      <div className="mt-6 bg-white dark:bg-zinc-900 p-6 rounded-3xl shadow-sm border border-zinc-200 dark:border-zinc-800 transition-colors animate-in slide-in-from-bottom-5">
+      <div className="kp-card mt-6 p-6 rounded-3xl transition-colors animate-in slide-in-from-bottom-5">
         <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
           <Cake size={20} className="text-pink-500" /> Cumpleaños del Equipo
         </h3>
         <div className="space-y-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-4">
           {cumpleanos.length > 0 ? cumpleanos.map((c, i) => (
-            <div key={i} className="flex items-center justify-between p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
+            <div key={i} className="flex items-center justify-between p-3 rounded-2xl bg-white/[0.04] border border-white/10">
               <div className="flex items-center gap-3 overflow-hidden">
                 {c.fotoPerfil ? (
                   <img src={c.fotoPerfil} className="w-10 h-10 rounded-full object-cover shrink-0 shadow-sm" />
