@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { Calendar, Music, Users, Save, Trash2, Clock, CheckSquare, AlertCircle, GripVertical, Plus, FileText, AlignLeft, X, Tag, Share2, Copy, Search, Edit3, CheckCircle, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
+import { Calendar, Music, Users, Save, Trash2, Clock, CheckSquare, AlertCircle, GripVertical, Plus, FileText, AlignLeft, X, Tag, Share2, Copy, Search, Edit3, CheckCircle, RotateCcw, ChevronDown, ChevronUp, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { traducirAcorde } from '../../utils/musicCore';
 import { formatEventDate, formatEventTime, parseAppDate } from '../../utils/dateUtils';
@@ -504,11 +504,11 @@ const EventManagement = ({ user }) => {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-8 items-start">
         
         {/* Columna Izquierda: Formulario (Solo visible para admins) */}
         {esAdmin && (
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-2">
             {/* Botón de despliegue para móviles */}
             <button 
               onClick={() => setShowMobileForm(!showMobileForm)}
@@ -524,19 +524,31 @@ const EventManagement = ({ user }) => {
             </button>
 
             {/* Contenedor del Formulario (Visible siempre en PC, toggle en móvil) */}
-            <div className={`${showMobileForm ? 'block' : 'hidden lg:block'} kp-card p-6 rounded-3xl h-fit sticky top-6 max-h-[90vh] overflow-y-auto mb-8 lg:mb-0 animate-in slide-in-from-top-2 duration-300`}>
-            <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
-              <Clock size={20} className="text-rose-600" /> {editingEventId ? 'Editar Evento' : 'Programar Evento'}
-            </h2>
-            <form onSubmit={handleCrearEvento} className="space-y-5">
-              <div className="grid grid-cols-2 gap-3">
+            <div className={`${showMobileForm ? 'block' : 'hidden lg:block'} kp-card rounded-3xl h-fit mb-8 lg:mb-0 animate-in slide-in-from-top-2 duration-300 overflow-visible`}>
+            <div className="border-b border-white/10 p-5 md:p-6">
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-violet-300">Planificación del culto</p>
+              <h2 className="mt-2 text-2xl font-black text-zinc-100 flex items-center gap-2">
+                <Clock size={22} className="text-violet-300" /> {editingEventId ? 'Editar Evento' : 'Programar Evento'}
+              </h2>
+              <p className="mt-1 text-sm font-medium text-zinc-400">Organiza datos, repertorio y convocatoria desde un solo panel.</p>
+            </div>
+            <form onSubmit={handleCrearEvento} className="space-y-5 p-5 md:p-6">
+              <section className="kp-panel rounded-3xl p-4 md:p-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wider text-zinc-100">Datos del evento</h3>
+                    <p className="text-xs font-medium text-zinc-500">Información principal y horarios.</p>
+                  </div>
+                  <span className="kp-badge rounded-full px-3 py-1 text-[10px] font-black uppercase">{tipoEvento}</span>
+                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-xs font-bold text-zinc-500 mb-1">Nombre del Evento</label>
-                  <input type="text" value={titulo} onChange={(e) => setTitulo(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" placeholder="Ej. Culto Dominical" required />
+                  <label className="block text-xs font-black uppercase tracking-wide text-zinc-400 mb-2">Nombre del Evento</label>
+                  <input type="text" value={titulo} onChange={(e) => setTitulo(e.target.value)} className="kp-input w-full p-3 rounded-2xl text-sm" placeholder="Ej. Culto Dominical" required />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-xs font-bold text-zinc-500 mb-1">Tipo de Evento</label>
-                  <select value={tipoEvento} onChange={(e) => setTipoEvento(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm font-medium">
+                  <label className="block text-xs font-black uppercase tracking-wide text-zinc-400 mb-2">Tipo de Evento</label>
+                  <select value={tipoEvento} onChange={(e) => setTipoEvento(e.target.value)} className="kp-input w-full p-3 rounded-2xl text-sm font-medium">
                     <option value="Servicio Dominical">Servicio Dominical</option>
                     <option value="Culto de Jóvenes">Culto de Jóvenes</option>
                     <option value="Ensayo General">Ensayo General</option>
@@ -546,27 +558,42 @@ const EventManagement = ({ user }) => {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                 <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-xs font-bold text-zinc-500 mb-1">Fecha del Evento</label>
-                  <input type="datetime-local" value={fecha} onChange={(e) => setFecha(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" required />
+                  <label className="block text-xs font-black uppercase tracking-wide text-zinc-400 mb-2">Fecha del Evento</label>
+                  <input type="datetime-local" value={fecha} onChange={(e) => setFecha(e.target.value)} className="kp-input w-full p-3 rounded-2xl text-sm" required />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-xs font-bold text-zinc-500 mb-1">Fecha de Ensayo (Opcional)</label>
-                  <input type="datetime-local" value={fechaEnsayo} onChange={(e) => setFechaEnsayo(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" />
+                  <label className="block text-xs font-black uppercase tracking-wide text-zinc-400 mb-2">Fecha de Ensayo</label>
+                  <input type="datetime-local" value={fechaEnsayo} onChange={(e) => setFechaEnsayo(e.target.value)} className="kp-input w-full p-3 rounded-2xl text-sm" />
                 </div>
               </div>
-              <div>
-                <label className="block text-xs font-bold text-zinc-500 mb-1">Instrucciones / Notas Generales</label>
-              <textarea value={notasGenerales} onChange={(e) => setNotasGenerales(e.target.value)} placeholder="Añade instrucciones del evento..." className="kp-input w-full p-2.5 rounded-xl text-sm resize-none h-36"></textarea>
-              </div>
+              </section>
+              <section className="kp-panel rounded-3xl p-4 md:p-5">
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wider text-zinc-100">Instrucciones / Notas generales</h3>
+                    <p className="text-xs font-medium text-zinc-500">Vestimenta, llegada, prueba de sonido y detalles adicionales.</p>
+                  </div>
+                  <button type="button" onClick={() => setNotasGenerales(PLANTILLA_NOTAS)} className="kp-button-secondary inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-black">
+                    <RotateCcw size={14} /> Restaurar plantilla
+                  </button>
+                </div>
+              <textarea value={notasGenerales} onChange={(e) => setNotasGenerales(e.target.value)} placeholder="Añade instrucciones del evento..." className="kp-input w-full p-4 rounded-2xl text-sm resize-y min-h-44 leading-relaxed"></textarea>
+              </section>
 
               {/* Constructor de Setlist (Drag & Drop) */}
-              <div className="pt-2 border-t border-zinc-100">
-                <label className="block text-xs font-bold text-zinc-500 mb-2 flex items-center gap-1"><AlignLeft size={14} /> Constructor de Setlist</label>
+              <section className="kp-panel rounded-3xl p-4 md:p-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wider text-zinc-100 flex items-center gap-2"><AlignLeft size={16} /> Constructor de Setlist</h3>
+                    <p className="text-xs font-medium text-zinc-500">Agrega canciones, momentos y bloques del culto.</p>
+                  </div>
+                  <span className="kp-badge rounded-full px-3 py-1 text-[10px] font-black uppercase">{setlist.length} items</span>
+                </div>
                 
                 {/* Lista Arrastrable */}
-                <div className="kp-empty-state space-y-1.5 mb-3 min-h-[3rem] border-dashed rounded-xl p-2">
+                <div className={`space-y-2 mb-4 min-h-[5rem] rounded-2xl p-3 ${setlist.length === 0 ? 'kp-empty-state flex items-center justify-center' : 'border border-white/10 bg-black/20'}`}>
                   {setlist.length === 0 && <p className="text-xs text-zinc-400 text-center py-2 italic">Añade canciones o momentos aquí...</p>}
                   {setlist.map((item, idx) => (
                     <div 
@@ -575,7 +602,7 @@ const EventManagement = ({ user }) => {
                       onDragStart={(e) => handleDragStart(e, idx)}
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => handleDrop(e, idx)}
-                      className="flex items-center gap-2 p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-sm group cursor-grab active:cursor-grabbing"                    >
+                      className="flex items-center gap-3 p-3 bg-white/5 border border-white/10 rounded-2xl shadow-sm group cursor-grab active:cursor-grabbing hover:border-violet-400/30 transition-colors"                    >
                       <GripVertical size={14} className="text-zinc-300 group-hover:text-zinc-500" />
                       <div className="flex-1 flex items-center gap-2 overflow-hidden">
                         {item.type === 'song' ? (() => {
@@ -585,12 +612,12 @@ const EventManagement = ({ user }) => {
                           const isRecent = dias !== null && dias <= 21;
                           return (
                             <><Music size={12} className="text-blue-500 shrink-0"/> 
-                              <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300 truncate">{c?.titulo || 'Canción'}</span>
+                              <span className="text-sm font-bold text-zinc-200 truncate">{c?.titulo || 'Canción'}</span>
                               {isRecent && <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-500/20 shrink-0 shadow-sm" title="Se ha tocado hace muy poco">⚠️ {dias === 0 ? 'Hoy' : `Hace ${dias}d`}</span>}
                             </>
                           );
                         })() : (
-                          <><FileText size={12} className="text-amber-500 shrink-0"/> <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400 truncate italic">{item.value}</span></>
+                          <><FileText size={12} className="text-amber-500 shrink-0"/> <span className="text-sm font-medium text-zinc-300 truncate italic">{item.value}</span></>
                         )}
                       </div>
                       <button type="button" onClick={() => removeFromSetlist(item.idLocal)} className="text-zinc-300 hover:text-red-500 transition-colors"><X size={14}/></button>
@@ -599,27 +626,27 @@ const EventManagement = ({ user }) => {
                 </div>
 
                 {/* Controles para añadir */}
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-3">
                   <div className="flex gap-2">
                     <div className="relative flex-1">
-                      <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-zinc-400"><Search size={14} /></div>
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-400"><Search size={14} /></div>
                       <input 
                         type="text" 
                         value={searchTerm} 
                         onChange={(e) => { setSearchTerm(e.target.value); setShowDropdown(true); }} 
                         onFocus={() => setShowDropdown(true)}
                         onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
-                        className="kp-input w-full pl-8 p-2 rounded-lg text-xs"
+                        className="kp-input w-full pl-10 p-3 rounded-2xl text-sm"
                         placeholder="Buscar canción..."
                       />
                       {showDropdown && searchTerm && (
-                        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                        <div className="absolute z-10 mt-2 w-full kp-modal rounded-2xl shadow-xl max-h-64 overflow-y-auto">
                           {canciones.filter(c => c.titulo.toLowerCase().includes(searchTerm.toLowerCase()) || c.artista.toLowerCase().includes(searchTerm.toLowerCase())).map(c => {
                             const lastPlayed = lastPlayedMap[c.id];
                             const dias = lastPlayed ? Math.floor((new Date() - new Date(lastPlayed)) / (1000 * 60 * 60 * 24)) : null;
                             const isRecent = dias !== null && dias <= 21;
                             return (
-                              <button key={c.id} type="button" onClick={() => { addToSetlist('song', c.id); setSearchTerm(''); setShowDropdown(false); }} className="w-full text-left px-3 py-2 text-xs hover:bg-rose-50 dark:hover:bg-rose-500/10 border-b border-zinc-100 dark:border-zinc-800 last:border-0 flex justify-between items-center group">
+                              <button key={c.id} type="button" onClick={() => { addToSetlist('song', c.id); setSearchTerm(''); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-violet-500/10 border-b border-white/5 last:border-0 flex justify-between items-center group">
                                 <div className="truncate pr-2">
                                   <span className="font-bold">{c.titulo}</span> <span className="text-zinc-500">- {c.artista}</span>
                                 </div>
@@ -632,15 +659,15 @@ const EventManagement = ({ user }) => {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <input type="text" value={textoNota} onChange={(e) => setTextoNota(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addToSetlist('note', textoNota))} placeholder="Añadir momento (Ej. Predica)" className="kp-input flex-1 p-2 rounded-lg text-xs" />
-                    <button type="button" onClick={() => addToSetlist('note', textoNota)} className="kp-button-secondary px-3 rounded-lg transition-colors"><Plus size={16}/></button>
+                    <input type="text" value={textoNota} onChange={(e) => setTextoNota(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addToSetlist('note', textoNota))} placeholder="Añadir momento (Ej. Predica)" className="kp-input flex-1 p-3 rounded-2xl text-sm" />
+                    <button type="button" onClick={() => addToSetlist('note', textoNota)} className="kp-button-secondary px-4 rounded-2xl transition-colors"><Plus size={16}/></button>
                   </div>
-                  <div className="flex gap-2 flex-wrap mt-1">
-                    <button type="button" onClick={() => addToSetlist('note', '🎤 BLOQUE DE EXALTACIÓN | Coros: ')} className="text-[10px] font-bold bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 px-2 py-1 rounded border border-indigo-100 dark:border-indigo-500/20 hover:bg-indigo-100 dark:hover:bg-indigo-500/30 transition-colors">+ Bloque Exaltación</button>
-                    <button type="button" onClick={() => addToSetlist('note', '🎤 BLOQUE DE ADORACIÓN | Coros: ')} className="text-[10px] font-bold bg-violet-50 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400 px-2 py-1 rounded border border-violet-100 dark:border-violet-500/20 hover:bg-violet-100 dark:hover:bg-violet-500/30 transition-colors">+ Bloque Adoración</button>
+                  <div className="flex gap-2 flex-wrap">
+                    <button type="button" onClick={() => addToSetlist('note', '🎤 BLOQUE DE EXALTACIÓN | Coros: ')} className="kp-button-secondary text-xs font-black px-3 py-2 rounded-xl transition-colors">+ Bloque Exaltación</button>
+                    <button type="button" onClick={() => addToSetlist('note', '🎤 BLOQUE DE ADORACIÓN | Coros: ')} className="kp-button-secondary text-xs font-black px-3 py-2 rounded-xl transition-colors">+ Bloque Adoración</button>
                   </div>
                 </div>
-              </div>
+              </section>
 
               {/* Asignar Cantantes */}
               {uniqueSongsInSetlist.length > 0 && (
@@ -666,13 +693,13 @@ const EventManagement = ({ user }) => {
                     const tonoFinal = hasTono ? (tonosGuardados[selectedSinger] || c.tono) : null;
                       
                       return (
-                        <div key={songId} className="flex flex-col gap-1 bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300 flex-1 truncate">{c.titulo}</span>
+                        <div key={songId} className="flex flex-col gap-2 bg-white/5 p-3 rounded-2xl border border-white/10">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <span className="text-sm font-bold text-zinc-200 flex-1 truncate">{c.titulo}</span>
                           <select 
                             value={selectedSinger} 
                             onChange={(e) => handleAsignarCantante(songId, e.target.value)}
-                            className="w-1/2 p-1.5 border border-zinc-200 dark:border-zinc-800 rounded-lg text-xs focus:ring-rose-500 focus:border-rose-500 bg-white dark:bg-zinc-900 dark:text-white font-medium"
+                            className="kp-input w-full sm:w-1/2 p-2.5 rounded-xl text-sm font-medium"
                           >
                             <option value="">¿Quién canta?</option>
                             {cantantesDisponibles.map(u => <option key={u.id} value={u.nombre}>{u.nombre}</option>)}
@@ -697,12 +724,13 @@ const EventManagement = ({ user }) => {
                               const isCoroSelected = corosAsignados.includes(cor.nombre);
                               return (
                                 <button
-                                  key={cor.id}
+                                  key={`${songId}-${cor.id}-coro`}
                                   type="button"
                                   onClick={() => {
                                     setCorosPorCancion(prev => {
                                       const corosActuales = prev[songId] || [];
                                       const nuevosCoros = corosActuales.includes(cor.nombre) ? corosActuales.filter(n => n !== cor.nombre) : [...corosActuales, cor.nombre];
+                                      // Convocatoria automática al equipo
                                       setEquipoSeleccionado(prevEquipo => {
                                         let updated = [...prevEquipo];
                                         if (!corosActuales.includes(cor.nombre)) {
@@ -713,9 +741,12 @@ const EventManagement = ({ user }) => {
                                       return { ...prev, [songId]: nuevosCoros };
                                     });
                                   }}
-                                  className={`text-[10px] px-2.5 py-1 rounded-full font-bold transition-all border ${isCoroSelected ? 'bg-indigo-100 dark:bg-indigo-500/20 border-indigo-200 dark:border-indigo-500/30 text-indigo-700 dark:text-indigo-400 shadow-sm' : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}
+                                  className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-bold transition-all border ${isCoroSelected 
+                                    ? 'bg-indigo-100 dark:bg-indigo-500/20 border-indigo-200 dark:border-indigo-500/30 text-indigo-700 dark:text-indigo-400 shadow-sm' 
+                                    : 'bg-white/5 dark:bg-zinc-950/50 border-zinc-200/10 dark:border-zinc-700/50 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50/10 dark:hover:bg-zinc-800'}`}
                                 >
-                                  {cor.nombre.split(' ')[0]}
+                                  {isCoroSelected && <Check size={12} className="text-indigo-500" />}
+                                  <span>{cor.nombre.split(' ')[0]}</span>
                                 </button>
                               );
                             })}
@@ -729,20 +760,20 @@ const EventManagement = ({ user }) => {
               )}
 
               {/* Selector de Equipo */}
-              <div className="pt-2 border-t border-zinc-100 relative">
-                <div className="flex justify-between items-center mb-2">
-                  <label className="block text-xs font-bold text-zinc-500">
+              <section className="kp-panel rounded-3xl p-4 md:p-5 relative">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+                  <label className="block text-sm font-black uppercase tracking-wider text-zinc-100">
                     <Users size={14} className="inline mr-1"/> Convocatoria ({equipoSeleccionado.length})
                   </label>
-                  <button type="button" onClick={() => setShowPlantillasMenu(!showPlantillasMenu)} className="text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-1 rounded border border-indigo-100 hover:bg-indigo-100 transition-colors flex items-center gap-1">
+                  <button type="button" onClick={() => setShowPlantillasMenu(!showPlantillasMenu)} className="kp-button-secondary text-xs font-black px-3 py-2 rounded-xl transition-colors flex items-center justify-center gap-2">
                     <Users size={12}/> Plantillas
                   </button>
                 </div>
 
                 {/* Menú Flotante de Plantillas */}
                 {showPlantillasMenu && (
-                  <div className="absolute top-8 right-0 z-20 w-64 bg-white border border-zinc-200 shadow-xl rounded-xl p-3 animate-in fade-in zoom-in-95">
-                    <h4 className="text-xs font-bold text-zinc-800 mb-2 border-b pb-1">Tus Equipos Guardados</h4>
+                  <div className="absolute top-16 right-0 z-20 w-full sm:w-72 kp-modal rounded-2xl p-3 animate-in fade-in zoom-in-95">
+                    <h4 className="text-xs font-black text-zinc-100 mb-2 border-b border-white/10 pb-2">Tus Equipos Guardados</h4>
                     <div className="space-y-1 max-h-40 overflow-y-auto mb-2 [&::-webkit-scrollbar]:hidden">
                       {plantillas.length === 0 ? (
                         <p className="text-[10px] text-zinc-500 italic py-1">No hay plantillas guardadas.</p>
@@ -764,19 +795,19 @@ const EventManagement = ({ user }) => {
                   </div>
                 )}
 
-                <div className="max-h-48 overflow-y-auto border border-zinc-200 dark:border-zinc-800 rounded-xl bg-zinc-50 dark:bg-zinc-950 p-2 space-y-4">
+                <div className="max-h-80 overflow-y-auto border border-white/10 rounded-2xl bg-black/20 p-3 space-y-5">
                   {Object.entries(equipoAgrupado).map(([instrumento, musicos]) => (
                     <div key={instrumento}>
-                      <h4 className="text-[10px] font-black uppercase text-zinc-400 mb-1 px-1 tracking-wider">{instrumento}</h4>
-                      <div className="space-y-1">
+                      <h4 className="text-[10px] font-black uppercase text-violet-300 mb-2 px-1 tracking-wider">{instrumento}</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {musicos.map(u => {
                           const isSelected = equipoSeleccionado.some(item => 
                             (typeof item === 'string' && item === u.id) || 
                             (item.id === u.id && item.rol === instrumento)
                           );
                           return (
-                          <label key={`${u.id}-${instrumento}`} className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors border ${isSelected ? 'bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/30 text-rose-900 dark:text-rose-400' : 'bg-white dark:bg-zinc-900 border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 text-zinc-700 dark:text-zinc-300'}`}>
-                            <input type="checkbox" checked={isSelected} onChange={() => toggleEquipo(u.id, instrumento)} className="rounded text-rose-600 focus:ring-rose-500 border-zinc-300" />
+                          <label key={`${u.id}-${instrumento}`} className={`flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-colors border ${isSelected ? 'bg-violet-500/15 border-violet-400/40 text-violet-100' : 'bg-white/5 border-white/10 hover:border-white/20 text-zinc-300'}`}>
+                            <input type="checkbox" checked={isSelected} onChange={() => toggleEquipo(u.id, instrumento)} className="rounded border-zinc-500 bg-zinc-950 text-violet-500 focus:ring-violet-500" />
                             <span className="text-xs font-bold flex-1">{u.nombre}</span>
                           </label>
                         )})}
@@ -784,9 +815,9 @@ const EventManagement = ({ user }) => {
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
 
-              <div className="flex gap-2 mt-4">
+              <div className="sticky bottom-0 z-10 -mx-5 -mb-5 mt-2 border-t border-white/10 bg-zinc-950/92 p-5 backdrop-blur-md md:-mx-6 md:-mb-6 md:px-6 flex gap-3">
                 {editingEventId && (
                   <button type="button" onClick={cancelEdit} className="w-1/3 flex items-center justify-center py-3 px-4 rounded-xl text-sm font-bold text-zinc-600 bg-zinc-100 hover:bg-zinc-200 transition-all active:scale-95">
                     Cancelar
@@ -802,7 +833,7 @@ const EventManagement = ({ user }) => {
         )}
 
         {/* Columna Derecha: Lista de Eventos */}
-        <div className={`space-y-4 ${esAdmin ? 'lg:col-span-2' : 'lg:col-span-3'}`}>
+        <div className={`space-y-4 ${esAdmin ? 'lg:col-span-3' : 'lg:col-span-5'}`}>
           <h2 className="text-lg font-black text-zinc-100 mb-4">Próximos Eventos</h2>
           {loading ? (
             <div className="text-zinc-500 text-center py-8 animate-pulse">Cargando agenda...</div>
