@@ -61,6 +61,8 @@ const ProyectorController = ({ user }) => {
   const [displayLiveSlide, setDisplayLiveSlide] = useState(null);
   const [fadeState, setFadeState] = useState('in');
   const [alertaTarima, setAlertaTarima] = useState('');
+  const [alertaTarget, setAlertaTarget] = useState('all');
+  const [alertaPriority, setAlertaPriority] = useState('normal');
   const [isSendingAlert, setIsSendingAlert] = useState(false);
   const [tickerMsg, setTickerMsg] = useState('');
   const [isSendingTicker, setIsSendingTicker] = useState(false);
@@ -80,6 +82,11 @@ const ProyectorController = ({ user }) => {
   });
   const [preacherLastUpdated, setPreacherLastUpdated] = useState(null);
   const [preacherSendStatus, setPreacherSendStatus] = useState('');
+  const [showMobilePreacherSheet, setShowMobilePreacherSheet] = useState(false);
+  const [isPreacherPanelOpen, setIsPreacherPanelOpen] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('controller.preacherPanelOpen') === 'true';
+  });
 
   // 🔄 LIMPIADOR DE MEMORIA: Reiniciar estados cuando cambia el evento
   useEffect(() => {
@@ -279,6 +286,11 @@ const ProyectorController = ({ user }) => {
     return () => clearInterval(interval);
   }, [evento?.proyectorCountdown]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('controller.preacherPanelOpen', String(isPreacherPanelOpen));
+  }, [isPreacherPanelOpen]);
+
   // Sincronización del video en la vista "En Vivo" del controlador
   useEffect(() => {
     if (liveVideoRef.current && mediaActive && mediaActive.type === 'video') {
@@ -344,13 +356,57 @@ const ProyectorController = ({ user }) => {
   const activeSong = canciones.find(c => c.id === activeSongId);
   const secciones = activeSong ? parsearCancion(activeSong.letraRaw) : [];
 
+  const getSetlistSongItems = () => {
+    const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
+    return setlistItems.filter(item => item.type === 'song');
+  };
+
+  const buildLiveState = (songId, sectionIndex = -1, sectionTitle = '', fallbackSong = null) => {
+    const songItems = getSetlistSongItems();
+    const song = canciones.find(c => c.id === songId) || fallbackSong;
+    return {
+      activeSongId: songId || null,
+      activeSongTitle: song?.titulo || '',
+      activeSongIndex: songItems.findIndex(item => item.value === songId),
+      activeSectionIndex: sectionIndex,
+      activeSectionTitle: sectionTitle || '',
+      updatedAt: Date.now(),
+      updatedBy: user?.nombre || user?.email || 'Multimedia'
+    };
+  };
+
+  const handleSelectSong = async (song) => {
+    if (!song) return;
+    setActiveSongId(song.id);
+    setPreviewSlide(null);
+    setPreviewMedia(null);
+
+    const updates = {
+      liveState: buildLiveState(song.id, -1, '', song),
+      currentSongId: song.id
+    };
+    if (song.fondoUrl) updates.proyectorFondo = song.fondoUrl;
+
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true });
+    } catch (e) {
+      console.error('Error sincronizando cancion activa:', e);
+    }
+  };
+
   // Convertir las secciones en Diapositivas (Slides)
   const slides = [];
   secciones.forEach(sec => {
     let texto = sec.lineas.map(linea => 
       linea.map(palabra => palabra.map(silaba => silaba.texto === '\u00A0' ? '' : silaba.texto).join('')).join(' ')
     ).join('\n');
-    slides.push({ titulo: sec.titulo, texto: texto.trim() || ' ', lineas: sec.lineas, originalIndex: slides.length });
+    slides.push({
+      titulo: sec.titulo,
+      texto: texto.trim() || ' ',
+      lineas: sec.lineas,
+      cues: (sec.items || []).filter(item => item.type === 'cue').map(item => item.text),
+      originalIndex: slides.length
+    });
   });
 
   const formatFriendlyDate = (dateValue) => {
@@ -514,6 +570,8 @@ const ProyectorController = ({ user }) => {
       proyectorNextSlide: nextSlide ? { titulo: nextSlide.titulo, texto: nextSlide.texto, lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null } : null,
       proyectorNextSong: nextSongInfo,
       proyectorOffset: offset,
+      liveState: buildLiveState(activeSongId, slide.originalIndex ?? -1, slide.titulo || ''),
+      currentSongId: activeSongId || null,
       proyectorLogo: false,
       proyectorApagado: false,
       proyectorMedia: null, // Limpiar cualquier media activa al proyectar una diapositiva
@@ -535,7 +593,7 @@ const ProyectorController = ({ user }) => {
       await updateDoc(doc(db, 'eventos', eventoId), { setlist: nuevoSetlist });
       // Actualizar estado local para que aparezca en la lista izquierda
       setCanciones(prev => [...prev, song]);
-      setActiveSongId(song.id);
+      await handleSelectSong(song);
       setSongSearchTerm(''); // Limpiar búsqueda
     } catch (e) {
       console.error("Error agregando canción de última hora:", e);
@@ -841,16 +899,33 @@ const ProyectorController = ({ user }) => {
   };
 
   // Lógica para enviar mensajes a tarima
-  const enviarAlerta = async () => {
-    if (!alertaTarima.trim()) return;
+  const enviarAlerta = async (overrideText = null) => {
+    const messageText = typeof overrideText === 'string' ? overrideText.trim() : alertaTarima.trim();
+    if (!messageText) return;
     setIsSendingAlert(true);
+    const now = Date.now();
+    const alertDurations = { normal: 7000, importante: 10000, urgente: 16000 };
+    const expiresAt = now + (alertDurations[alertaPriority] || alertDurations.normal);
     try {
-      await setDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: alertaTarima }, { merge: true });
-      setAlertaTarima('');
-      // Auto-limpiar alerta a los 10 segundos
+      await setDoc(doc(db, 'eventos', eventoId), {
+        proyectorAlerta: {
+          text: messageText,
+          priority: alertaPriority,
+          target: alertaTarget,
+          sentAt: now,
+          expiresAt,
+          active: true,
+          sentBy: user?.nombre || user?.email || 'Multimedia'
+        }
+      }, { merge: true });
+      if (!overrideText) setAlertaTarima('');
       setTimeout(async () => {
-         await setDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: null }, { merge: true });
-      }, 10000);
+        const snap = await getDoc(doc(db, 'eventos', eventoId));
+        const currentAlert = snap.exists() ? snap.data().proyectorAlerta : null;
+        if (currentAlert?.sentAt === now) {
+          await setDoc(doc(db, 'eventos', eventoId), { proyectorAlerta: null }, { merge: true });
+        }
+      }, (alertDurations[alertaPriority] || alertDurations.normal) + 250);
     } catch (e) { console.error(e); } finally { setIsSendingAlert(false); }
   };
   const limpiarAlerta = async () => {
@@ -896,9 +971,10 @@ const ProyectorController = ({ user }) => {
   }
 
   return (
-    <div className="h-screen bg-zinc-950 flex flex-col text-white font-sans overflow-hidden">
+    <div className="relative h-screen bg-zinc-950 flex flex-col text-white font-sans overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(124,58,237,0.16),transparent_32%),linear-gradient(rgba(255,255,255,0.026)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.026)_1px,transparent_1px)] bg-[size:auto,88px_88px,88px_88px]" />
       {/* Cabecera */}
-      <header className="h-16 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-3 sm:px-6 shrink-0 shadow-sm z-10">
+      <header className="relative z-10 h-16 border-b border-white/10 bg-zinc-950/88 flex items-center justify-between px-3 sm:px-6 shrink-0 shadow-[0_10px_40px_rgba(0,0,0,0.25)] backdrop-blur-md">
         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
             <button onClick={() => navigate(`/setlist/${eventoId}`)} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors shrink-0">
               <ArrowLeft size={20} />
@@ -954,10 +1030,10 @@ const ProyectorController = ({ user }) => {
       </header>
 
       {/* VISTA PC: 3 Columnas (Se oculta en móviles) */}
-      <div className="hidden md:flex flex-1 overflow-hidden">
+      <div className="relative z-10 hidden md:flex flex-1 overflow-hidden [@media_(orientation:landscape)_and_(max-height:500px)]:hidden">
         {/* Columna Izquierda: Setlist */}
-        <div className="w-1/4 min-w-[250px] bg-zinc-900/50 border-r border-zinc-800 flex flex-col">
-          <div className="p-4 border-b border-zinc-800 bg-zinc-900">
+        <div className="w-1/4 min-w-[250px] bg-zinc-950/55 border-r border-white/10 flex flex-col backdrop-blur-sm">
+          <div className="p-4 border-b border-white/10 bg-zinc-950/65">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={14} />
               <input 
@@ -1015,13 +1091,7 @@ const ProyectorController = ({ user }) => {
                 return (
                   <button 
                     key={c.id} 
-                    onClick={async () => { 
-                      setActiveSongId(c.id); 
-                      setPreviewSlide(null); 
-                      if (c.fondoUrl) {
-                        try { await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: c.fondoUrl }, { merge: true }); } catch(e) { console.error(e); }
-                      }
-                    }}
+                    onClick={() => handleSelectSong(c)}
                     className={`w-full text-left p-3 rounded-xl transition-all border ${activeSongId === c.id ? 'bg-violet-600/10 border-violet-500/50 text-white shadow-sm' : 'border-transparent hover:bg-zinc-800/50 text-zinc-400 hover:text-zinc-200'}`}
                   >
                     <p className="font-bold text-sm truncate">{idx + 1}. {c.titulo}</p>
@@ -1034,21 +1104,21 @@ const ProyectorController = ({ user }) => {
         </div>
 
         {/* Columna Central: Diapositivas */}
-        <div className="flex-1 bg-zinc-950 flex flex-col border-r border-zinc-800">
-          <div className="p-4 border-b border-zinc-800 bg-zinc-900 flex justify-between items-center">
+        <div className="flex-1 bg-zinc-950/35 flex flex-col border-r border-white/10">
+          <div className="p-4 border-b border-white/10 bg-zinc-950/65 flex justify-between items-center backdrop-blur-sm">
             <h2 className="font-bold text-sm flex items-center gap-2"><Type size={16} className="text-amber-500"/> Diapositivas {activeSong && <span className="text-zinc-500">- {activeSong.titulo}</span>}</h2>
           </div>
           <div className="flex-1 flex flex-col overflow-hidden">
             
             {/* 📺 NUEVO: PANEL DE MULTIMEDIA RÁPIDA (Bóveda) */}
-            <div className="bg-zinc-900/50 border-b border-zinc-800 p-4">
+            <div className="bg-zinc-950/45 border-b border-white/10 p-4">
               <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center gap-2">
                   <div className="relative mr-2">
                     <input 
                       type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
                       placeholder="Buscar en bóveda..."
-                      className="bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1 text-[10px] w-32 focus:border-indigo-500 outline-none transition-all"
+                      className="bg-zinc-950/80 border border-white/10 rounded-xl px-2 py-1.5 text-[10px] w-32 focus:border-indigo-500 outline-none transition-all"
                     />
                   </div>
                   {currentFolder && (
@@ -1076,7 +1146,7 @@ const ProyectorController = ({ user }) => {
                       onClick={() => setCurrentFolder(folder)}
                       className="group flex flex-col items-center gap-1"
                     >
-                      <div className="w-24 h-16 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center group-hover:bg-amber-500/20 transition-all">
+                      <div className="w-24 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center group-hover:bg-amber-500/20 transition-all shadow-[0_12px_30px_rgba(0,0,0,0.18)]">
                         <Folder size={32} className="text-amber-500" fill="currentColor" fillOpacity={0.2}/>
                       </div>
                       <p className="text-[9px] font-bold text-zinc-400 truncate w-24 text-center">{folder}</p>
@@ -1115,7 +1185,7 @@ const ProyectorController = ({ user }) => {
                   <div key={i} className="group relative shrink-0">
                     <button 
                       onClick={() => { setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name }); setPreviewSlide(null); }}
-                      className={`w-24 h-16 rounded-lg overflow-hidden border transition-all bg-black relative ${previewMedia?.url === m.url ? 'border-indigo-500 ring-2 ring-indigo-500/30' : 'border-zinc-700 hover:border-indigo-400'}`}
+                      className={`w-24 h-16 rounded-2xl overflow-hidden border transition-all bg-black relative ${previewMedia?.url === m.url ? 'border-indigo-500 ring-2 ring-indigo-500/30' : 'border-white/10 hover:border-indigo-400'}`}
                     >
                       {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
                       <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1196,7 +1266,7 @@ const ProyectorController = ({ user }) => {
               </div>
             )}
 
-            <div className="flex-1 flex flex-col p-4 bg-zinc-950/50 overflow-hidden">
+            <div className="flex-1 flex flex-col p-4 bg-zinc-950/25 overflow-hidden">
             {!activeSong ? (
               <div className="h-full flex items-center justify-center text-zinc-600 font-medium">Selecciona una canción del setlist</div>
             ) : (
@@ -1204,13 +1274,13 @@ const ProyectorController = ({ user }) => {
               <div className="flex gap-2 mb-4 shrink-0">
                 <button 
                   onClick={() => projectSlide({ titulo: 'Instrumental', texto: ' ' })}
-                  className="flex-1 py-3 bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 rounded-2xl flex items-center justify-center gap-2 font-bold text-zinc-300 transition-colors shadow-sm active:scale-95"
+                  className="flex-1 py-3 bg-zinc-900/85 hover:bg-zinc-800 border border-white/10 rounded-2xl flex items-center justify-center gap-2 font-black text-zinc-300 transition-colors shadow-sm active:scale-95"
                 >
                   <Eraser size={18} className="text-zinc-400"/> Limpiar Texto
                 </button>
                 <button 
                   onClick={toggleLogo}
-                  className={`flex-1 py-3 rounded-2xl flex items-center justify-center gap-2 font-bold transition-colors shadow-sm active:scale-95 ${isLogoActive ? 'bg-amber-600 border border-amber-500 text-white animate-pulse shadow-[0_0_15px_rgba(217,119,6,0.4)]' : 'bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700 text-zinc-300'}`}
+                  className={`flex-1 py-3 rounded-2xl flex items-center justify-center gap-2 font-black transition-colors shadow-sm active:scale-95 ${isLogoActive ? 'bg-amber-600 border border-amber-500 text-white animate-pulse shadow-[0_0_15px_rgba(217,119,6,0.4)]' : 'bg-zinc-900/85 hover:bg-zinc-800 border border-white/10 text-zinc-300'}`}
                 >
                   <Star size={18} className={isLogoActive ? "text-amber-100" : "text-amber-500"}/> {isLogoActive ? 'Quitar Logo' : 'Mostrar Logo'}
                 </button>
@@ -1222,10 +1292,12 @@ const ProyectorController = ({ user }) => {
                     key={s.titulo + idx} // Usar una key más robusta
                     onClick={() => { setPreviewSlide(s); setPreviewMedia(null); }} // Al tocar una letra, quitamos el video de "Pre"
                     onDoubleClick={() => projectSlide(s)}
-                    className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-36 transition-all transform active:scale-95 ${previewSlide?.texto === s.texto ? 'border-violet-500 ring-2 ring-violet-500/30' : 'border-zinc-700 hover:border-zinc-500'} ${liveSlide?.texto === s.texto && !isBlackout ? 'bg-zinc-800 shadow-[0_0_15px_rgba(139,92,246,0.15)]' : 'bg-zinc-900'}`}
+                    className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-36 transition-all transform active:scale-95 ${previewSlide?.texto === s.texto ? 'border-violet-400 ring-2 ring-violet-500/30' : 'border-white/10 hover:border-zinc-500'} ${liveSlide?.texto === s.texto && !isBlackout ? 'bg-violet-500/12 shadow-[0_0_28px_rgba(139,92,246,0.16)]' : 'bg-zinc-900/82'}`}
                   >
                     <div className="px-3 py-2 bg-zinc-950/80 border-b border-zinc-800 flex justify-between items-center shrink-0">
-                      <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{s.titulo}</span>
+                      <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest truncate">
+                        {s.titulo}{s.cues?.length ? ` - ${s.cues[0]}` : ''}
+                      </span>
                       {liveSlide?.texto === s.texto && !isBlackout && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]" title="En vivo"></span>}
                     </div>
                     <div className="p-3 flex-1 flex items-center justify-center text-center overflow-hidden">
@@ -1248,15 +1320,15 @@ const ProyectorController = ({ user }) => {
         </div> 
 
         {/* Columna Derecha: Vista Previa y En Vivo */}
-        <div className="w-1/3 min-w-[320px] bg-zinc-900/30 flex flex-col">
+        <div className="w-1/3 min-w-[320px] bg-zinc-950/55 flex flex-col backdrop-blur-sm">
           
           {/* Pre-visualización */}
-          <div className="flex-1 border-b border-zinc-800 flex flex-col">
-            <div className="p-3 border-b border-zinc-800 bg-zinc-900/80">
+          <div className="flex-1 border-b border-white/10 flex flex-col">
+            <div className="p-3 border-b border-white/10 bg-zinc-950/70">
               <h2 className="font-bold text-sm flex items-center gap-2 text-zinc-400"><Eye size={16}/> Pre-proyección</h2>
             </div>
             <div className="flex-1 p-5 flex flex-col">
-              <div className="flex-1 bg-black rounded-3xl border-2 border-zinc-700 shadow-inner flex items-center justify-center p-6 text-center overflow-hidden relative">
+              <div className="flex-1 bg-black rounded-3xl border border-white/10 shadow-[inset_0_0_60px_rgba(255,255,255,0.03),0_18px_45px_rgba(0,0,0,0.28)] flex items-center justify-center p-6 text-center overflow-hidden relative">
                 {previewMedia ? (
                   <>
                     {previewMedia.type === 'video' ? (
@@ -1295,7 +1367,7 @@ const ProyectorController = ({ user }) => {
               <button 
                 onClick={() => previewMedia ? projectMedia(previewMedia) : projectSlide(previewSlide)} 
                 disabled={!previewSlide && !previewMedia}
-                className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-50 transition-all active:scale-95 shadow-lg shadow-violet-900/20"
+                className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
               >
                 <Monitor size={18} /> {previewMedia ? 'Proyectar Contenido' : 'Proyectar Diapositiva'}
               </button>
@@ -1304,11 +1376,11 @@ const ProyectorController = ({ user }) => {
 
           {/* En Vivo */}
           <div className="flex-1 flex flex-col">
-            <div className="p-3 border-b border-zinc-800 bg-zinc-900/80 flex justify-between items-center">
+            <div className="p-3 border-b border-white/10 bg-zinc-950/70 flex justify-between items-center">
               <h2 className="font-bold text-sm flex items-center gap-2 text-red-500"><Play size={16}/> En Vivo</h2>
               
               {/* ⏱️ CONTROL DE RELOJ (Countdown) SIEMPRE VISIBLE */}
-              <div className="flex items-center gap-2 bg-zinc-950 p-1 rounded-lg border border-zinc-800 scale-90">
+              <div className="flex items-center gap-2 bg-zinc-950/90 p-1 rounded-xl border border-white/10 scale-90">
                 <input type="number" value={countdownMinutes} onChange={e => setCountdownMinutes(parseInt(e.target.value))} className="w-8 bg-transparent text-center font-bold text-xs outline-none text-violet-400" />
                 <button onClick={() => toggleCountdown(!(evento?.proyectorCountdown?.active))} className={`px-2 py-1 rounded text-[8px] font-black uppercase transition-all ${evento?.proyectorCountdown?.active ? 'bg-red-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-white'}`}>
                   {evento?.proyectorCountdown?.active ? 'PARAR' : 'RELOJ'}
@@ -1318,7 +1390,7 @@ const ProyectorController = ({ user }) => {
               {isBlackout && <span className="text-[10px] bg-red-600 px-2 py-0.5 rounded-full font-bold uppercase tracking-widest">Apagado</span>}
             </div>
             <div className="flex-1 p-5">
-              <div className={`relative w-full h-full rounded-2xl border-2 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex flex-col p-6 overflow-hidden transition-colors ${isBlackout ? 'border-red-900/50 bg-black items-center justify-center' : modoTransmision ? 'border-emerald-500 bg-[#00FF00] items-start justify-end pb-8' : 'border-red-600 bg-black items-center justify-center text-center'}`}>
+              <div className={`relative w-full h-full rounded-3xl border shadow-[inset_0_0_60px_rgba(255,255,255,0.03),0_18px_45px_rgba(0,0,0,0.28)] flex flex-col p-6 overflow-hidden transition-colors ${isBlackout ? 'border-red-900/50 bg-black items-center justify-center' : modoTransmision ? 'border-emerald-500 bg-[#00FF00] items-start justify-end pb-8' : 'border-red-500/70 bg-black items-center justify-center text-center'}`}>
                 {countdownTimeLeft && (
                   <div className="absolute top-3 right-3 z-30 px-3 py-1.5 rounded-xl bg-emerald-500/95 text-white shadow-lg border border-white/20">
                     <p className="text-[8px] font-black uppercase tracking-widest leading-none mb-0.5">Cronómetro</p>
@@ -1383,90 +1455,120 @@ const ProyectorController = ({ user }) => {
             </div>
           </div>
            {/* PANEL MEJORADO: Avisos a Tarima y Congregación */}
-          <div className="border-t border-zinc-800 bg-zinc-900 p-4 shrink-0 flex flex-col gap-4 shadow-[0_-10px_20px_rgba(0,0,0,0.3)] z-10 relative overflow-y-auto max-h-[35vh]">
+          <div className="border-t border-white/10 bg-zinc-950/80 p-4 shrink-0 flex flex-col gap-3 shadow-[0_-10px_30px_rgba(0,0,0,0.35)] z-10 relative overflow-y-auto max-h-[35vh] backdrop-blur-sm">
             
-            {/* 📺 NUEVO: Matriz de Salidas (Quick Access) */}
-            <div className="flex flex-col gap-2">
-              <div className="flex justify-between items-center">
-                <h2 className="font-bold text-xs flex items-center gap-1.5 text-violet-400 uppercase tracking-widest"><Tv size={14}/> Matriz de Salidas</h2>
-                <button onClick={() => setShowOutputsModal(true)} className="text-[10px] font-bold text-zinc-500 hover:text-white transition-colors">Configurar</button>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {Object.entries(outputs).map(([id, out]) => (
-                  <button 
-                    key={id}
-                    onClick={() => lanzarSalidaGlobal(id)}
-                    className="flex flex-col p-2 bg-zinc-950 border border-zinc-800 rounded-xl hover:border-violet-500 transition-all text-left group"
-                  >
-                    <span className="text-[9px] font-black text-zinc-500 uppercase truncate group-hover:text-violet-400 transition-colors">{out.label}</span>
-                    <span className="text-[10px] font-bold text-zinc-300 truncate">{out.type === 'proyector' ? 'Público' : out.type === 'preacher' ? 'Predicador' : out.type === 'retorno' ? 'Stage' : 'Banda'}</span>
-                  </button>
-                ))}
-                {Object.keys(outputs).length === 0 && <p className="col-span-2 text-[10px] text-zinc-600 italic text-center py-2">Configura tus pantallas en la Central Multimedia</p>}
-              </div>
-            </div>
-
             {/* Pantalla privada del Predicador */}
-            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
+            <div className="rounded-3xl border border-amber-500/25 bg-amber-500/7 p-3 flex flex-col gap-3 shadow-[0_12px_30px_rgba(0,0,0,0.18)]">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
                   <h2 className="font-bold text-xs flex items-center gap-1.5 text-amber-300 uppercase tracking-widest"><ShieldCheck size={14}/> Destino: Predicador</h2>
                   <p className="text-[10px] text-amber-100/70 font-bold mt-1">Privado / Solo Predicador. No se enviará a Congregación.</p>
+                  <p className="mt-1 text-[10px] font-bold text-zinc-400">
+                    {preacherLastUpdated ? `Última actualización: ${new Date(preacherLastUpdated).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : 'Sin contenido enviado'}
+                  </p>
                 </div>
-                <button onClick={() => handleOpenScreen(`/predicador/${eventoId}`)} className="text-[10px] px-2 py-1 rounded-lg border border-amber-500/30 text-amber-200 hover:bg-amber-500/10 font-black uppercase">Abrir pantalla</button>
+                <button
+                  onClick={() => setIsPreacherPanelOpen(prev => !prev)}
+                  className="shrink-0 rounded-lg border border-amber-500/30 px-2 py-1 text-[10px] font-black uppercase text-amber-200 hover:bg-amber-500/10"
+                >
+                  {isPreacherPanelOpen ? 'Contraer' : 'Expandir'}
+                </button>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/20 bg-zinc-950/70 px-3 py-2">
-                <span className="text-[10px] font-black uppercase tracking-widest text-amber-200">Destino seleccionado: Predicador</span>
-                <span className="text-[10px] font-bold text-zinc-400">
-                  {preacherLastUpdated ? `Última actualización: ${new Date(preacherLastUpdated).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : 'Sin contenido enviado'}
-                </span>
-              </div>
+
               {preacherSendStatus && (
                 <div className={`rounded-xl px-3 py-2 text-[11px] font-black uppercase tracking-widest border ${preacherSendStatus.includes('No se') ? 'bg-red-500/10 border-red-500/30 text-red-200' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'}`}>
                   {preacherSendStatus}
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-2">
-                <input value={preacherDraft.tema} onChange={e => updatePreacherDraft('tema', e.target.value)} placeholder="Tema" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
-                <input value={preacherDraft.tiempoRestante} onChange={e => updatePreacherDraft('tiempoRestante', e.target.value)} placeholder="Tiempo restante (ej. 20:00)" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
-                <input value={preacherDraft.puntoActual} onChange={e => updatePreacherDraft('puntoActual', e.target.value)} placeholder="Punto actual" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
-                <input value={preacherDraft.siguientePunto} onChange={e => updatePreacherDraft('siguientePunto', e.target.value)} placeholder="Siguiente punto" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
-              </div>
-              <textarea value={preacherDraft.versiculoActual} onChange={e => updatePreacherDraft('versiculoActual', e.target.value)} placeholder="Versículo actual" rows={2} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-blue-500 resize-none" />
-              <textarea value={preacherDraft.notasPrivadas} onChange={e => updatePreacherDraft('notasPrivadas', e.target.value)} placeholder="Notas privadas del predicador (no salen al proyector)" rows={2} className="bg-zinc-950 border border-amber-500/20 rounded-lg px-3 py-2 text-xs text-amber-50 outline-none focus:border-amber-500 resize-none" />
-              <div className="grid grid-cols-2 gap-2">
-                <input value={preacherDraft.mensajesInternos} onChange={e => updatePreacherDraft('mensajesInternos', e.target.value)} placeholder="Mensaje interno" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-cyan-500" />
-                <input value={preacherDraft.indicaciones} onChange={e => updatePreacherDraft('indicaciones', e.target.value)} placeholder="Indicación: oración, llamado..." className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-red-500" />
-              </div>
-              <div className="flex gap-2">
-                <button onClick={sendToPreacher} className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2"><MessageSquare size={14}/> Enviar a Predicador</button>
-                <button onClick={clearPreacherDisplay} className="px-3 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-black uppercase flex items-center gap-1"><X size={14}/> Limpiar Predicador</button>
-              </div>
+
+              {!isPreacherPanelOpen && (
+                <div className="grid grid-cols-3 gap-2">
+                  <button onClick={sendToPreacher} className="rounded-xl bg-amber-600 px-2 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-amber-500">Enviar rápido</button>
+                  <button onClick={() => handleOpenScreen(`/predicador/${eventoId}`)} className="rounded-xl border border-amber-500/30 px-2 py-2 text-[10px] font-black uppercase tracking-wide text-amber-200 hover:bg-amber-500/10">Abrir</button>
+                  <button onClick={() => setIsPreacherPanelOpen(true)} className="rounded-xl bg-zinc-800 px-2 py-2 text-[10px] font-black uppercase tracking-wide text-zinc-300 hover:bg-zinc-700">Campos</button>
+                </div>
+              )}
+
+              {isPreacherPanelOpen && (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/20 bg-zinc-950/70 px-3 py-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-amber-200">Destino seleccionado: Predicador</span>
+                    <button onClick={() => handleOpenScreen(`/predicador/${eventoId}`)} className="text-[10px] px-2 py-1 rounded-lg border border-amber-500/30 text-amber-200 hover:bg-amber-500/10 font-black uppercase">Abrir pantalla</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={preacherDraft.tema} onChange={e => updatePreacherDraft('tema', e.target.value)} placeholder="Tema" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                    <input value={preacherDraft.tiempoRestante} onChange={e => updatePreacherDraft('tiempoRestante', e.target.value)} placeholder="Tiempo restante (ej. 20:00)" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                    <input value={preacherDraft.puntoActual} onChange={e => updatePreacherDraft('puntoActual', e.target.value)} placeholder="Punto actual" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                    <input value={preacherDraft.siguientePunto} onChange={e => updatePreacherDraft('siguientePunto', e.target.value)} placeholder="Siguiente punto" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                  </div>
+                  <textarea value={preacherDraft.versiculoActual} onChange={e => updatePreacherDraft('versiculoActual', e.target.value)} placeholder="Versículo actual" rows={2} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-blue-500 resize-none" />
+                  <textarea value={preacherDraft.notasPrivadas} onChange={e => updatePreacherDraft('notasPrivadas', e.target.value)} placeholder="Notas privadas del predicador (no salen al proyector)" rows={2} className="bg-zinc-950 border border-amber-500/20 rounded-lg px-3 py-2 text-xs text-amber-50 outline-none focus:border-amber-500 resize-none" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={preacherDraft.mensajesInternos} onChange={e => updatePreacherDraft('mensajesInternos', e.target.value)} placeholder="Mensaje interno" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-cyan-500" />
+                    <input value={preacherDraft.indicaciones} onChange={e => updatePreacherDraft('indicaciones', e.target.value)} placeholder="Indicación: oración, llamado..." className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-red-500" />
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={sendToPreacher} className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2"><MessageSquare size={14}/> Enviar a Predicador</button>
+                    <button onClick={clearPreacherDisplay} className="px-3 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-black uppercase flex items-center gap-1"><X size={14}/> Limpiar Predicador</button>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Retorno a Tarima */}
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 rounded-3xl border border-white/10 bg-zinc-900/45 p-3">
               <div className="flex justify-between items-center">
                  <h2 className="font-bold text-xs flex items-center gap-1.5 text-amber-500 uppercase tracking-widest"><AlertCircle size={14}/> Retorno a Tarima</h2>
                  <div className="flex gap-2">
-                   <button onClick={() => handleOpenScreen(`/retorno/${eventoId}`)} className="text-zinc-400 border border-zinc-700 hover:bg-zinc-800 text-[10px] px-2 py-1 rounded font-bold transition-colors">Cantantes</button>
-                   <button onClick={() => handleOpenScreen(`/retorno-musicos/${eventoId}`)} className="text-emerald-400 border border-emerald-900/50 hover:bg-emerald-900/20 text-[10px] px-2 py-1 rounded font-bold transition-colors">Músicos</button>
+                   <button onClick={() => handleOpenScreen(`/retorno/${eventoId}`)} className="text-zinc-400 border border-zinc-700 hover:bg-zinc-800 text-[10px] px-2 py-1 rounded font-bold transition-colors">Abrir Cantantes</button>
+                   <button onClick={() => handleOpenScreen(`/retorno-musicos/${eventoId}`)} className="text-emerald-400 border border-emerald-900/50 hover:bg-emerald-900/20 text-[10px] px-2 py-1 rounded font-bold transition-colors">Abrir Músicos</button>
                  </div>
+              </div>
+              <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-950/70 p-1 border border-zinc-800">
+                {[
+                  ['cantantes', 'Cantantes'],
+                  ['musicos', 'Músicos'],
+                  ['all', 'Todos']
+                ].map(([target, label]) => (
+                  <button
+                    key={target}
+                    onClick={() => setAlertaTarget(target)}
+                    className={`rounded-lg px-2 py-1.5 text-[9px] font-black uppercase transition-colors ${alertaTarget === target ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-950/70 p-1 border border-zinc-800">
+                {['normal', 'importante', 'urgente'].map(level => (
+                  <button
+                    key={level}
+                    onClick={() => setAlertaPriority(level)}
+                    className={`rounded-lg px-2 py-1.5 text-[9px] font-black uppercase transition-colors ${alertaPriority === level ? (level === 'urgente' ? 'bg-red-600 text-white' : level === 'importante' ? 'bg-amber-500 text-zinc-950' : 'bg-emerald-600 text-white') : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200'}`}
+                  >
+                    {level}
+                  </button>
+                ))}
               </div>
               <div className="flex gap-2">
                 <input type="text" value={alertaTarima} onChange={e => setAlertaTarima(e.target.value)} placeholder="Solo músicos..." className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:border-amber-500 outline-none text-white placeholder:text-zinc-600 transition-all" onKeyPress={e => e.key === 'Enter' && enviarAlerta()} />
                 <button onClick={enviarAlerta} disabled={isSendingAlert || !alertaTarima.trim()} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white px-3 py-2 rounded-lg font-bold transition-all"><Send size={16}/></button>
               </div>
               {evento?.proyectorAlerta && (
-                <div className="flex items-center justify-between bg-red-600/20 border border-red-500 p-2 rounded-lg">
-                  <span className="text-[10px] text-red-100 font-bold truncate">Alerta: {evento.proyectorAlerta}</span>
+                <div className="flex items-center justify-between bg-amber-500/10 border border-amber-500/30 p-2 rounded-lg">
+                  <span className="text-[10px] text-amber-100 font-bold truncate">
+                    {typeof evento.proyectorAlerta === 'string' ? `Mensaje activo: ${evento.proyectorAlerta}` : `Mensaje activo para ${evento.proyectorAlerta.target === 'all' ? 'Todos' : evento.proyectorAlerta.target === 'cantantes' ? 'Cantantes' : 'Músicos'}: ${evento.proyectorAlerta.text || ''}`}
+                  </span>
                   <button onClick={limpiarAlerta} className="text-white hover:bg-red-500 text-[10px] font-bold uppercase bg-red-600 px-2 py-1 rounded transition-colors shrink-0">Ocultar</button>
                 </div>
+              )}
+              {!evento?.proyectorAlerta && (
+                <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">Sin mensaje activo</p>
               )}
             </div>
             
             {/* Marquesina Pública */}
-            <div className="flex flex-col gap-2 pt-3 border-t border-zinc-800">
+            <div className="flex flex-col gap-2 rounded-3xl border border-blue-500/20 bg-blue-500/6 p-3">
               <h2 className="font-bold text-xs flex items-center gap-1.5 text-blue-400 uppercase tracking-widest"><Megaphone size={14}/> Anuncio Congregación</h2>
               <div className="flex gap-2">
                 <input type="text" value={tickerMsg} onChange={e => setTickerMsg(e.target.value)} placeholder="Pasará por la pantalla..." className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:border-blue-500 outline-none text-white placeholder:text-zinc-600 transition-all" onKeyPress={e => e.key === 'Enter' && enviarTicker()} />
@@ -1485,9 +1587,9 @@ const ProyectorController = ({ user }) => {
       </div>
 
       {/* VISTA MÓVIL (App Remota de 1 Toque - Se oculta en PC) */}
-      <div className="md:hidden flex-1 flex flex-col bg-zinc-950 overflow-hidden relative">
+      <div className="relative z-10 md:hidden flex-1 flex flex-col bg-zinc-950/80 overflow-hidden [@media_(orientation:landscape)_and_(max-height:500px)]:flex">
         {/* Barra de Setlist Horizontal */}
-        <div className="bg-zinc-900 border-b border-zinc-800 p-3 overflow-x-auto whitespace-nowrap flex gap-2 shrink-0 [&::-webkit-scrollbar]:hidden">
+        <div className="bg-zinc-950/80 border-b border-white/10 p-3 overflow-x-auto whitespace-nowrap flex gap-2 shrink-0 [&::-webkit-scrollbar]:hidden backdrop-blur-sm">
           {(() => {
             const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
             return setlistItems.filter(i => i.type === 'song').map((item, idx) => {
@@ -1496,13 +1598,8 @@ const ProyectorController = ({ user }) => {
               return (
                 <button 
                   key={idx} 
-                  onClick={async () => { 
-                    setActiveSongId(c.id); 
-                    if (c.fondoUrl) {
-                      try { await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: c.fondoUrl }, { merge: true }); } catch(e) { console.error(e); }
-                    }
-                  }}
-                  className={`inline-flex items-center px-4 py-2 rounded-xl text-sm font-bold transition-all border shadow-sm ${activeSongId === c.id ? 'bg-violet-600 text-white border-violet-500' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}
+                  onClick={() => handleSelectSong(c)}
+                  className={`inline-flex items-center px-4 py-2 rounded-2xl text-sm font-black transition-all border shadow-sm ${activeSongId === c.id ? 'bg-violet-600 text-white border-violet-500' : 'bg-zinc-900 text-zinc-400 border-white/10'}`}
                 >
                   {idx + 1}. {c.titulo}
                 </button>
@@ -1539,7 +1636,7 @@ const ProyectorController = ({ user }) => {
                       ${evento?.proyectorSlideIndex !== undefined && evento.proyectorSlideIndex + 1 === idx ? 'border-orange-500/60 border-2 dashed' : ''}`}
                   >
                     <div className="px-2 py-1.5 bg-zinc-950/80 border-b border-zinc-800 flex justify-between items-center shrink-0">
-                      <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{s.titulo}</span>
+                      <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest truncate">{s.titulo}{s.cues?.length ? ` - ${s.cues[0]}` : ''}</span>
                       {liveSlide?.texto === s.texto && !isBlackout && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]"></span>}
                     </div>
                     <div className="p-2 flex-1 flex items-center justify-center text-center overflow-hidden">
@@ -1555,7 +1652,7 @@ const ProyectorController = ({ user }) => {
         </div>
 
         {/* Barra Flotante Inferior de Estado (Móvil) */}
-        <div className="absolute bottom-0 left-0 w-full bg-zinc-950 border-t border-zinc-800 p-4 flex items-center gap-3 z-20 pb-6 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
+        <div className="absolute bottom-0 left-0 w-full bg-zinc-950/95 border-t border-white/10 p-4 flex items-center gap-3 z-20 pb-6 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] backdrop-blur-md">
            <div className={`w-3 h-3 rounded-full shrink-0 ${isBlackout ? 'bg-zinc-600' : 'bg-red-500 animate-pulse'}`}></div>
            <div className="flex-1 truncate">
              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-0.5">En Pantalla</p>
@@ -1563,46 +1660,76 @@ const ProyectorController = ({ user }) => {
                {isBlackout ? 'Pantalla en negro (Apagada)' : (liveSlide?.texto?.trim() ? liveSlide.texto.replace(/\n/g, ' - ') : '🎶 Instrumental (Solo fondo)')}
              </p>
            </div>
+           <button
+             onClick={() => setShowMobileControlsModal(true)}
+             className="shrink-0 rounded-2xl border border-violet-500/30 bg-violet-600 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-white shadow-lg shadow-violet-950/30 active:scale-95"
+           >
+             Controles
+           </button>
         </div>
       </div>
 
-      {/* 📱 MODAL: PANEL DE CONTROL MÓVIL (Bóveda + Cronómetro) */}
+      {/* 📱 MODAL: PANEL DE CONTROL MÓVIL */}
       {showMobileControlsModal && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex flex-col z-[200] p-4 animate-in fade-in duration-300">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-[2.5rem] w-full max-w-lg mx-auto shadow-2xl flex flex-col overflow-hidden flex-1">
-            <div className="p-6 border-b border-zinc-800 bg-zinc-900/50 flex justify-between items-center shrink-0">
-              <h3 className="text-xl font-black text-white flex items-center gap-3">
-                <Settings2 className="text-violet-500" size={24} /> Controles Móviles
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-xl flex flex-col z-[200] p-3 sm:p-4 animate-in fade-in duration-300">
+          <div className="bg-zinc-950/96 border border-white/10 rounded-[2rem] sm:rounded-[2.5rem] w-full max-w-lg mx-auto shadow-2xl flex flex-col overflow-hidden flex-1 min-h-0">
+            <div className="p-4 sm:p-6 border-b border-white/10 bg-zinc-950/70 flex justify-between items-center shrink-0">
+              <h3 className="text-lg sm:text-xl font-black text-white flex items-center gap-3">
+                <Settings2 className="text-violet-500" size={22} /> Control móvil
               </h3>
-              <button onClick={() => setShowMobileControlsModal(false)} className="p-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-2xl transition-colors"><X size={20}/></button>
+              <button onClick={() => setShowMobileControlsModal(false)} className="p-2.5 sm:p-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-2xl transition-colors"><X size={20}/></button>
             </div>
 
             {/* Tabs */}
-            <div className="flex border-b border-zinc-800 shrink-0">
-              <button onClick={() => setMobileActiveTab('media')} className={`flex-1 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'media' ? 'border-violet-500 text-white bg-violet-500/5' : 'border-transparent text-zinc-500'}`}>Bóveda</button>
-              <button onClick={() => setMobileActiveTab('liveControls')} className={`flex-1 py-4 text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'liveControls' ? 'border-amber-500 text-white bg-amber-500/5' : 'border-transparent text-zinc-500'}`}>En Vivo</button>
+            <div className="flex overflow-x-auto border-b border-white/10 shrink-0 bg-zinc-950/60 [&::-webkit-scrollbar]:hidden">
+              <button onClick={() => setMobileActiveTab('media')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'media' ? 'border-violet-500 text-white bg-violet-500/5' : 'border-transparent text-zinc-500'}`}>Bóveda</button>
+              <button onClick={() => setMobileActiveTab('liveControls')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'liveControls' ? 'border-amber-500 text-white bg-amber-500/5' : 'border-transparent text-zinc-500'}`}>En Vivo</button>
+              <button onClick={() => setMobileActiveTab('messages')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'messages' ? 'border-blue-500 text-white bg-blue-500/5' : 'border-transparent text-zinc-500'}`}>Mensajes</button>
             </div>
 
             {mobileActiveTab === 'media' ? (
               <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 [&::-webkit-scrollbar]:hidden">
                 <div className="flex items-center gap-2 bg-zinc-950 p-2 rounded-2xl border border-zinc-800">
-                  <Search size={16} className="text-zinc-500 ml-2" />
-                  <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Buscar en la bóveda..." className="flex-1 bg-transparent border-none text-sm outline-none focus:ring-0" />
-                  {currentFolder && <button onClick={() => setCurrentFolder(null)} className="p-2 bg-zinc-800 rounded-xl text-white"><ChevronLeft size={16}/></button>}
+                  {currentFolder && <button onClick={() => setCurrentFolder(null)} className="p-2 bg-zinc-800 rounded-xl text-white" title="Volver"><ChevronLeft size={16}/></button>}
+                  <Search size={16} className="text-zinc-500 ml-1" />
+                  <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder={currentFolder ? `Buscar en ${currentFolder}...` : 'Buscar en la bóveda...'} className="min-w-0 flex-1 bg-transparent border-none text-sm outline-none focus:ring-0" />
+                  <button onClick={crearCarpeta} className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-amber-600 px-2.5 py-2 text-[9px] font-black uppercase text-white"><FolderPlus size={13}/> Carpeta</button>
+                  <label className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-violet-600 px-2.5 py-2 text-[9px] font-black uppercase text-white cursor-pointer">
+                    <Upload size={13}/> Subir
+                    <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png" className="hidden" disabled={isUploadingFondo} onChange={handleUploadCloudinary} />
+                  </label>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 pb-24">
                   {!currentFolder && multimediaFolders.filter(f => f.toLowerCase().includes(searchTerm.toLowerCase())).map((folder, i) => (
-                    <button key={i} onClick={() => setCurrentFolder(folder)} className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-4 flex flex-col items-center gap-2">
-                      <Folder size={32} className="text-amber-500" fill="currentColor" fillOpacity={0.2}/>
-                      <span className="text-[10px] font-black uppercase text-zinc-400 truncate w-full text-center">{folder}</span>
-                    </button>
+                    <div key={i} className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3">
+                      <button onClick={() => setCurrentFolder(folder)} className="flex w-full flex-col items-center gap-2">
+                        <Folder size={30} className="text-amber-500" fill="currentColor" fillOpacity={0.2}/>
+                        <span className="text-[10px] font-black uppercase text-zinc-300 truncate w-full text-center">{folder}</span>
+                      </button>
+                      <div className="mt-3 grid grid-cols-2 gap-1">
+                        <button onClick={(e) => renombrarCarpeta(e, folder)} className="rounded-lg bg-zinc-900 px-2 py-1.5 text-[9px] font-black uppercase text-zinc-400">Renombrar</button>
+                        <button onClick={(e) => borrarCarpeta(e, folder)} className="rounded-lg bg-red-500/10 px-2 py-1.5 text-[9px] font-black uppercase text-red-300">Eliminar</button>
+                      </div>
+                    </div>
+                  ))}
+                  {uploadingFiles.filter(f => f.folder === (currentFolder || 'root')).map((f) => (
+                    <div key={f.id} className="flex aspect-video items-center justify-center rounded-2xl border border-violet-500/40 bg-violet-500/10 text-center text-[10px] font-black uppercase text-violet-200">
+                      Subiendo<br />{f.name}
+                    </div>
                   ))}
                   {filteredMedia.map((m, i) => (
-                    <button key={i} onClick={() => setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })} className={`relative aspect-video rounded-2xl overflow-hidden border-2 transition-all ${previewMedia?.url === m.url ? 'border-violet-500 scale-95' : 'border-zinc-800'}`}>
-                      {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
-                      <div className="absolute bottom-0 inset-x-0 bg-black/60 p-1"><p className="text-[8px] font-bold text-white truncate text-center">{m.name}</p></div>
-                    </button>
+                    <div key={i} className={`relative overflow-hidden rounded-2xl border-2 bg-zinc-950 ${previewMedia?.url === m.url ? 'border-violet-500' : 'border-zinc-800'}`}>
+                      <button onClick={() => setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })} className="relative block aspect-video w-full overflow-hidden">
+                        {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
+                        <div className="absolute bottom-0 inset-x-0 bg-black/60 p-1"><p className="text-[8px] font-bold text-white truncate text-center">{m.name}</p></div>
+                      </button>
+                      <div className="grid grid-cols-3 gap-1 p-1">
+                        <button onClick={() => projectMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })} className="rounded-lg bg-violet-600 px-1 py-1.5 text-[8px] font-black uppercase text-white">Proy.</button>
+                        <button onClick={(e) => renombrarArchivo(e, m.url)} className="rounded-lg bg-zinc-800 px-1 py-1.5 text-[8px] font-black uppercase text-zinc-300">Ren.</button>
+                        <button onClick={(e) => borrarArchivo(e, m.url)} className="rounded-lg bg-red-500/10 px-1 py-1.5 text-[8px] font-black uppercase text-red-300">Elim.</button>
+                      </div>
+                    </div>
                   ))}
                 </div>
 
@@ -1616,7 +1743,7 @@ const ProyectorController = ({ user }) => {
                   </div>
                 )}
               </div>
-            ) : (
+            ) : mobileActiveTab === 'liveControls' ? (
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
                  <div className="grid grid-cols-2 gap-4">
                     <button onClick={toggleBlackout} className={`p-6 rounded-[2rem] border-2 flex flex-col items-center gap-2 ${isBlackout ? 'bg-red-600 border-red-400' : 'bg-zinc-800 border-zinc-700 text-zinc-400'}`}><PowerOff size={28}/> <span className="text-[10px] font-black uppercase">Apagar</span></button>
@@ -1639,7 +1766,115 @@ const ProyectorController = ({ user }) => {
                     </div>
                  </div>
               </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 [&::-webkit-scrollbar]:hidden">
+                <div className="rounded-3xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-amber-300"><ShieldCheck size={15}/> Predicador</h4>
+                      <p className="mt-1 text-[10px] font-bold text-amber-100/70">Privado / Solo Predicador</p>
+                      <p className="mt-1 text-[10px] font-bold text-zinc-500">
+                        {preacherLastUpdated ? `Última actualización: ${new Date(preacherLastUpdated).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : 'Sin contenido enviado'}
+                      </p>
+                    </div>
+                    <button onClick={() => setShowMobilePreacherSheet(true)} className="rounded-2xl bg-amber-600 px-4 py-3 text-[10px] font-black uppercase text-white">Gestionar</button>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-zinc-800 bg-zinc-950/70 p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-amber-400"><AlertCircle size={15}/> Retorno</h4>
+                    <div className="flex gap-2">
+                      <button onClick={() => setAlertaTarget('cantantes')} className={`rounded-xl border px-2 py-1 text-[10px] font-bold ${alertaTarget === 'cantantes' ? 'border-pink-400 bg-pink-500/15 text-pink-200' : 'border-zinc-700 text-zinc-300'}`}>Cantantes</button>
+                      <button onClick={() => setAlertaTarget('musicos')} className={`rounded-xl border px-2 py-1 text-[10px] font-bold ${alertaTarget === 'musicos' ? 'border-emerald-400 bg-emerald-500/15 text-emerald-200' : 'border-emerald-900/60 text-emerald-300'}`}>Músicos</button>
+                      <button onClick={() => setAlertaTarget('all')} className={`rounded-xl border px-2 py-1 text-[10px] font-bold ${alertaTarget === 'all' ? 'border-blue-400 bg-blue-500/15 text-blue-200' : 'border-zinc-700 text-zinc-300'}`}>Todos</button>
+                    </div>
+                  </div>
+                  {evento?.proyectorAlerta ? (
+                    <div className="flex items-center justify-between gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                      <span className="min-w-0 truncate text-[10px] font-bold text-amber-100">
+                        {typeof evento.proyectorAlerta === 'string' ? `Activo: ${evento.proyectorAlerta}` : `Activo para ${evento.proyectorAlerta.target === 'all' ? 'Todos' : evento.proyectorAlerta.target === 'cantantes' ? 'Cantantes' : 'Músicos'}: ${evento.proyectorAlerta.text}`}
+                      </span>
+                      <button onClick={limpiarAlerta} className="rounded-xl bg-zinc-800 px-3 py-1.5 text-[10px] font-black uppercase text-zinc-200">Ocultar</button>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">Sin mensaje activo</p>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    {['Repite coro', 'Solo voces', 'Entramos todos', 'Final', 'Sube tono', 'Baja dinámica', 'Más suave', 'Corte', 'Espera', 'Sigue', 'Puente', 'Ministración'].map(msg => (
+                      <button key={msg} onClick={() => enviarAlerta(msg)} className="rounded-xl bg-zinc-900 px-3 py-2 text-[10px] font-black uppercase text-zinc-300 active:scale-95">{msg}</button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 rounded-2xl bg-zinc-900 p-1">
+                    {['normal', 'importante', 'urgente'].map(level => (
+                      <button key={level} onClick={() => setAlertaPriority(level)} className={`rounded-xl px-2 py-2 text-[9px] font-black uppercase ${alertaPriority === level ? (level === 'urgente' ? 'bg-red-600 text-white' : level === 'importante' ? 'bg-amber-500 text-zinc-950' : 'bg-emerald-600 text-white') : 'text-zinc-500'}`}>{level}</button>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input value={alertaTarima} onChange={e => setAlertaTarima(e.target.value)} placeholder="Mensaje a tarima..." className="min-w-0 flex-1 rounded-2xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-white outline-none focus:border-amber-500" />
+                    <button onClick={enviarAlerta} disabled={isSendingAlert || !alertaTarima.trim()} className="rounded-2xl bg-amber-600 px-4 text-white disabled:opacity-50"><Send size={16}/></button>
+                  </div>
+                  <button onClick={() => handleOpenScreen(`/retorno-musicos/${eventoId}`)} className="w-full rounded-2xl border border-zinc-800 px-3 py-2 text-[10px] font-black uppercase text-zinc-400">Abrir retorno</button>
+                </div>
+
+                <div className="rounded-3xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-blue-300"><Megaphone size={15}/> Congregación</h4>
+                    <span className="text-[10px] font-bold uppercase text-blue-200">{evento?.proyectorTicker ? 'Anuncio activo' : 'Sin anuncio'}</span>
+                  </div>
+                  {evento?.proyectorTicker && (
+                    <div className="flex items-center justify-between gap-2 rounded-2xl border border-blue-500/30 bg-blue-500/10 px-3 py-2">
+                      <span className="min-w-0 truncate text-[10px] font-bold text-blue-100">{evento.proyectorTicker}</span>
+                      <button onClick={limpiarTicker} className="rounded-xl bg-zinc-800 px-3 py-1.5 text-[10px] font-black uppercase text-zinc-200">Ocultar</button>
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <input value={tickerMsg} onChange={e => setTickerMsg(e.target.value)} placeholder="Anuncio público..." className="min-w-0 flex-1 rounded-2xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-white outline-none focus:border-blue-500" />
+                    <button onClick={enviarTicker} disabled={isSendingTicker || !tickerMsg.trim()} className="rounded-2xl bg-blue-600 px-4 text-white disabled:opacity-50"><Send size={16}/></button>
+                  </div>
+                </div>
+              </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {showMobilePreacherSheet && (
+        <div className="fixed inset-0 z-[260] flex flex-col bg-black/85 p-3 backdrop-blur-xl">
+          <div className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col overflow-hidden rounded-[2rem] border border-amber-500/25 bg-zinc-900 shadow-2xl">
+            <div className="shrink-0 border-b border-zinc-800 bg-amber-500/10 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="flex items-center gap-2 text-lg font-black uppercase tracking-wide text-amber-200"><ShieldCheck size={20}/> Predicador</h3>
+                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-amber-100/70">Privado / Solo Predicador</p>
+                  <p className="mt-1 text-[10px] font-bold text-zinc-400">
+                    {preacherLastUpdated ? `Última actualización: ${new Date(preacherLastUpdated).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}` : 'Sin contenido enviado'}
+                  </p>
+                </div>
+                <button onClick={() => setShowMobilePreacherSheet(false)} className="rounded-2xl bg-zinc-800 p-3 text-zinc-300"><X size={18}/></button>
+              </div>
+            </div>
+
+            <div className="flex-1 space-y-3 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden">
+              <div className="grid grid-cols-1 gap-3">
+                <input value={preacherDraft.tema} onChange={e => updatePreacherDraft('tema', e.target.value)} placeholder="Tema" className="rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-white outline-none focus:border-amber-500" />
+                <input value={preacherDraft.tiempoRestante} onChange={e => updatePreacherDraft('tiempoRestante', e.target.value)} placeholder="Tiempo restante (ej. 20:00)" className="rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-white outline-none focus:border-amber-500" />
+                <input value={preacherDraft.puntoActual} onChange={e => updatePreacherDraft('puntoActual', e.target.value)} placeholder="Punto actual" className="rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-white outline-none focus:border-amber-500" />
+                <input value={preacherDraft.siguientePunto} onChange={e => updatePreacherDraft('siguientePunto', e.target.value)} placeholder="Siguiente punto" className="rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-white outline-none focus:border-amber-500" />
+                <textarea value={preacherDraft.versiculoActual} onChange={e => updatePreacherDraft('versiculoActual', e.target.value)} placeholder="Versículo actual" rows={3} className="rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-white outline-none focus:border-blue-500 resize-none" />
+                <textarea value={preacherDraft.notasPrivadas} onChange={e => updatePreacherDraft('notasPrivadas', e.target.value)} placeholder="Notas privadas" rows={4} className="rounded-2xl border border-amber-500/20 bg-zinc-950 px-4 py-3 text-sm text-amber-50 outline-none focus:border-amber-500 resize-none" />
+                <input value={preacherDraft.mensajesInternos} onChange={e => updatePreacherDraft('mensajesInternos', e.target.value)} placeholder="Mensaje interno" className="rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-white outline-none focus:border-cyan-500" />
+                <input value={preacherDraft.indicaciones} onChange={e => updatePreacherDraft('indicaciones', e.target.value)} placeholder="Indicación" className="rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-white outline-none focus:border-red-500" />
+              </div>
+            </div>
+
+            <div className="shrink-0 border-t border-zinc-800 bg-zinc-950 p-3">
+              <div className="grid grid-cols-3 gap-2">
+                <button onClick={sendToPreacher} className="rounded-2xl bg-amber-600 px-3 py-3 text-[10px] font-black uppercase text-white">Enviar</button>
+                <button onClick={() => handleOpenScreen(`/predicador/${eventoId}`)} className="rounded-2xl border border-amber-500/30 px-3 py-3 text-[10px] font-black uppercase text-amber-200">Abrir</button>
+                <button onClick={clearPreacherDisplay} className="rounded-2xl bg-zinc-800 px-3 py-3 text-[10px] font-black uppercase text-zinc-300">Limpiar</button>
+              </div>
+            </div>
           </div>
         </div>
       )}

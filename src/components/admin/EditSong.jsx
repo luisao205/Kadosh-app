@@ -1,14 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, onSnapshot, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
 import { Save, ArrowLeft, Edit3, AlertCircle, Play, Pause, Volume2, Volume1, VolumeX, X, Library, Video, Link as LinkIcon, FileText as FileIcon, Upload, Trash2, SlidersHorizontal, Headphones, Monitor } from 'lucide-react';
-import { traducirAcorde } from '../../utils/musicCore';
+import { detectarTonoDesdeAcordes, traducirAcorde } from '../../utils/musicCore';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const INSTRUMENTOS_RECURSOS = ['General', 'Voz Principal', 'Coros', 'Batería', 'Piano', 'Bajo', 'Guitarra Acústica', 'Guitarra Eléctrica', 'Percusión'];
 const TONOS_DISPONIBLES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
+const CUE_PRESETS = ['Subida', 'Entra batería', 'Solo voces', 'Todos juntos', 'Corte', 'Baja dinámica', 'Repetir coro', 'Final suave'];
 
 const normalizeKey = (value, fallback = 'C') => {
   const clean = String(value || '').trim();
@@ -54,6 +55,7 @@ const EditSong = ({ user }) => {
 
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
   const notacion = user?.preferencias?.notacion || 'sharps';
+  const detectedKey = useMemo(() => detectarTonoDesdeAcordes(letraRaw), [letraRaw]);
 
   const showToast = (message, type = 'error') => {
     setToast({ message, type });
@@ -153,6 +155,10 @@ const EditSong = ({ user }) => {
 
   const insertarEtiqueta = (etiqueta) => {
     setLetraRaw(prev => prev + (prev ? '\n\n' : '') + `# ${etiqueta}\n`);
+  };
+
+  const insertarIndicacion = (indicacion = 'Escribir indicación') => {
+    setLetraRaw(prev => prev + (prev && !prev.endsWith('\n') ? '\n' : '') + `{cue: ${indicacion}}\n`);
   };
 
   const handleAddRecurso = () => {
@@ -377,6 +383,17 @@ const EditSong = ({ user }) => {
                 {!TONOS_DISPONIBLES.includes(tono) && <option value="">{tono || 'Seleccionar'}</option>}
                 {TONOS_DISPONIBLES.map(key => <option key={key} value={key}>{key}</option>)}
               </select>
+              {detectedKey && detectedKey.tono !== normalizeKey(tono) && (
+                <div className="mt-2 rounded-xl border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 p-2 text-xs text-emerald-800 dark:text-emerald-200">
+                  <p className="font-bold">
+                    Tono detectado: <span className="font-black">{traducirAcorde(detectedKey.tono, formatoAcordes, notacion)}</span>
+                    {detectedKey.ambiguo ? ' (probable)' : ''}
+                  </p>
+                  <button type="button" onClick={() => setTono(detectedKey.tono)} className="mt-1 text-[11px] font-black uppercase text-emerald-700 dark:text-emerald-300 underline underline-offset-2">
+                    Usar como tono original
+                  </button>
+                </div>
+              )}
             </div>
             <div className="col-span-1">
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1 flex justify-between items-end">
@@ -588,9 +605,16 @@ const EditSong = ({ user }) => {
               </div>
             </label>
             <div className="flex flex-wrap gap-2 mb-3">
-              {['Intro', 'Verso 1', 'Verso 2', 'Coro', 'Puente', 'Instrumental', 'Espontáneo'].map(tag => (
+              {['Intro', 'Verso 1', 'Verso 2', 'Pre-Coro', 'Pre-Coro 2', 'Coro', 'Puente', 'Instrumental', 'Espontáneo'].map(tag => (
                 <button key={tag} type="button" onClick={() => insertarEtiqueta(tag)} className="px-3 py-1 text-xs font-bold bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors active:scale-95">
                   + {tag}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {CUE_PRESETS.map(cue => (
+                <button key={cue} type="button" onClick={() => insertarIndicacion(cue)} className="px-3 py-1 text-xs font-bold bg-violet-50 text-violet-700 hover:bg-violet-100 rounded-lg border border-violet-200 transition-colors active:scale-95">
+                  * {cue}
                 </button>
               ))}
             </div>

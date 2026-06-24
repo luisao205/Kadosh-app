@@ -210,7 +210,7 @@ function App() {
         
         {/* Ruta Privada de Retorno para los Músicos en Tarima */}
         <Route path="/retorno/:eventoId" element={<StageDisplay />} />
-        <Route path="/retorno-musicos/:eventoId" element={<StageDisplayMusicos />} />
+        <Route path="/retorno-musicos/:eventoId" element={<StageDisplayMusicos user={user} />} />
         
         {/* Ruta del Controlador Multimedia */}
         <Route path="/control-proyector/:eventoId" element={<ProyectorController user={user} />} />

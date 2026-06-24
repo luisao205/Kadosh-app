@@ -4,13 +4,14 @@ import { buscarSugerenciasIA, buscarMetadatosIA } from '../../utils/geminiApi';
 import { collection, addDoc, onSnapshot } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
-import { traducirAcorde } from '../../utils/musicCore';
-import { parsearCancion } from '../../utils/songParser';
+import { detectarTonoDesdeAcordes, traducirAcorde } from '../../utils/musicCore';
+import { isSongSectionTitle, parsearCancion } from '../../utils/songParser';
 
 const TONOS_DISPONIBLES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
-const SECTION_NAMES = ['Intro', 'Verso', 'Verse', 'Coro', 'Chorus', 'Puente', 'Bridge', 'Final', 'Outro', 'Instrumental', 'Espontáneo', 'Espontaneo'];
+const SECTION_NAMES = ['Intro', 'Verso', 'Verse', 'Pre-Coro', 'Pre-Coro 2', 'Pre-Chorus', 'Coro', 'Chorus', 'Puente', 'Bridge', 'Final', 'Outro', 'Instrumental', 'Espontáneo', 'Espontaneo'];
+const CUE_PRESETS = ['Subida', 'Entra batería', 'Solo voces', 'Todos juntos', 'Corte', 'Baja dinámica', 'Repetir coro', 'Final suave'];
 const CHORD_REGEX = /^[A-G][#b]?(?:m|maj|min|dim|aug|sus|add)?(?:\d{0,2})?(?:[#b]?\d{0,2})?(?:\/[A-G][#b]?)?$/;
-const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|coro|chorus|puente|bridge|final|outro|instrumental|espont[aá]neo)(?:\s+\d+|\s*[:.-])?\s*$/i;
+const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|pre[\s-]?(?:coro|chorus)|precoro|coro|chorus|puente|bridge|final|outro|instrumental|espont[aá]neo|espontaneo)(?:\s+\d+|\s*[:.-])?\s*$/i;
 
 const normalizeKey = (value, fallback = 'C') => {
   const clean = String(value || '').trim();
@@ -18,7 +19,7 @@ const normalizeKey = (value, fallback = 'C') => {
   return match || clean || fallback;
 };
 
-const isSectionTitle = (value) => SECTION_TITLE_REGEX.test(String(value || '').trim());
+const isSectionTitle = (value) => isSongSectionTitle(value) || SECTION_TITLE_REGEX.test(String(value || '').trim());
 
 const limpiarTextoCancion = (value) => String(value || '')
   .replace(/\r\n?/g, '\n')
@@ -75,6 +76,7 @@ const AddSongAI = ({ user }) => {
   const [chordProText, setChordProText] = useState('');
 
   const parsedPreview = useMemo(() => parsearCancion(letraGenerada), [letraGenerada]);
+  const detectedKey = useMemo(() => detectarTonoDesdeAcordes(letraGenerada), [letraGenerada]);
   const chordWarnings = useMemo(() => {
     const matches = [...String(letraGenerada || '').matchAll(/\[([^\]]+)\]/g)];
     return matches
@@ -144,6 +146,10 @@ const AddSongAI = ({ user }) => {
 
   const insertarEtiqueta = (etiqueta) => {
     setLetraGenerada(prev => prev + (prev ? '\n\n' : '') + `# ${etiqueta}\n`);
+  };
+
+  const insertarIndicacion = (indicacion = 'Escribir indicación') => {
+    setLetraGenerada(prev => prev + (prev && !prev.endsWith('\n') ? '\n' : '') + `{cue: ${indicacion}}\n`);
   };
 
   // Convertir texto pegado estilo ChordPro
@@ -373,7 +379,18 @@ const AddSongAI = ({ user }) => {
                   {!TONOS_DISPONIBLES.includes(tono) && <option value="">{tono || 'Seleccionar'}</option>}
                   {TONOS_DISPONIBLES.map(key => <option key={key} value={key}>{key}</option>)}
                 </select>
-             </div>
+                {detectedKey && detectedKey.tono !== normalizeKey(tono) && (
+                  <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
+                    <p className="font-bold">
+                      Tono detectado: <span className="font-black">{traducirAcorde(detectedKey.tono, user?.preferencias?.formatoAcordes, notacion)}</span>
+                      {detectedKey.ambiguo ? ' (probable)' : ''}
+                    </p>
+                    <button type="button" onClick={() => setTono(detectedKey.tono)} className="mt-1 text-[11px] font-black uppercase text-emerald-700 underline underline-offset-2">
+                      Usar como tono original
+                    </button>
+                  </div>
+                )}
+              </div>
              <div className="col-span-1">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1 flex justify-between items-end">
                   <span>Tonos por Cantante</span>
@@ -447,6 +464,13 @@ const AddSongAI = ({ user }) => {
                 <Wand2 size={13}/> Detectar secciones
               </button>
             </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {CUE_PRESETS.map(cue => (
+                <button key={cue} type="button" onClick={() => insertarIndicacion(cue)} className="px-3 py-1 text-xs font-bold bg-violet-50 text-violet-700 hover:bg-violet-100 rounded-lg border border-violet-200 transition-colors active:scale-95">
+                  * {cue}
+                </button>
+              ))}
+            </div>
             
             {showExample && (
               <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-700 dark:text-slate-300 animate-in fade-in slide-in-from-top-1 mb-2">
@@ -503,12 +527,16 @@ const AddSongAI = ({ user }) => {
                 <div key={`${seccion.titulo}-${idx}`}>
                   <span className="inline-block mb-3 text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 border border-blue-200">{seccion.titulo}</span>
                   <div className="space-y-2 font-medium text-zinc-800 dark:text-zinc-100">
-                    {seccion.lineas.map((linea, lineIdx) => (
-                      linea.length === 0 ? (
+                    {(seccion.items?.length ? seccion.items : seccion.lineas.map(line => ({ type: 'lyrics', line }))).map((item, lineIdx) => (
+                      item.type === 'cue' ? (
+                        <div key={lineIdx} className="inline-flex rounded-xl border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-black text-violet-700">
+                          * {item.text}
+                        </div>
+                      ) : item.type === 'blank' ? (
                         <div key={lineIdx} className="h-4" />
                       ) : (
                         <div key={lineIdx} className="flex flex-wrap items-end gap-x-2 gap-y-3">
-                          {linea.map((palabra, palabraIdx) => (
+                          {item.line.map((palabra, palabraIdx) => (
                             <div key={palabraIdx} className="flex items-end whitespace-nowrap">
                               {palabra.map((silaba, silabaIdx) => (
                                 <div key={silabaIdx} className="flex flex-col items-start">

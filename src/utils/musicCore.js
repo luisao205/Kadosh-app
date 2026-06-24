@@ -21,6 +21,78 @@ export const normalizarNota = (nota) => {
   return EQUIVALENCIAS[match[0]] || match[0];
 };
 
+const CHORD_ROOT_REGEX = /^([A-G][#b]?)(.*)$/;
+const VALID_CHORD_REGEX = /^[A-G][#b]?(?:m|maj|min|dim|aug|sus|add)?(?:\d{0,2})?(?:[#b]?\d{0,2})?(?:\/[A-G][#b]?)?$/;
+const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|pre[\s-]?(?:coro|chorus)|precoro|coro|chorus|puente|bridge|final|outro|instrumental|espont[aá]neo|espontaneo)(?:\s+\d+|\s*[:.-])?\s*$/i;
+const MAJOR_SCALE_STEPS = [0, 2, 4, 5, 7, 9, 11];
+const MAJOR_DIATONIC_QUALITIES = ['', 'm', 'm', '', '', 'm', 'dim'];
+
+const getChordInfo = (chord) => {
+  const cleanChord = String(chord || '').trim();
+  if (!VALID_CHORD_REGEX.test(cleanChord) || SECTION_TITLE_REGEX.test(cleanChord)) return null;
+  const mainChord = cleanChord.split('/')[0];
+  const match = mainChord.match(CHORD_ROOT_REGEX);
+  if (!match) return null;
+  const root = normalizarNota(match[1]);
+  const suffix = match[2] || '';
+  if (!root || !NOTAS.includes(root)) return null;
+  return {
+    root,
+    isMinor: /^(m|min)(?!aj)/i.test(suffix),
+    isDiminished: /^(dim|°)/i.test(suffix)
+  };
+};
+
+export const detectarTonoDesdeAcordes = (textoRaw) => {
+  const chordMatches = [...String(textoRaw || '').matchAll(/\[([^\]]+)\]/g)]
+    .map(match => match[1].trim())
+    .map(getChordInfo)
+    .filter(Boolean);
+
+  if (chordMatches.length < 2) return null;
+
+  const candidates = NOTAS.map((key) => {
+    const keyIndex = NOTAS.indexOf(key);
+    let score = 0;
+    let matched = 0;
+
+    chordMatches.forEach((chord, index) => {
+      const degree = MAJOR_SCALE_STEPS.findIndex(step => NOTAS[(keyIndex + step) % 12] === chord.root);
+      if (degree === -1) {
+        score -= 1.5;
+        return;
+      }
+
+      matched += 1;
+      score += 2;
+
+      const expectedQuality = MAJOR_DIATONIC_QUALITIES[degree];
+      if (expectedQuality === 'm' && chord.isMinor) score += 1.2;
+      if (expectedQuality === '' && !chord.isMinor && !chord.isDiminished) score += 1;
+      if (expectedQuality === 'dim' && chord.isDiminished) score += 1;
+
+      if (degree === 0) score += 1.2;
+      if (degree === 4) score += 0.6;
+      if (index === 0 && degree === 0) score += 3;
+      if (index === chordMatches.length - 1 && degree === 0) score += 2;
+    });
+
+    const confidence = Math.max(0, Math.min(1, score / (chordMatches.length * 4)));
+    return { key, score, confidence, matched, total: chordMatches.length };
+  }).sort((a, b) => b.score - a.score);
+
+  const best = candidates[0];
+  const second = candidates[1];
+  if (!best || best.matched < Math.ceil(chordMatches.length * 0.55)) return null;
+
+  return {
+    tono: best.key,
+    confianza: best.confidence,
+    acordesAnalizados: chordMatches.length,
+    ambiguo: second ? best.score - second.score < 2 : false
+  };
+};
+
 export const calcularOffsetSemitonos = (tonoOriginal, tonoDestino) => {
   const origen = normalizarNota(tonoOriginal);
   const destino = normalizarNota(tonoDestino);

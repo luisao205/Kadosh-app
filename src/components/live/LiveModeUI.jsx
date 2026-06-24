@@ -89,10 +89,13 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
           setEvento(data);
           
           // Lógica de seguidor (Follower)
+          const liveSongId = data.liveState?.activeSongId || data.currentSongId;
+          if (liveSongId && liveSongId !== id && data.directorId !== user?.uid) {
+            const cantante = data.cantantesPorCancion?.[liveSongId] || '';
+            navigate(`/live/${liveSongId}?evento=${eventoId}${cantante ? `&cantante=${encodeURIComponent(cantante)}` : ''}`);
+          }
+
           if (data.directorId && data.directorId !== user?.uid) {
-            if (data.currentSongId && data.currentSongId !== id) {
-               navigate(`/live/${data.currentSongId}?evento=${eventoId}`);
-            }
             if (data.directorAutoScroll !== undefined) {
                setIsAutoScrolling(data.directorAutoScroll);
             }
