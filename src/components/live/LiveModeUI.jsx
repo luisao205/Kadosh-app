@@ -13,6 +13,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
   const [searchParams] = useSearchParams();
   const eventoId = searchParams.get('evento'); // Mensaje oculto en la URL
   const cantanteQuery = searchParams.get('cantante'); // Cantante asignado
+  const isRehearsalReading = searchParams.get('modo') === 'ensayo';
   const returnPath = eventoId ? `/setlist/${eventoId}` : '/canciones';
   
   const [cancion, setCancion] = useState(null);
@@ -49,6 +50,15 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
   const audioCtxRef = useRef(null);
   const clickEnabledRef = useRef(false);
   const [clickActive, setClickActive] = useState(false);
+
+  const buildLiveSongUrl = (songId, singer = '') => {
+    const params = new URLSearchParams();
+    if (eventoId) params.set('evento', eventoId);
+    if (singer) params.set('cantante', singer);
+    if (isRehearsalReading) params.set('modo', 'ensayo');
+    const query = params.toString();
+    return `/live/${songId}${query ? `?${query}` : ''}`;
+  };
 
   useEffect(() => {
     const fetchSong = async () => {
@@ -90,9 +100,9 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
           
           // Lógica de seguidor (Follower)
           const liveSongId = data.liveState?.activeSongId || data.currentSongId;
-          if (liveSongId && liveSongId !== id && data.directorId !== user?.uid) {
+          if (!isRehearsalReading && liveSongId && liveSongId !== id && data.directorId !== user?.uid) {
             const cantante = data.cantantesPorCancion?.[liveSongId] || '';
-            navigate(`/live/${liveSongId}?evento=${eventoId}${cantante ? `&cantante=${encodeURIComponent(cantante)}` : ''}`);
+            navigate(buildLiveSongUrl(liveSongId, cantante));
           }
 
           if (data.directorId && data.directorId !== user?.uid) {
@@ -127,8 +137,11 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
     // Listener para detectar cambios en fullscreen (por si el usuario sale con la tecla ESC)
     const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, [id, navigate]);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      if (unsubEvento) unsubEvento();
+    };
+  }, [id, navigate, isRehearsalReading, eventoId, user?.uid]);
   
   // 1. Wake Lock API: Evitar que se apague la pantalla
   useEffect(() => {
@@ -189,6 +202,11 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
     };
   }, [isAutoScrolling]);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [id]);
+
   // Inicializar volumen y paneo de Multitracks cuando carguen
   useEffect(() => {
     if (cancion?.multitracks?.length > 0) {
@@ -207,11 +225,14 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
   }, [cancion?.multitracks]);
 
   // Cálculos para navegación del Setlist (Extraídos arriba para usarlos en el teclado)
+  const orderedSongIds = evento?.setlist
+    ?.filter(item => item.type === 'song' && item.value)
+    .map(item => item.value) || evento?.canciones || [];
   let currentIndex = -1, prevSongId = null, nextSongId = null;
-  if (evento && evento.canciones) {
-    currentIndex = evento.canciones.indexOf(id);
-    if (currentIndex > 0) prevSongId = evento.canciones[currentIndex - 1];
-    if (currentIndex < evento.canciones.length - 1) nextSongId = evento.canciones[currentIndex + 1];
+  if (orderedSongIds.length) {
+    currentIndex = orderedSongIds.indexOf(id);
+    if (currentIndex > 0) prevSongId = orderedSongIds[currentIndex - 1];
+    if (currentIndex >= 0 && currentIndex < orderedSongIds.length - 1) nextSongId = orderedSongIds[currentIndex + 1];
   }
 
   // 5. Soporte para Pedales Bluetooth / Flechas del Teclado
@@ -301,7 +322,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
     }
 
     const cantante = evento?.cantantesPorCancion?.[targetId] || '';
-    navigate(`/live/${targetId}?evento=${eventoId}${cantante ? `&cantante=${encodeURIComponent(cantante)}` : ''}`);
+    navigate(buildLiveSongUrl(targetId, cantante));
   };
 
   // Función para extraer el ID del video de YouTube

@@ -216,9 +216,9 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
 
   const isMobileLandscape = viewport.width > viewport.height && viewport.height <= 500;
   const lyricSize = isMobileLandscape
-    ? `clamp(${isSingerMode ? 1.05 : 0.95}rem, ${isSingerMode ? 4.8 : 4.2}vmin, ${isSingerMode ? 2.45 : 2.1}rem)`
-    : `clamp(${isSingerMode ? 1.45 : 1.2}rem, ${isSingerMode ? 4.6 : 3.7}vmin, ${isSingerMode ? 4.3 : 3.5}rem)`;
-  const chordSize = isMobileLandscape ? 'clamp(0.78rem, 2.2vmin, 1.15rem)' : 'clamp(0.8rem, 2.1vmin, 1.55rem)';
+    ? `clamp(${isSingerMode ? 1.05 : 1.08}rem, ${isSingerMode ? 4.8 : 4.7}vmin, ${isSingerMode ? 2.45 : 2.35}rem)`
+    : `clamp(${isSingerMode ? 1.45 : 1.36}rem, ${isSingerMode ? 4.6 : 4.1}vmin, ${isSingerMode ? 4.3 : 3.85}rem)`;
+  const chordSize = isMobileLandscape ? 'clamp(0.9rem, 2.7vmin, 1.35rem)' : 'clamp(0.95rem, 2.45vmin, 1.8rem)';
   const scaledLyricSize = `calc(${lyricSize} * ${fontScale})`;
   const scaledChordSize = `calc(${chordSize} * ${fontScale})`;
   const prepareText = nextSlide
@@ -413,7 +413,7 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
                 <section
                   key={`${sec.titulo}-${idx}`}
                   id={`section-${idx}`}
-                  className={`rounded-2xl border px-3 transition-all duration-300 sm:px-6 lg:px-9 ${isMobileLandscape ? 'py-2' : 'py-4 sm:py-6 lg:py-8'} ${isActive ? 'border-blue-400 bg-blue-500/12 shadow-[0_0_45px_rgba(59,130,246,0.2)]' : 'border-transparent bg-transparent opacity-70'}`}
+                  className={`rounded-2xl border px-3 transition-all duration-300 sm:px-6 lg:px-9 ${isMobileLandscape ? 'py-2' : 'py-4 sm:py-6 lg:py-8'} ${isActive ? 'border-blue-400 bg-blue-500/12 shadow-[0_0_45px_rgba(59,130,246,0.2)]' : 'border-white/0 bg-transparent opacity-85'}`}
                 >
                   <div className={`flex items-center justify-between gap-3 ${isMobileLandscape ? 'mb-2' : 'mb-4'}`}>
                     <span className={`inline-flex rounded-lg px-3 py-1 font-black uppercase tracking-widest ${isMobileLandscape ? 'text-[9px]' : 'text-[10px] sm:text-xs'} ${isActive ? 'bg-blue-500 text-white' : 'bg-zinc-800 text-zinc-500'}`}>

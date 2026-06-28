@@ -6,6 +6,25 @@ import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Pri
 import { calcularOffsetSemitonos, transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 
+const readMusicianLocal = (key, fallback) => {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const saved = window.localStorage.getItem(key);
+    return saved === null ? fallback : JSON.parse(saved);
+  } catch {
+    return fallback;
+  }
+};
+
+const writeMusicianLocal = (key, value) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Preferencias locales de ensayo; no afectan datos remotos.
+  }
+};
+
 const SetlistViewer = ({ user }) => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -29,8 +48,19 @@ const SetlistViewer = ({ user }) => {
   const notacion = user?.preferencias?.notacion || 'sharps';
   const [ensayoMutes, setEnsayoMutes] = useState({});
   const [ensayoVolumes, setEnsayoVolumes] = useState({});
+  const [ensayoFontScale, setEnsayoFontScale] = useState(() => readMusicianLocal('kadosh.musicos.fontSize', 1));
+  const [ensayoShowChords, setEnsayoShowChords] = useState(() => readMusicianLocal('kadosh.musicos.showChords', true));
+  const [ensayoChordFormat, setEnsayoChordFormat] = useState(() => readMusicianLocal('kadosh.musicos.chordFormat', user?.preferencias?.formatoAcordes || 'american'));
+  const [ensayoAccidentalPreference, setEnsayoAccidentalPreference] = useState(() => readMusicianLocal('kadosh.musicos.accidentalPreference', user?.preferencias?.notacion || 'sharps'));
+  const [ensayoLocalTranspose, setEnsayoLocalTranspose] = useState(() => readMusicianLocal('kadosh.musicos.localTranspose', 0));
 
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
+
+  useEffect(() => writeMusicianLocal('kadosh.musicos.fontSize', ensayoFontScale), [ensayoFontScale]);
+  useEffect(() => writeMusicianLocal('kadosh.musicos.showChords', ensayoShowChords), [ensayoShowChords]);
+  useEffect(() => writeMusicianLocal('kadosh.musicos.chordFormat', ensayoChordFormat), [ensayoChordFormat]);
+  useEffect(() => writeMusicianLocal('kadosh.musicos.accidentalPreference', ensayoAccidentalPreference), [ensayoAccidentalPreference]);
+  useEffect(() => writeMusicianLocal('kadosh.musicos.localTranspose', ensayoLocalTranspose), [ensayoLocalTranspose]);
 
   const handleOpenScreen = (path) => {
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -288,6 +318,10 @@ const SetlistViewer = ({ user }) => {
       ensayoOffset = calcularOffset(currentEnsayoSong.tonoOriginal, ensayoTonoFinal);
     }
   }
+  const ensayoEffectiveOffset = ensayoOffset + ensayoLocalTranspose;
+  const ensayoVistaActual = currentEnsayoSong
+    ? transponerNota(ensayoTonoFinal || currentEnsayoSong.tonoOriginal || 'C', ensayoLocalTranspose)
+    : '';
   const ensayoSeccionesParsed = currentEnsayoSong ? parsearCancion(currentEnsayoSong.letraRaw) : [];
 
   if (loading) return <div className="flex justify-center items-center h-64 text-zinc-500 font-bold animate-pulse">Cargando Setlist...</div>;
@@ -433,7 +467,7 @@ const SetlistViewer = ({ user }) => {
                           <span className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded uppercase">{traducirAcorde(tonoFinal || 'C', formatoAcordes)}</span>
                           <span className="block text-[10px] font-bold text-zinc-400 mt-1">{cancion.bpm} BPM</span>
                         </div>
-                        <button onClick={() => { const cantante = evento.cantantesPorCancion?.[cancion.id] || ''; navigate(`/live/${cancion.id}?evento=${id}${cantante ? `&cantante=${encodeURIComponent(cantante)}` : ''}`); }} className="p-3 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-xl transition-all shadow-sm active:scale-95" title="Abrir Teleprompter">
+                        <button onClick={() => { const cantante = evento.cantantesPorCancion?.[cancion.id] || ''; navigate(`/live/${cancion.id}?evento=${id}&modo=ensayo${cantante ? `&cantante=${encodeURIComponent(cantante)}` : ''}`); }} className="p-3 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-xl transition-all shadow-sm active:scale-95" title="Abrir Teleprompter">
                           <Play size={18} className="ml-0.5" />
                         </button>
                       </div>
@@ -729,12 +763,12 @@ const SetlistViewer = ({ user }) => {
 
   {/* ESTUDIO DE ENSAYO (MODAL A PANTALLA COMPLETA - Extraído al nivel raíz) */}
   {showEnsayoPlayer && playlist.length > 0 && currentEnsayoSong && (
-    <div className="fixed inset-0 z-[100] bg-black text-white flex flex-col md:flex-row overflow-hidden animate-in fade-in print:hidden">
+    <div className="fixed inset-0 z-[100] bg-zinc-950 text-white flex flex-col lg:flex-row overflow-hidden animate-in fade-in print:hidden">
       
       {/* BARRA LATERAL (Setlist) */}
-      <div className="w-full md:w-80 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 h-[30vh] md:h-full shadow-[20px_0_50px_rgba(0,0,0,0.5)] z-20">
-        <div className="p-4 md:p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
-          <h3 className="font-black text-lg flex items-center gap-2 text-emerald-400 tracking-tight"><ListMusic size={20}/> Estudio de Ensayo</h3>
+      <div className="w-full lg:w-80 bg-zinc-950/95 border-b lg:border-b-0 lg:border-r border-zinc-800 flex flex-col shrink-0 max-h-[34dvh] lg:max-h-none lg:h-full shadow-[20px_0_50px_rgba(0,0,0,0.45)] z-20">
+        <div className="p-3 md:p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+          <h3 className="font-black text-base md:text-lg flex items-center gap-2 text-emerald-300 tracking-tight"><ListMusic size={20}/> Estudio de Ensayo</h3>
           <button onClick={() => { stopEnsayoAll(); setShowEnsayoPlayer(false); }} className="p-2 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-full transition-colors active:scale-95"><X size={20}/></button>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-2 [&::-webkit-scrollbar]:hidden">
@@ -742,11 +776,11 @@ const SetlistViewer = ({ user }) => {
             <button 
               key={idx}
               onClick={() => setCurrentTrackIdx(idx)}
-              className={`w-full text-left p-3 rounded-xl transition-all border flex items-center gap-3 ${currentTrackIdx === idx ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-100 shadow-sm' : 'border-transparent hover:bg-zinc-800 text-zinc-400 hover:text-white'}`}
+              className={`w-full text-left p-3 rounded-2xl transition-all border flex items-center gap-3 ${currentTrackIdx === idx ? 'bg-emerald-500/16 border-emerald-400/50 text-emerald-100 shadow-sm' : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.07] text-zinc-400 hover:text-white'}`}
             >
-              <span className="font-black text-xs opacity-50 w-4 text-center">{idx + 1}</span>
+              <span className={`font-black text-xs w-6 text-center rounded-lg py-1 ${currentTrackIdx === idx ? 'bg-emerald-400 text-zinc-950' : 'bg-zinc-800 text-zinc-500'}`}>{idx + 1}</span>
               <div className="flex-1 truncate">
-                <p className="font-bold text-sm truncate leading-tight">{song.titulo}</p>
+                <p className="font-black text-sm truncate leading-tight">{song.titulo}</p>
                 <p className="text-[10px] uppercase tracking-wider opacity-70 mt-0.5 truncate">{song.artista}</p>
               </div>
               {currentTrackIdx === idx && ensayoIsPlaying && <PlayCircle size={16} className="text-emerald-500 shrink-0 animate-pulse" />}
@@ -756,43 +790,95 @@ const SetlistViewer = ({ user }) => {
       </div>
 
       {/* ÁREA PRINCIPAL DERECHA */}
-      <div className="flex-1 flex flex-col h-[70vh] md:h-full relative bg-zinc-950">
+      <div className="flex-1 min-h-0 flex flex-col relative bg-[radial-gradient(circle_at_50%_0%,rgba(16,185,129,0.12),transparent_34%),#09090b]">
         
         {/* Cabecera de la canción */}
-        <div className="p-4 md:px-8 py-5 border-b border-zinc-800 bg-zinc-900/50 flex justify-between items-center shrink-0">
-           <div>
-              <h2 className="text-xl md:text-3xl font-black text-white tracking-tight">{currentEnsayoSong.titulo}</h2>
+        <div className="p-3 md:px-8 md:py-5 border-b border-zinc-800/90 bg-zinc-950/72 backdrop-blur-sm flex justify-between items-center gap-4 shrink-0">
+           <div className="min-w-0">
+              <h2 className="text-xl md:text-3xl xl:text-4xl font-black text-white tracking-tight truncate">{currentEnsayoSong.titulo}</h2>
               <p className="text-xs md:text-sm text-zinc-400 mt-1 font-medium">{currentEnsayoSong.artista} • {currentEnsayoSong.bpm} BPM</p>
            </div>
            <div className="text-right">
-              <span className="text-lg md:text-xl font-black text-white bg-zinc-800 border border-zinc-700 px-3 py-1 rounded-lg inline-block shadow-sm">
-                {traducirAcorde(ensayoTonoFinal || 'C', formatoAcordes, notacion)}
+              <span className="text-xl md:text-2xl font-black text-yellow-200 bg-yellow-400/10 border border-yellow-300/25 px-4 py-2 rounded-2xl inline-block shadow-sm">
+                {traducirAcorde(ensayoVistaActual || 'C', ensayoChordFormat, ensayoAccidentalPreference)}
               </span>
-              {cantanteAsignadoEnsayo && <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest mt-1">Canta: {cantanteAsignadoEnsayo}</p>}
+              {cantanteAsignadoEnsayo && <p className="text-[10px] text-emerald-300 font-black uppercase tracking-widest mt-1">Canta: {cantanteAsignadoEnsayo}</p>}
            </div>
         </div>
 
+        <div className="shrink-0 border-b border-zinc-800/80 bg-zinc-950/88 px-3 py-2 md:px-8">
+          <div className="mx-auto flex max-w-6xl flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-zinc-400">
+                Original: {traducirAcorde(ensayoTonoFinal || currentEnsayoSong.tonoOriginal || 'C', ensayoChordFormat, ensayoAccidentalPreference)}
+              </span>
+              <span className="rounded-full border border-yellow-300/25 bg-yellow-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-yellow-200">
+                Vista actual: {traducirAcorde(ensayoVistaActual || 'C', ensayoChordFormat, ensayoAccidentalPreference)}
+              </span>
+              <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wide ${ensayoLocalTranspose === 0 ? 'border-zinc-800 bg-zinc-900 text-zinc-500' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'}`}>
+                {ensayoLocalTranspose > 0 ? `+${ensayoLocalTranspose}` : ensayoLocalTranspose}
+              </span>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pb-1 xl:pb-0 [&::-webkit-scrollbar]:hidden">
+              <div className="flex shrink-0 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+                <button type="button" onClick={() => setEnsayoFontScale(prev => Math.max(0.8, Number((prev - 0.08).toFixed(2))))} className="px-3 py-2 text-xs font-black text-zinc-300 hover:bg-zinc-800">A-</button>
+                <button type="button" onClick={() => setEnsayoFontScale(1)} className="border-x border-zinc-800 px-3 py-2 text-xs font-black text-zinc-400 hover:bg-zinc-800">Reset</button>
+                <button type="button" onClick={() => setEnsayoFontScale(prev => Math.min(1.45, Number((prev + 0.08).toFixed(2))))} className="px-3 py-2 text-xs font-black text-zinc-300 hover:bg-zinc-800">A+</button>
+              </div>
+
+              <button type="button" onClick={() => setEnsayoShowChords(prev => !prev)} className={`shrink-0 rounded-2xl border px-3 py-2 text-xs font-black uppercase ${ensayoShowChords ? 'border-blue-400/35 bg-blue-500/10 text-blue-200' : 'border-zinc-800 bg-zinc-900 text-zinc-500'}`}>
+                {ensayoShowChords ? 'Ocultar acordes' : 'Mostrar acordes'}
+              </button>
+
+              <button type="button" onClick={() => setEnsayoChordFormat(prev => prev === 'american' ? 'latin' : 'american')} className="shrink-0 rounded-2xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-black uppercase text-zinc-300">
+                {ensayoChordFormat === 'american' ? 'Americano' : 'Latino'}
+              </button>
+
+              <button type="button" onClick={() => setEnsayoAccidentalPreference(prev => prev === 'sharps' ? 'flats' : 'sharps')} className="shrink-0 rounded-2xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-black uppercase text-zinc-300">
+                {ensayoAccidentalPreference === 'sharps' ? '# sostenidos' : 'b bemoles'}
+              </button>
+
+              <div className="flex shrink-0 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+                <button type="button" onClick={() => setEnsayoLocalTranspose(prev => Math.max(-11, prev - 1))} className="px-3 py-2 text-xs font-black text-zinc-300 hover:bg-zinc-800">- tono</button>
+                <button type="button" onClick={() => setEnsayoLocalTranspose(0)} className="border-x border-zinc-800 px-3 py-2 text-xs font-black text-zinc-400 hover:bg-zinc-800">Tono original</button>
+                <button type="button" onClick={() => setEnsayoLocalTranspose(prev => Math.min(11, prev + 1))} className="px-3 py-2 text-xs font-black text-zinc-300 hover:bg-zinc-800">+ tono</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Letras y Acordes Transpuestos */}
-        <div className="flex-1 overflow-y-auto p-5 md:p-10 [&::-webkit-scrollbar]:hidden">
-           <div className="max-w-4xl mx-auto pb-12">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-5 md:px-8 md:py-8 xl:px-12 [&::-webkit-scrollbar]:hidden">
+           <div className="max-w-6xl mx-auto pb-10">
               {ensayoSeccionesParsed.length === 0 ? (
                 <p className="text-zinc-600 font-medium text-center py-20 border-2 border-dashed border-zinc-800 rounded-2xl">No hay letra registrada para esta canción.</p>
               ) : (
                 ensayoSeccionesParsed.map((seccion, sIdx) => (
-                  <div key={sIdx} className="mb-8 break-inside-avoid">
-                    <span className="text-[10px] md:text-xs font-black uppercase tracking-widest px-3 py-1.5 rounded-lg mb-3 inline-block bg-zinc-800 text-blue-400 border border-zinc-700 shadow-sm">
+                  <div key={sIdx} className="mb-8 md:mb-10 break-inside-avoid rounded-3xl border border-white/5 bg-black/14 px-3 py-4 md:px-6 md:py-6">
+                    <span className="text-[11px] md:text-sm font-black uppercase tracking-widest px-4 py-2 rounded-2xl mb-4 inline-block bg-blue-500/12 text-blue-200 border border-blue-400/25 shadow-sm">
                       {seccion.titulo}
                     </span>
                     {seccion.lineas.map((linea, lIdx) => (
-                      <div key={lIdx} className="flex flex-wrap items-end gap-x-1.5 md:gap-x-2 gap-y-4 mt-2 font-medium leading-tight">
+                      <div key={lIdx} className="flex flex-wrap items-end gap-x-2 md:gap-x-3 gap-y-5 md:gap-y-7 mt-3 md:mt-4 font-medium leading-tight">
                         {linea.map((palabra, pIdx) => (
                           <div key={pIdx} className="flex items-end whitespace-nowrap">
                             {palabra.map((silaba, silIdx) => (
                               <div key={silIdx} className="flex flex-col justify-end items-start">
-                                <span className="font-bold min-h-[1.1rem] md:min-h-[1.5rem] flex items-end mb-0.5 text-xs md:text-sm text-blue-400 leading-none">
-                                  {silaba.acorde ? traducirAcorde(transponerNota(silaba.acorde, ensayoOffset), formatoAcordes, notacion) : ""}
+                                {ensayoShowChords && (
+                                  <span
+                                    className="font-black min-h-[1.4rem] md:min-h-[1.85rem] flex items-end mb-1 text-base md:text-xl xl:text-2xl text-yellow-300 leading-none"
+                                    style={{ fontSize: `calc(1em * ${ensayoFontScale})` }}
+                                  >
+                                    {silaba.acorde ? traducirAcorde(transponerNota(silaba.acorde, ensayoEffectiveOffset), ensayoChordFormat, ensayoAccidentalPreference) : ""}
+                                  </span>
+                                )}
+                                <span
+                                  className="text-[1.35rem] md:text-[1.8rem] xl:text-[2.15rem] font-black text-zinc-50 leading-[0.96]"
+                                  style={{ fontSize: `calc(1em * ${ensayoFontScale})` }}
+                                >
+                                  {silaba.texto}
                                 </span>
-                                <span className="text-[15px] md:text-[18px] text-zinc-100 leading-none">{silaba.texto}</span>
                               </div>
                             ))}
                           </div>
@@ -806,9 +892,9 @@ const SetlistViewer = ({ user }) => {
         </div>
 
         {/* Reproductor / Mezcladora Inferior */}
-        <div className="bg-zinc-900 border-t border-zinc-800 p-4 md:p-6 shrink-0 shadow-[0_-20px_50px_rgba(0,0,0,0.5)] z-10">
+        <div className="bg-zinc-950/96 border-t border-zinc-800 p-2 md:p-4 shrink-0 shadow-[0_-20px_50px_rgba(0,0,0,0.45)] z-10">
            {!hasEnsayoAudio ? (
-             <div className="text-center text-zinc-500 font-medium text-sm py-4">No hay pista de audio ni secuencias subidas para ensayar esta canción.</div>
+             <div className="mx-auto flex w-fit items-center justify-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/70 px-4 py-2 text-center text-[11px] font-black uppercase tracking-wide text-zinc-500"><Music size={13} /> Sin pista ni secuencias</div>
            ) : (
              <div className="flex flex-col gap-5 max-w-5xl mx-auto">
                 {/* Controles Principales */}
