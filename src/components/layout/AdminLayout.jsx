@@ -154,7 +154,7 @@ const AdminLayout = ({ children, user }) => {
   }, [user?.uid]);
 
   return (
-    <div className="dark kp-app-shell min-h-screen flex text-zinc-100 transition-colors duration-300">
+    <div className="dark kp-app-shell h-dvh overflow-hidden flex text-zinc-100 transition-colors duration-300">
       {/* Fondo oscuro para móvil cuando el menú está abierto */}
       {isOpen && (
         <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsOpen(false)} />
@@ -201,8 +201,8 @@ const AdminLayout = ({ children, user }) => {
       )}
 
       {/* Barra Lateral (Sidebar) */}
-      <aside className={`fixed inset-y-0 left-0 bg-zinc-950/88 backdrop-blur-md w-64 border-r border-white/10 z-50 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:flex-shrink-0 shadow-2xl md:shadow-none flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="h-16 flex items-center justify-between px-6 border-b border-white/10">
+      <aside className={`fixed inset-y-0 left-0 h-dvh bg-zinc-950/88 backdrop-blur-md w-64 border-r border-white/10 z-50 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:flex-shrink-0 shadow-2xl md:shadow-none flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="h-16 shrink-0 flex items-center justify-between px-6 border-b border-white/10">
           <div className="flex items-center gap-2">
             <span className="text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-violet-600 tracking-tight">Kadosh</span>
             <span className="text-[10px] font-bold tracking-widest uppercase kp-badge px-2 py-0.5 rounded-md">Pro</span>
@@ -218,7 +218,7 @@ const AdminLayout = ({ children, user }) => {
             </button>
           </div>
         </div>
-        <nav className="p-4 space-y-2 flex-1 overflow-y-auto">
+        <nav className="p-4 space-y-2 flex-1 min-h-0 overflow-y-auto">
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
             return (
@@ -234,7 +234,7 @@ const AdminLayout = ({ children, user }) => {
             );
           })}
         </nav>
-        <div className="p-4 border-t border-white/10">
+        <div className="p-4 border-t border-white/10 shrink-0">
           <button 
             onClick={handleLogout}
             className="kp-button-danger flex items-center gap-3 px-4 py-3 w-full rounded-xl transition-all font-bold active:scale-95"
@@ -246,9 +246,9 @@ const AdminLayout = ({ children, user }) => {
       </aside>
 
       {/* Contenido Principal */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 h-dvh flex flex-col min-w-0 min-h-0">
         {/* Cabecera Móvil (Hamburguesa) */}
-        <header className="h-16 bg-zinc-950/88 backdrop-blur-md border-b border-white/10 flex items-center justify-between px-4 md:hidden shadow-sm transition-colors">
+        <header className="h-16 shrink-0 bg-zinc-950/88 backdrop-blur-md border-b border-white/10 flex items-center justify-between px-4 md:hidden shadow-sm transition-colors">
           <div className="flex items-center">
             <button onClick={() => setIsOpen(true)} className="text-zinc-400 p-2 -ml-2 hover:bg-white/10 hover:text-white rounded-lg">
               <Menu size={24} />
@@ -265,7 +265,7 @@ const AdminLayout = ({ children, user }) => {
           </button>
         </header>
         
-        <main className="flex-1 overflow-y-auto p-4 md:p-8">
+        <main className="flex-1 min-h-0 overflow-y-auto p-4 md:p-8">
           {children}
         </main>
       </div>
