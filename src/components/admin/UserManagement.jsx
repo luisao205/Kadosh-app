@@ -5,8 +5,8 @@ import { crearUsuarioPorAdmin, actualizarUsuarioPorAdmin, crearPerfilSinAcceso, 
 import { Users, UserPlus, Shield, Music, Trash2, Edit, AlertCircle, Key, MonitorPlay, Eye, EyeOff } from 'lucide-react';
 
 const INSTRUMENTOS_DISPONIBLES = [
-  "Voz Principal", "Coros", "BaterÃ­a", "Piano", 
-  "Bajo", "Guitarra AcÃºstica", "Guitarra ElÃ©ctrica", "PercusiÃ³n"
+  "Voz Principal", "Coros", "Bateria", "Piano",
+  "Bajo", "Guitarra Acustica", "Guitarra Electrica", "Percusion"
 ];
 
 const normalizeRole = (role = '') => String(role)
@@ -73,16 +73,16 @@ const UserManagement = ({ user }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // --- MODO EDICIÃ“N ---
+    // --- MODO EDICION ---
     if (editingUserId && isActivating) {
       if (!email || password.length < 6) {
-        showToast("Se requiere correo y contraseÃ±a de al menos 6 caracteres.");
+        showToast("Se requiere correo y contrasena de al menos 6 caracteres.");
         return;
       }
       setIsSaving(true);
       try {
         await habilitarAccesoWeb(editingUserId, email, password);
-        showToast(`Â¡Acceso web habilitado para ${nombre}!`, 'success');
+        showToast(`Acceso web habilitado para ${nombre}.`, 'success');
         cancelEdit();
       } catch (error) {
         console.error(error);
@@ -100,13 +100,13 @@ const UserManagement = ({ user }) => {
       try {
         await actualizarUsuarioPorAdmin(editingUserId, nombre, rol, instrumentosSeleccionados, fechaNacimiento);
         await addDoc(collection(db, 'notificaciones'), {
-          titulo: 'ðŸ” Rol Actualizado',
+          titulo: 'Rol Actualizado',
           mensaje: `Un administrador ha actualizado tus permisos a: ${rol}.`,
           destinatarios: [editingUserId],
           emisorId: user?.uid,
           fechaCreacion: new Date().toISOString()
         });
-        showToast(`Â¡Usuario ${nombre} actualizado exitosamente!`, 'success');
+        showToast(`Usuario ${nombre} actualizado exitosamente.`, 'success');
         cancelEdit();
       } catch (error) {
         console.error(error);
@@ -117,13 +117,13 @@ const UserManagement = ({ user }) => {
       return;
     }
 
-    // --- MODO CREACIÃ“N ---
+    // --- MODO CREACION ---
     if (sinAcceso) {
       if (!nombre) return showToast("El nombre es obligatorio.");
       setIsSaving(true);
       try {
         await crearPerfilSinAcceso(nombre, rol, instrumentosSeleccionados, fechaNacimiento);
-        showToast(`Â¡Perfil de ${nombre} creado!`, 'success');
+        showToast(`Perfil de ${nombre} creado.`, 'success');
         cancelEdit();
       } catch (error) {
         showToast("Error al crear el perfil.");
@@ -134,15 +134,15 @@ const UserManagement = ({ user }) => {
     }
 
     if (!nombre || !email || password.length < 6) {
-      showToast("Datos invÃ¡lidos. La contraseÃ±a debe tener al menos 6 caracteres.");
+      showToast("Datos invalidos. La contrasena debe tener al menos 6 caracteres.");
       return;
     }
 
     setIsSaving(true);
     try {
       await crearUsuarioPorAdmin(email, password, nombre, rol, instrumentosSeleccionados, fechaNacimiento);
-      showToast(`Â¡Usuario ${nombre} creado exitosamente!`, 'success');
-      cancelEdit(); // Reutilizamos esta funciÃ³n para limpiar el formulario
+      showToast(`Usuario ${nombre} creado exitosamente.`, 'success');
+      cancelEdit(); // Reutilizamos esta funcion para limpiar el formulario
     } catch (error) {
       console.error(error);
       showToast("Error al crear usuario. Puede que el correo ya exista.");
@@ -161,7 +161,7 @@ const UserManagement = ({ user }) => {
     setFechaNacimiento(user.fechaNacimiento || '');
     setInstrumentosSeleccionados(user.instrumentos || []);
     
-    // Hacer scroll hacia arriba suavemente para mÃ³viles
+    // Hacer scroll hacia arriba suavemente para moviles
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -195,7 +195,7 @@ const UserManagement = ({ user }) => {
       <div className="flex flex-col items-center justify-center h-64 text-center">
         <AlertCircle size={48} className="text-red-500 mb-4" />
         <h2 className="text-2xl font-bold text-zinc-900">Acceso Restringido</h2>
-        <p className="text-zinc-500 mt-2">Solo el dueÃ±o de la aplicaciÃ³n puede gestionar los accesos del equipo.</p>
+        <p className="text-zinc-500 mt-2">Solo el dueno de la aplicacion puede gestionar los accesos del equipo.</p>
       </div>
     );
   }
@@ -221,7 +221,7 @@ const UserManagement = ({ user }) => {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Nombre Completo</label>
-              <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" placeholder="Ej. Juan PÃ©rez" required />
+              <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" placeholder="Ej. Juan Perez" required />
             </div>
             <div>
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Fecha de Nacimiento (Opcional)</label>
@@ -231,7 +231,7 @@ const UserManagement = ({ user }) => {
             {editingUserId && !isActivating ? (
               <div className="p-3 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-800 dark:text-indigo-300 text-xs rounded-lg border border-indigo-100 dark:border-indigo-500/20">
                 Editando perfil de: <b>{email || 'Sin correo asignado'}</b><br/>
-                <span className="text-[10px] opacity-80">(Correo y contraseÃ±a no modificables por seguridad)</span>
+                <span className="text-[10px] opacity-80">(Correo y contrasena no modificables por seguridad)</span>
                 {sinAcceso && (
                   <button type="button" onClick={() => setIsActivating(true)} className="mt-2 w-full py-2 bg-indigo-600 text-white rounded-md font-bold flex items-center justify-center gap-2 transition-transform active:scale-95">
                     <Key size={14} /> Habilitar Acceso Web
@@ -243,18 +243,18 @@ const UserManagement = ({ user }) => {
                 {!isActivating && (
                   <label className="flex items-center gap-2 mb-4 p-3 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl cursor-pointer">
                     <input type="checkbox" checked={sinAcceso} onChange={(e) => setSinAcceso(e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
-                    <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">Solo crear perfil (Sin correo/contraseÃ±a)</span>
+                    <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">Solo crear perfil (Sin correo/contrasena)</span>
                   </label>
                 )}
                 
                 {(!sinAcceso || isActivating) && (
                   <>
                 <div>
-                  <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Correo ElectrÃ³nico</label>
+                  <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Correo Electronico</label>
                   <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" placeholder="juan@kadosh.com" required />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">ContraseÃ±a Inicial</label>
+                  <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Contrasena Inicial</label>
                   <div className="relative">
                     <input type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} className="kp-input w-full p-2.5 pr-10 rounded-xl text-sm" placeholder="Ej. kadosh123" minLength={6} required />
                     <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-400 hover:text-zinc-600 transition-colors">
@@ -270,14 +270,14 @@ const UserManagement = ({ user }) => {
             {!isActivating && <div>
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Rol en Kadosh</label>
               <select value={rol} onChange={(e) => setRol(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm">
-                <option value="musico" className="bg-white dark:bg-zinc-900">MÃºsico (Solo ve canciones en Modo Vivo)</option>
+                <option value="musico" className="bg-white dark:bg-zinc-900">Musico (Solo ve canciones en Modo Vivo)</option>
                 <option value="multimedia" className="bg-white dark:bg-zinc-900">Multimedia (Controlador de Proyector)</option>
                 <option value="admin" className="bg-white dark:bg-zinc-900">Administrador (Puede editar Repertorio)</option>
                 <option value="dueño" className="bg-white dark:bg-zinc-900">Admin Principal (Oculto)</option>
               </select>
             </div>}
             {!isActivating && <div>
-              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Instrumentos / FunciÃ³n</label>
+              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Instrumentos / Funcion</label>
               <div className="flex flex-wrap gap-2">
                 {INSTRUMENTOS_DISPONIBLES.map(inst => (
                   <button
@@ -292,13 +292,13 @@ const UserManagement = ({ user }) => {
                   </button>
                 ))}
               </div>
-              {/* OpciÃ³n para crear un instrumento o funciÃ³n nueva */}
+              {/* Opcion para crear un instrumento o funcion nueva */}
               <div className="flex gap-2 mt-2">
                 <input 
                   type="text" 
                   value={nuevoInstrumentoCustom} 
                   onChange={(e) => setNuevoInstrumentoCustom(e.target.value)}
-                  placeholder="AÃ±adir funciÃ³n (Ej. TrombÃ³n)" 
+                  placeholder="Anadir funcion (Ej. Trombon)"
                   className="kp-input flex-1 p-2 rounded-lg text-xs"
                 />
                 <button 
@@ -306,7 +306,7 @@ const UserManagement = ({ user }) => {
                   onClick={handleAddCustomInstrument}
                   className="kp-button-secondary px-3 rounded-lg text-xs font-bold transition-colors"
                 >
-                  AÃ±adir
+                  Anadir
                 </button>
               </div>
             </div>}
@@ -376,15 +376,15 @@ const UserManagement = ({ user }) => {
         </div>
       </div>
 
-      {/* Modal de ConfirmaciÃ³n de EliminaciÃ³n */}
+      {/* Modal de Confirmacion de Eliminacion */}
       {userToDelete && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in p-4">
           <div className="kp-modal p-6 rounded-2xl max-w-sm w-full mx-4 animate-in zoom-in-95">
-            <h3 className="text-lg font-black text-zinc-900 dark:text-white mb-2">Â¿Eliminar integrante?</h3>
-            <p className="text-zinc-500 dark:text-zinc-400 text-sm mb-6">Â¿EstÃ¡s seguro de que quieres quitarle el acceso a <b>"{userToDelete.nombre}"</b>? Ya no podrÃ¡ entrar a la aplicaciÃ³n.</p>
+            <h3 className="text-lg font-black text-zinc-900 dark:text-white mb-2">Eliminar integrante?</h3>
+            <p className="text-zinc-500 dark:text-zinc-400 text-sm mb-6">Estas seguro de que quieres quitarle el acceso a <b>"{userToDelete.nombre}"</b>? Ya no podra entrar a la aplicacion.</p>
             <div className="flex gap-3 justify-end">
               <button onClick={() => setUserToDelete(null)} className="kp-button-secondary px-4 py-2.5 text-sm font-bold rounded-xl transition-colors">Cancelar</button>
-              <button onClick={confirmarEliminacion} className="kp-button-danger px-4 py-2.5 text-sm font-bold rounded-xl transition-colors">SÃ­, eliminar</button>
+              <button onClick={confirmarEliminacion} className="kp-button-danger px-4 py-2.5 text-sm font-bold rounded-xl transition-colors">Si, eliminar</button>
             </div>
           </div>
         </div>
