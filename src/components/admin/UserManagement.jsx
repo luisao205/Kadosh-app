@@ -9,6 +9,18 @@ const INSTRUMENTOS_DISPONIBLES = [
   "Bajo", "Guitarra AcÃºstica", "Guitarra ElÃ©ctrica", "PercusiÃ³n"
 ];
 
+const normalizeRole = (role = '') => String(role)
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '');
+
+const isOwnerRole = (role) => {
+  const normalized = normalizeRole(role);
+  return normalized === 'dueno' || normalized === 'duea±o' || normalized === 'dueã±o' || role === 'dueño';
+};
+
+const isAdminLikeRole = (role) => role === 'admin' || isOwnerRole(role);
+
 const UserManagement = ({ user }) => {
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
@@ -27,6 +39,7 @@ const UserManagement = ({ user }) => {
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const isOwner = isOwnerRole(user?.rol || user?.role);
 
   const showToast = (message, type = 'error') => {
     setToast({ message, type });
@@ -177,7 +190,7 @@ const UserManagement = ({ user }) => {
     }
   };
 
-  if (user?.rol !== 'dueÃ±o') {
+  if (!isOwner) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-center">
         <AlertCircle size={48} className="text-red-500 mb-4" />
@@ -260,7 +273,7 @@ const UserManagement = ({ user }) => {
                 <option value="musico" className="bg-white dark:bg-zinc-900">MÃºsico (Solo ve canciones en Modo Vivo)</option>
                 <option value="multimedia" className="bg-white dark:bg-zinc-900">Multimedia (Controlador de Proyector)</option>
                 <option value="admin" className="bg-white dark:bg-zinc-900">Administrador (Puede editar Repertorio)</option>
-                <option value="dueÃ±o" className="bg-white dark:bg-zinc-900">Admin Principal (Oculto)</option>
+                <option value="dueño" className="bg-white dark:bg-zinc-900">Admin Principal (Oculto)</option>
               </select>
             </div>}
             {!isActivating && <div>
@@ -322,8 +335,8 @@ const UserManagement = ({ user }) => {
                   {user.fotoPerfil ? (
                     <img src={user.fotoPerfil} alt={user.nombre} className="w-12 h-12 rounded-xl object-cover shadow-sm border border-zinc-200 dark:border-zinc-700 shrink-0" />
                   ) : (
-                    <div className={`p-3 rounded-xl shrink-0 ${['admin', 'dueÃ±o'].includes(user.rol) ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400' : user.rol === 'multimedia' ? 'bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400' : 'bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400'}`}>
-                      {['admin', 'dueÃ±o'].includes(user.rol) ? <Shield size={20} /> : user.rol === 'multimedia' ? <MonitorPlay size={20} /> : <Music size={20} />}
+                    <div className={`p-3 rounded-xl shrink-0 ${isAdminLikeRole(user.rol) ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400' : user.rol === 'multimedia' ? 'bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400' : 'bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400'}`}>
+                      {isAdminLikeRole(user.rol) ? <Shield size={20} /> : user.rol === 'multimedia' ? <MonitorPlay size={20} /> : <Music size={20} />}
                     </div>
                   )}
                   
@@ -343,8 +356,8 @@ const UserManagement = ({ user }) => {
                     ) : (
                       <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">{user.email}</p>
                     )}
-                    <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md ${['admin', 'dueÃ±o'].includes(user.rol) ? 'bg-amber-200/50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400' : user.rol === 'multimedia' ? 'bg-violet-200/50 dark:bg-violet-500/20 text-violet-700 dark:text-violet-400' : 'bg-blue-200/50 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400'}`}>
-                      {user.rol === 'dueÃ±o' ? 'admin' : user.rol}
+                    <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md ${isAdminLikeRole(user.rol) ? 'bg-amber-200/50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400' : user.rol === 'multimedia' ? 'bg-violet-200/50 dark:bg-violet-500/20 text-violet-700 dark:text-violet-400' : 'bg-blue-200/50 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400'}`}>
+                      {isOwnerRole(user.rol) ? 'admin' : user.rol}
                     </span>
                   </div>
                   
