@@ -3,9 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc, deleteDoc, deleteField } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { parsearCancion } from '../../utils/songParser';
-import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon, Search, SearchCode, Settings2, Clock, ShieldCheck, MessageSquare } from 'lucide-react';
+import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon, Search, SearchCode, Settings2, Clock, ShieldCheck, MessageSquare, Music } from 'lucide-react';
 import { calcularOffsetSemitonos, traducirAcorde } from '../../utils/musicCore';
 import { formatEventDate, parseAppDate } from '../../utils/dateUtils';
+import { getSongSearchMatch } from '../../utils/songSearch';
+import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
+import { isVideoMediaUrl } from '../../utils/mediaUtils';
 import AutoFitText from './AutoFitText';
 
 const ProyectorController = ({ user }) => {
@@ -334,14 +337,12 @@ const ProyectorController = ({ user }) => {
         // En un entorno real, filtrarías en Firestore. Aquí buscamos una muestra rápida
         // o puedes usar un índice de búsqueda. Por ahora, traeremos las más recientes
         // y filtraremos localmente para mayor compatibilidad.
-        const qAll = query(collection(db, 'canciones'), limit(50));
+        const qAll = query(collection(db, 'canciones'));
         const snap = await getDocs(qAll);
         const results = snap.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter(c => 
-            c.titulo.toLowerCase().includes(songSearchTerm.toLowerCase()) || 
-            c.artista?.toLowerCase().includes(songSearchTerm.toLowerCase())
-          );
+          .filter(c => getSongSearchMatch(c, songSearchTerm).matches)
+          .slice(0, 50);
         setGlobalSearchResults(results);
       } catch (e) {
         console.error("Error buscando canciones:", e);
@@ -586,19 +587,45 @@ const ProyectorController = ({ user }) => {
   const agregarCancionAlSetlist = async (song) => {
     if (!evento) return;
     
-    const itemActualizado = { type: 'song', value: song.id, idLocal: `extra_${Date.now()}` };
+    const itemActualizado = { type: 'song', value: song.id, idLocal: `extra_${song.id}_${Date.now()}` };
     const nuevoSetlist = [...(evento.setlist || []), itemActualizado];
     
     try {
       await updateDoc(doc(db, 'eventos', eventoId), { setlist: nuevoSetlist });
       // Actualizar estado local para que aparezca en la lista izquierda
-      setCanciones(prev => [...prev, song]);
+      setCanciones(prev => prev.some(c => c.id === song.id) ? prev : [...prev, song]);
       await handleSelectSong(song);
       setSongSearchTerm(''); // Limpiar búsqueda
     } catch (e) {
       console.error("Error agregando canción de última hora:", e);
     }
   };
+
+  const isTemporarySetlistItem = (item) => String(item?.idLocal || '').startsWith('extra_');
+
+  const quitarCancionAgregada = async (item, e) => {
+    e?.stopPropagation();
+    if (!evento || !isTemporarySetlistItem(item)) return;
+
+    const nuevoSetlist = (evento.setlist || []).filter(setlistItem => setlistItem.idLocal !== item.idLocal);
+    const updates = { setlist: nuevoSetlist };
+
+    if (activeSongId === item.value) {
+      updates.currentSongId = null;
+      updates.liveState = deleteField();
+      setActiveSongId(null);
+      setPreviewSlide(null);
+      setPreviewMedia(null);
+    }
+
+    try {
+      await updateDoc(doc(db, 'eventos', eventoId), updates);
+    } catch (e) {
+      console.error("Error quitando canciÃ³n agregada:", e);
+    }
+  };
+
+  const cancionesAgregadasTemporales = getSetlistSongItems().filter(isTemporarySetlistItem);
 
   const projectMedia = async (mediaObj) => {
     if (!mediaObj) return;
@@ -836,7 +863,7 @@ const ProyectorController = ({ user }) => {
     });
   };
 
-  const handleUploadCloudinary = async (e) => {
+  const handleUploadBackground = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     
@@ -844,29 +871,22 @@ const ProyectorController = ({ user }) => {
     const fileType = file.type.startsWith('video') ? 'video' : 'image';
     setUploadingFiles(prev => [...prev, { id: uploadId, name: file.name, type: fileType, folder: currentFolder || 'root' }]);
     setIsUploadingFondo(true);
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("upload_preset", "KADOSH");
 
     try {
-      // auto/upload soporta tanto videos como imágenes en Cloudinary
-      const res = await fetch("https://api.cloudinary.com/v1_1/dgi9l8blg/auto/upload", {
-        method: "POST",
-        body: formData
-      });
-      const data = await res.json();
+      const uploaded = await uploadToCloudinary(file, 'kadosh/projector-backgrounds');
+      const url = uploaded.url;
       
-      if (data.secure_url) {
+      if (url) {
         const nuevaLib = [...multimediaLib, { 
-          url: data.secure_url, 
-          type: data.resource_type, 
+          url, 
+        type: uploaded.type || fileType, 
           name: file.name,
           folder: currentFolder || 'root'
         }];
 
         // Actualizamos el fondo del evento actual, pero los archivos a la Bóveda Global
         await setDoc(doc(db, 'eventos', eventoId), { 
-          proyectorFondo: data.secure_url
+          proyectorFondo: url
         }, { merge: true });
         await setDoc(doc(db, 'sistema', 'multimedia'), { 
           multimediaLib: nuevaLib 
@@ -874,17 +894,18 @@ const ProyectorController = ({ user }) => {
         
         // Si es una canción real (no modo global), guardamos la referencia
         if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
-          await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: data.secure_url }, { merge: true });
-          setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: data.secure_url } : c));
+          await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: url }, { merge: true });
+          setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: url } : c));
         }
       }
     } catch (err) {
-      console.error("Error subiendo a Cloudinary", err);
+      console.error("Error subiendo fondo", err);
       alert("Hubo un error subiendo el fondo.");
     } finally {
       setIsUploadingFondo(false);
       setShowFondosModal(false);
       setUploadingFiles(prev => prev.filter(f => f.id !== uploadId));
+      e.target.value = '';
     }
   };
 
@@ -1040,7 +1061,7 @@ const ProyectorController = ({ user }) => {
                 type="text"
                 value={songSearchTerm}
                 onChange={(e) => setSongSearchTerm(e.target.value)}
-                placeholder="Buscar canción global..."
+                placeholder="Buscar por titulo, artista o letra..."
                 className="w-full bg-zinc-950 border border-zinc-700 rounded-xl pl-9 pr-4 py-2 text-xs focus:border-violet-500 outline-none transition-all"
               />
             </div>
@@ -1051,19 +1072,27 @@ const ProyectorController = ({ user }) => {
                 <p className="text-[10px] font-black text-violet-400 uppercase tracking-widest px-1 flex justify-between">
                   Resultados Globales {isSearchingGlobal && <Loader2 size={10} className="animate-spin"/>}
                 </p>
-                {globalSearchResults.map(song => (
+                {globalSearchResults.map(song => {
+                  const searchMatch = getSongSearchMatch(song, songSearchTerm);
+                  return (
                   <button 
                     key={song.id}
                     onClick={() => agregarCancionAlSetlist(song)}
-                    className="w-full text-left p-3 rounded-xl bg-violet-600/10 border border-violet-500/30 hover:bg-violet-600/20 transition-all group flex justify-between items-center"
+                    className="w-full text-left p-3 rounded-xl bg-violet-600/10 border border-violet-500/30 hover:bg-violet-600/20 transition-all group flex justify-between items-center gap-3"
                   >
                     <div className="min-w-0">
                       <p className="font-bold text-xs truncate text-white">{song.titulo}</p>
                       <p className="text-[10px] text-zinc-500 truncate">{song.artista}</p>
+                      {searchMatch.field === 'lyrics' && searchMatch.snippet && (
+                        <p className="mt-1 line-clamp-2 text-[10px] font-bold leading-snug text-emerald-300">
+                          Letra: {searchMatch.snippet}
+                        </p>
+                      )}
                     </div>
                     <Plus size={14} className="text-violet-400 group-hover:scale-125 transition-transform" />
                   </button>
-                ))}
+                );
+                })}
                 {globalSearchResults.length === 0 && !isSearchingGlobal && (
                   <p className="text-[10px] text-zinc-600 italic text-center py-4">No se encontraron canciones</p>
                 )}
@@ -1089,14 +1118,25 @@ const ProyectorController = ({ user }) => {
                 const c = canciones.find(c => c.id === item.value);
                 if (!c) return null;
                 return (
-                  <button 
-                    key={c.id} 
-                    onClick={() => handleSelectSong(c)}
-                    className={`w-full text-left p-3 rounded-xl transition-all border ${activeSongId === c.id ? 'bg-violet-600/10 border-violet-500/50 text-white shadow-sm' : 'border-transparent hover:bg-zinc-800/50 text-zinc-400 hover:text-zinc-200'}`}
-                  >
-                    <p className="font-bold text-sm truncate">{idx + 1}. {c.titulo}</p>
-                    <p className="text-xs opacity-70 truncate">{c.artista}</p>
-                  </button>
+                  <div key={item.idLocal || `${c.id}-${idx}`} className={`flex items-stretch gap-2 rounded-xl border ${activeSongId === c.id ? 'border-violet-500/50 bg-violet-600/10 text-white shadow-sm' : 'border-transparent text-zinc-400'}`}>
+                    <button 
+                      onClick={() => handleSelectSong(c)}
+                      className="min-w-0 flex-1 rounded-xl p-3 text-left transition-all hover:bg-zinc-800/50 hover:text-zinc-200"
+                    >
+                      <p className="font-bold text-sm truncate">{idx + 1}. {c.titulo}</p>
+                      <p className="text-xs opacity-70 truncate">{c.artista}</p>
+                    </button>
+                    {isTemporarySetlistItem(item) && (
+                      <button
+                        type="button"
+                        onClick={(e) => quitarCancionAgregada(item, e)}
+                        className="my-2 mr-2 shrink-0 rounded-xl border border-red-500/25 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-300 hover:bg-red-500/20"
+                        title="Quitar canción agregada"
+                      >
+                        Quitar
+                      </button>
+                    )}
+                  </div>
                 );
               });
             })()}
@@ -1340,7 +1380,7 @@ const ProyectorController = ({ user }) => {
                   </>
                 ) : previewSlide ? (
                   <>
-                    {fondoActivo && (fondoActivo.match(/\.(mp4|webm|mov)$/i) || fondoActivo.includes('video/upload')) ? (
+                    {fondoActivo && isVideoMediaUrl(fondoActivo) ? (
                       <video src={fondoActivo} autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     ) : fondoActivo && (
                       <img src={fondoActivo} className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
@@ -1401,7 +1441,7 @@ const ProyectorController = ({ user }) => {
                    <p className="relative z-10 text-red-900/50 font-black uppercase tracking-widest">Pantalla en Negro</p>
                 ) : displayLiveSlide ? (
                   <> {/* LETRAS EN VIVO */}
-                    {!modoTransmision && fondoActivo && (fondoActivo.match(/\.(mp4|webm|mov)$/i) || fondoActivo.includes('video/upload')) ? (
+                    {!modoTransmision && fondoActivo && isVideoMediaUrl(fondoActivo) ? (
                       <video src={fondoActivo} autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     ) : !modoTransmision && fondoActivo && (
                       <img src={fondoActivo} className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
@@ -1596,13 +1636,24 @@ const ProyectorController = ({ user }) => {
               const c = canciones.find(c => c.id === item.value);
               if (!c) return null;
               return (
-                <button 
-                  key={idx} 
-                  onClick={() => handleSelectSong(c)}
-                  className={`inline-flex items-center px-4 py-2 rounded-2xl text-sm font-black transition-all border shadow-sm ${activeSongId === c.id ? 'bg-violet-600 text-white border-violet-500' : 'bg-zinc-900 text-zinc-400 border-white/10'}`}
-                >
-                  {idx + 1}. {c.titulo}
-                </button>
+                <div key={item.idLocal || `${c.id}-${idx}`} className={`inline-flex items-center rounded-2xl border shadow-sm ${activeSongId === c.id ? 'bg-violet-600 text-white border-violet-500' : 'bg-zinc-900 text-zinc-400 border-white/10'}`}>
+                  <button 
+                    onClick={() => handleSelectSong(c)}
+                    className="px-4 py-2 text-sm font-black"
+                  >
+                    {idx + 1}. {c.titulo}
+                  </button>
+                  {isTemporarySetlistItem(item) && (
+                    <button
+                      type="button"
+                      onClick={(e) => quitarCancionAgregada(item, e)}
+                      className="mr-1 rounded-xl bg-red-500/20 px-2 py-1 text-[9px] font-black uppercase text-red-100"
+                      title="Quitar canción agregada"
+                    >
+                      X
+                    </button>
+                  )}
+                </div>
               );
             });
           })()}
@@ -1683,6 +1734,7 @@ const ProyectorController = ({ user }) => {
             {/* Tabs */}
             <div className="flex overflow-x-auto border-b border-white/10 shrink-0 bg-zinc-950/60 [&::-webkit-scrollbar]:hidden">
               <button onClick={() => setMobileActiveTab('media')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'media' ? 'border-violet-500 text-white bg-violet-500/5' : 'border-transparent text-zinc-500'}`}>Bóveda</button>
+              <button onClick={() => setMobileActiveTab('songs')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'songs' ? 'border-emerald-500 text-white bg-emerald-500/5' : 'border-transparent text-zinc-500'}`}>Canciones</button>
               <button onClick={() => setMobileActiveTab('liveControls')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'liveControls' ? 'border-amber-500 text-white bg-amber-500/5' : 'border-transparent text-zinc-500'}`}>En Vivo</button>
               <button onClick={() => setMobileActiveTab('messages')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'messages' ? 'border-blue-500 text-white bg-blue-500/5' : 'border-transparent text-zinc-500'}`}>Mensajes</button>
             </div>
@@ -1696,7 +1748,7 @@ const ProyectorController = ({ user }) => {
                   <button onClick={crearCarpeta} className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-amber-600 px-2.5 py-2 text-[9px] font-black uppercase text-white"><FolderPlus size={13}/> Carpeta</button>
                   <label className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-violet-600 px-2.5 py-2 text-[9px] font-black uppercase text-white cursor-pointer">
                     <Upload size={13}/> Subir
-                    <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png" className="hidden" disabled={isUploadingFondo} onChange={handleUploadCloudinary} />
+                    <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo} onChange={handleUploadBackground} />
                   </label>
                 </div>
 
@@ -1740,6 +1792,95 @@ const ProyectorController = ({ user }) => {
                       <button onClick={() => setPreviewMedia(null)}><X size={16} className="text-zinc-500"/></button>
                     </div>
                     <button onClick={() => { projectMedia(previewMedia); setShowMobileControlsModal(false); }} className="w-full py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase shadow-lg">🚀 PROYECTAR AHORA</button>
+                  </div>
+                )}
+              </div>
+            ) : mobileActiveTab === 'songs' ? (
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 [&::-webkit-scrollbar]:hidden">
+                <div className="rounded-3xl border border-emerald-500/25 bg-emerald-500/5 p-4">
+                  <div className="flex items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-950 px-3 py-2.5">
+                    <Search size={16} className="shrink-0 text-emerald-400" />
+                    <input
+                      type="text"
+                      value={songSearchTerm}
+                      onChange={e => setSongSearchTerm(e.target.value)}
+                      placeholder="Buscar por nombre, artista o letra..."
+                      className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-zinc-600"
+                    />
+                    {isSearchingGlobal && <Loader2 size={15} className="shrink-0 animate-spin text-emerald-400" />}
+                  </div>
+                  <p className="mt-3 text-[10px] font-bold leading-snug text-zinc-500">
+                    Agrega canciones al setlist desde el celular. Tambien encuentra canciones por frases de la letra.
+                  </p>
+                </div>
+
+                {cancionesAgregadasTemporales.length > 0 && (
+                  <div className="rounded-3xl border border-red-500/20 bg-red-500/5 p-4">
+                    <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-red-200">Agregadas en vivo</p>
+                    <div className="space-y-2">
+                      {cancionesAgregadasTemporales.map((item, idx) => {
+                        const song = canciones.find(c => c.id === item.value);
+                        if (!song) return null;
+                        return (
+                          <div key={item.idLocal || `${item.value}-${idx}`} className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-zinc-950 px-3 py-2">
+                            <button type="button" onClick={() => handleSelectSong(song)} className="min-w-0 flex-1 text-left">
+                              <p className="truncate text-xs font-black text-white">{song.titulo}</p>
+                              <p className="truncate text-[10px] font-bold text-zinc-500">{song.artista || 'Sin artista'}</p>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => quitarCancionAgregada(item, e)}
+                              className="shrink-0 rounded-xl bg-red-600 px-3 py-2 text-[9px] font-black uppercase text-white"
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {songSearchTerm.trim() === '' ? (
+                  <div className="rounded-3xl border border-dashed border-zinc-800 bg-zinc-950/60 p-6 text-center">
+                    <Music size={28} className="mx-auto mb-3 text-zinc-700" />
+                    <p className="text-xs font-black uppercase tracking-widest text-zinc-500">Busca una cancion</p>
+                    <p className="mt-2 text-[11px] font-bold text-zinc-600">Ejemplo: "a tus pies", "No hay lugar", "Miel San Marcos".</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 pb-24">
+                    {globalSearchResults.map(song => {
+                      const searchMatch = getSongSearchMatch(song, songSearchTerm);
+                      return (
+                        <button
+                          key={song.id}
+                          type="button"
+                          onClick={() => agregarCancionAlSetlist(song)}
+                          className="w-full rounded-3xl border border-emerald-500/20 bg-zinc-950/80 p-4 text-left transition-all active:scale-[0.99]"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-black text-white">{song.titulo}</p>
+                              <p className="mt-0.5 truncate text-[11px] font-bold text-zinc-500">{song.artista || 'Sin artista'}</p>
+                              {searchMatch.field === 'lyrics' && searchMatch.snippet && (
+                                <p className="mt-2 line-clamp-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] font-bold leading-snug text-emerald-200">
+                                  Letra: {searchMatch.snippet}
+                                </p>
+                              )}
+                            </div>
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-2xl bg-emerald-600 px-3 py-2 text-[9px] font-black uppercase text-white">
+                              <Plus size={13} /> Agregar
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                    {globalSearchResults.length === 0 && !isSearchingGlobal && (
+                      <div className="rounded-3xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                        <p className="text-xs font-black uppercase tracking-widest text-zinc-500">Sin resultados</p>
+                        <p className="mt-2 text-[11px] font-bold text-zinc-600">Prueba con otra frase de la letra o el artista.</p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1890,12 +2031,12 @@ const ProyectorController = ({ user }) => {
             
             <div className="space-y-4">
               <div className="p-4 bg-zinc-950 rounded-2xl border border-zinc-800 text-center">
-                <p className="text-xs text-zinc-400 mb-4">Sube un video MP4 (Motion Background) o una imagen JPG/PNG. Se almacenará de forma óptima en <b>Cloudinary</b>.</p>
+                <p className="text-xs text-zinc-400 mb-4">Sube un video MP4/WebM, GIF o imagen para usarlo como fondo en bucle. Se almacenara en Cloudinary.</p>
                 
                 <label className={`w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-colors cursor-pointer ${isUploadingFondo ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 hover:border-indigo-500'}`}>
                   {isUploadingFondo ? <Loader2 size={24} className="text-indigo-500 animate-spin" /> : <Upload size={24} className="text-zinc-400" />}
                   <span className="text-sm font-bold text-zinc-300">{isUploadingFondo ? 'Subiendo archivo...' : 'Seleccionar Archivo'}</span>
-                  <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png" className="hidden" disabled={isUploadingFondo} onChange={handleUploadCloudinary} />
+                  <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo} onChange={handleUploadBackground} />
                 </label>
               </div>
 

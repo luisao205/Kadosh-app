@@ -5,6 +5,7 @@ import { Calendar, Music, Users, Save, Trash2, Clock, CheckSquare, AlertCircle, 
 import { useNavigate } from 'react-router-dom';
 import { traducirAcorde } from '../../utils/musicCore';
 import { formatEventDate, formatEventTime, parseAppDate } from '../../utils/dateUtils';
+import { getSongSearchMatch } from '../../utils/songSearch';
 
 const PLANTILLA_NOTAS = `👗 Vestimenta: 
 ⏰ Llegada: 
@@ -92,7 +93,10 @@ const EventManagement = ({ user }) => {
     });
 
     const unsubCanciones = onSnapshot(collection(db, 'canciones'), (snap) => {
-      let data = snap.docs.map(doc => ({ id: doc.id, titulo: doc.data().titulo, artista: doc.data().artista, tono: doc.data().tonoOriginal, tonosAlternativos: doc.data().tonosAlternativos }));
+      let data = snap.docs.map(doc => {
+        const song = doc.data();
+        return { id: doc.id, ...song, tono: song.tonoOriginal || song.tono };
+      });
       data.sort((a, b) => a.titulo.localeCompare(b.titulo));
       setCanciones(data);
     });
@@ -424,6 +428,12 @@ const EventManagement = ({ user }) => {
 
   // Extraer las canciones únicas del setlist para asignar cantantes
   const uniqueSongsInSetlist = [...new Set(setlist.filter(i => i.type === 'song').map(i => i.value))];
+  const setlistSearchResults = searchTerm.trim()
+    ? canciones
+      .map(song => ({ song, searchMatch: getSongSearchMatch(song, searchTerm) }))
+      .filter(result => result.searchMatch.matches)
+      .slice(0, 25)
+    : [];
 
   const esAdmin = ['admin', 'dueño'].includes(user?.rol);
 
@@ -637,23 +647,33 @@ const EventManagement = ({ user }) => {
                         onFocus={() => setShowDropdown(true)}
                         onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
                         className="kp-input w-full pl-10 p-3 rounded-2xl text-sm"
-                        placeholder="Buscar canción..."
+                        placeholder="Buscar por titulo, artista o letra..."
                       />
                       {showDropdown && searchTerm && (
                         <div className="absolute z-10 mt-2 w-full kp-modal rounded-2xl shadow-xl max-h-64 overflow-y-auto">
-                          {canciones.filter(c => c.titulo.toLowerCase().includes(searchTerm.toLowerCase()) || c.artista.toLowerCase().includes(searchTerm.toLowerCase())).map(c => {
+                          {setlistSearchResults.map(({ song: c, searchMatch }) => {
                             const lastPlayed = lastPlayedMap[c.id];
                             const dias = lastPlayed ? Math.floor((new Date() - new Date(lastPlayed)) / (1000 * 60 * 60 * 24)) : null;
                             const isRecent = dias !== null && dias <= 21;
                             return (
-                              <button key={c.id} type="button" onClick={() => { addToSetlist('song', c.id); setSearchTerm(''); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-violet-500/10 border-b border-white/5 last:border-0 flex justify-between items-center group">
-                                <div className="truncate pr-2">
-                                  <span className="font-bold">{c.titulo}</span> <span className="text-zinc-500">- {c.artista}</span>
+                              <button key={c.id} type="button" onClick={() => { addToSetlist('song', c.id); setSearchTerm(''); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-sm hover:bg-violet-500/10 border-b border-white/5 last:border-0 flex justify-between items-start gap-3 group">
+                                <div className="min-w-0 pr-2">
+                                  <p className="truncate"><span className="font-bold">{c.titulo}</span> <span className="text-zinc-500">- {c.artista}</span></p>
+                                  {searchMatch.field === 'lyrics' && searchMatch.snippet && (
+                                    <p className="mt-1 line-clamp-2 text-[11px] font-bold leading-snug text-emerald-300">
+                                      Letra: {searchMatch.snippet}
+                                    </p>
+                                  )}
                                 </div>
                                 {isRecent && <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200 shrink-0" title={`Tocada hace ${dias} días`}>{dias === 0 ? 'Hoy' : `${dias}d`}</span>}
                               </button>
                             )
                           })}
+                          {setlistSearchResults.length === 0 && (
+                            <div className="px-4 py-5 text-center text-xs font-bold text-zinc-400">
+                              No se encontraron canciones por titulo, artista o letra.
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

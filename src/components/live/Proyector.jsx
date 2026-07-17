@@ -4,6 +4,7 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { Minimize, RefreshCw } from 'lucide-react';
 import AutoFitText from './AutoFitText';
+import { isVideoMediaUrl } from '../../utils/mediaUtils';
 
 const Proyector = ({ eventoIdOverride }) => {
   const { eventoId: routeEventoId } = useParams();
@@ -252,7 +253,7 @@ const Proyector = ({ eventoIdOverride }) => {
           {/* Fondo Antiguo (Capa Superior desvaneciéndose) */}
           {prevFondoUrl && (
             <div className={`absolute inset-0 z-10 transition-opacity duration-500 ${fondoTransitioning ? 'opacity-0' : 'opacity-0 pointer-events-none'}`}>
-              {prevFondoUrl.match(/\.(mp4|webm|mov)$/i) || prevFondoUrl.includes('video/upload') 
+              {isVideoMediaUrl(prevFondoUrl) 
                 ? <video src={prevFondoUrl} autoPlay loop muted playsInline className="w-full h-full object-cover opacity-80" />
                 : <img src={prevFondoUrl} alt="" className="w-full h-full object-cover opacity-80" />
               }
@@ -261,7 +262,7 @@ const Proyector = ({ eventoIdOverride }) => {
           {/* Fondo Nuevo (Capa Base siempre visible) */}
           {fondoUrl && (
             <div className="absolute inset-0 z-0">
-              {fondoUrl.match(/\.(mp4|webm|mov)$/i) || fondoUrl.includes('video/upload') 
+              {isVideoMediaUrl(fondoUrl) 
                 ? <video src={fondoUrl} key={fondoUrl} autoPlay loop muted playsInline className="w-full h-full object-cover opacity-80" />
                 : <img src={fondoUrl} key={fondoUrl} alt="" className="w-full h-full object-cover opacity-80" />
               }

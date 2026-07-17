@@ -5,6 +5,8 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
 import { Save, ArrowLeft, Edit3, AlertCircle, Play, Pause, Volume2, Volume1, VolumeX, X, Library, Video, Link as LinkIcon, FileText as FileIcon, Upload, Trash2, SlidersHorizontal, Headphones, Monitor } from 'lucide-react';
 import { detectarTonoDesdeAcordes, traducirAcorde } from '../../utils/musicCore';
+import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
+import { isVideoMediaUrl } from '../../utils/mediaUtils';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const INSTRUMENTOS_RECURSOS = ['General', 'Voz Principal', 'Coros', 'Batería', 'Piano', 'Bajo', 'Guitarra Acústica', 'Guitarra Eléctrica', 'Percusión'];
@@ -249,16 +251,15 @@ const EditSong = ({ user }) => {
     showToast("Subiendo fondo de proyección...", "info");
     setIsSaving(true);
     try {
-      const storage = getStorage();
-      const fondoRef = ref(storage, `fondos/${Date.now()}_${file.name}`);
-      await uploadBytes(fondoRef, file);
-      const url = await getDownloadURL(fondoRef);
+      const { url } = await uploadToCloudinary(file, 'kadosh/song-backgrounds');
       setFondoUrl(url);
       showToast("¡Fondo de proyector subido exitosamente!", "success");
     } catch (err) {
+      console.error("Error subiendo fondo:", err);
       showToast("Error al subir el fondo.");
     } finally {
       setIsSaving(false);
+      e.target.value = '';
     }
   };
 
@@ -514,7 +515,7 @@ const EditSong = ({ user }) => {
               <div className="bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 flex flex-col gap-3">
                 {fondoUrl && (
                   <div className="relative w-full h-36 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700">
-                    {fondoUrl.match(/\.(mp4|webm|mov)$/i) || fondoUrl.includes('video/upload') ? (
+                    {isVideoMediaUrl(fondoUrl) ? (
                       <video src={fondoUrl} autoPlay loop muted playsInline className="w-full h-full object-cover" />
                     ) : (
                       <img src={fondoUrl} alt="Fondo" className="w-full h-full object-cover" />

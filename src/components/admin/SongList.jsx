@@ -4,6 +4,7 @@ import { db } from '../../config/firebase';
 import { Music, Search, Trash2, Edit, Mic2, Play, Heart, Layers, Plus, X, ChevronUp, ChevronDown, Download } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { calcularOffsetSemitonos, traducirAcorde, transponerNota } from '../../utils/musicCore';
+import { getSongSearchMatch } from '../../utils/songSearch';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 
@@ -182,7 +183,7 @@ const SongList = ({ user }) => {
   };
 
   const cancionesFiltradas = canciones.filter(c => {
-    const matchTexto = c.titulo.toLowerCase().includes(filtro.toLowerCase()) || c.artista.toLowerCase().includes(filtro.toLowerCase());
+    const matchTexto = getSongSearchMatch(c, filtro).matches;
     const matchEtiqueta = filtroEtiqueta ? c.etiquetas?.includes(filtroEtiqueta) : true;
     const matchFavorito = mostrarSoloFavoritos ? misFavoritos.includes(c.id) : true;
     return matchTexto && matchEtiqueta && matchFavorito;
@@ -229,7 +230,7 @@ const SongList = ({ user }) => {
           )}
           <div className="relative w-full sm:w-64">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-400"><Search size={18} /></div>
-            <input type="text" value={filtro} onChange={(e) => setFiltro(e.target.value)} className="kp-input block w-full pl-10 pr-3 py-2.5 rounded-xl text-sm font-medium" placeholder="Buscar canción..." />
+            <input type="text" value={filtro} onChange={(e) => setFiltro(e.target.value)} className="kp-input block w-full pl-10 pr-3 py-2.5 rounded-xl text-sm font-medium" placeholder="Buscar por titulo, artista o letra..." />
           </div>
         </div>
       </header>
@@ -253,12 +254,19 @@ const SongList = ({ user }) => {
         <div className="text-center py-20 text-zinc-500 font-medium animate-pulse">Cargando canciones...</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {cancionesFiltradas.map(cancion => (
+          {cancionesFiltradas.map(cancion => {
+            const searchMatch = getSongSearchMatch(cancion, filtro);
+            return (
             <div key={cancion.id} className="kp-card p-5 rounded-2xl hover:border-blue-400/40 transition-colors group flex flex-col">
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-bold text-lg text-zinc-900 dark:text-zinc-100 leading-tight">{cancion.titulo}</h3>
                   <p className="text-sm text-zinc-500 font-medium flex items-center gap-1 mt-1"><Mic2 size={14}/> {cancion.artista}</p>
+                  {searchMatch.field === 'lyrics' && searchMatch.snippet && (
+                    <p className="mt-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] font-bold leading-snug text-emerald-200">
+                      Coincide en letra: "{searchMatch.snippet}"
+                    </p>
+                  )}
                   
                   {cancion.etiquetas && cancion.etiquetas.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-2">
@@ -293,7 +301,8 @@ const SongList = ({ user }) => {
                 </div>
               </div>
             </div>
-          ))}
+          );
+          })}
           
           {cancionesFiltradas.length === 0 && (
             <div className="kp-empty-state col-span-full text-center py-12 rounded-2xl">

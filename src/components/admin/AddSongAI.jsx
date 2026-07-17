@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Sparkles, Search, Save, AlertCircle, X, Download, Wand2, Eye, Scissors, Pilcrow } from 'lucide-react';
+import { Sparkles, Search, Save, AlertCircle, X, Download, Wand2, Eye, Scissors, Pilcrow, Upload, Trash2, Monitor } from 'lucide-react';
 import { buscarSugerenciasIA, buscarMetadatosIA } from '../../utils/geminiApi';
 import { collection, addDoc, onSnapshot } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
 import { detectarTonoDesdeAcordes, traducirAcorde } from '../../utils/musicCore';
 import { isSongSectionTitle, parsearCancion } from '../../utils/songParser';
+import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
+import { isVideoMediaUrl } from '../../utils/mediaUtils';
 
 const TONOS_DISPONIBLES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
 const SECTION_NAMES = ['Intro', 'Verso', 'Verse', 'Pre-Coro', 'Pre-Coro 2', 'Pre-Chorus', 'Coro', 'Chorus', 'Puente', 'Bridge', 'Final', 'Outro', 'Instrumental', 'Espontáneo', 'Espontaneo'];
@@ -67,6 +69,8 @@ const AddSongAI = ({ user }) => {
   const [tonosCantantes, setTonosCantantes] = useState({});
   const [audioFile, setAudioFile] = useState(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [fondoUrl, setFondoUrl] = useState('');
+  const [isUploadingFondo, setIsUploadingFondo] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showExample, setShowExample] = useState(false);
   const [showSingerModal, setShowSingerModal] = useState(false);
@@ -193,6 +197,25 @@ const AddSongAI = ({ user }) => {
     showToast("Texto importado. Revisa y formatea si es necesario.", "success");
   };
 
+  const handleUploadFondo = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingFondo(true);
+    showToast("Subiendo fondo a Cloudinary...", "info");
+    try {
+      const { url } = await uploadToCloudinary(file, 'kadosh/song-backgrounds');
+      setFondoUrl(url);
+      showToast("Fondo de proyeccion subido.", "success");
+    } catch (error) {
+      console.error("Error subiendo fondo:", error);
+      showToast("No se pudo subir el fondo.");
+    } finally {
+      setIsUploadingFondo(false);
+      e.target.value = '';
+    }
+  };
+
   const handleSave = async () => {
     if (!titulo || !letraGenerada) {
       showToast("Por favor, ingresa al menos un título y la letra de la canción.");
@@ -226,6 +249,7 @@ const AddSongAI = ({ user }) => {
         letraRaw: letraGenerada,
         audioUrl,
         youtubeUrl,
+        fondoUrl,
         fechaCreacion: new Date().toISOString()
       });
       
@@ -238,7 +262,7 @@ const AddSongAI = ({ user }) => {
         fechaCreacion: new Date().toISOString()
       });
       showToast(`¡Canción "${titulo}" guardada exitosamente en Kadosh App!`, "success");
-      setTitulo(''); setArtista(''); setTono('C'); setTonosCantantes({}); setBpm(''); setLetraGenerada(''); setBusqueda(''); setAudioFile(null); setYoutubeUrl('');
+      setTitulo(''); setArtista(''); setTono('C'); setTonosCantantes({}); setBpm(''); setLetraGenerada(''); setBusqueda(''); setAudioFile(null); setYoutubeUrl(''); setFondoUrl('');
     } catch (error) {
       console.error("Error guardando en Firebase:", error);
       showToast("Hubo un error al guardar la canción. Verifica tu conexión a Firebase.");
@@ -421,6 +445,40 @@ const AddSongAI = ({ user }) => {
              <div className="col-span-2 mt-1">
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">O pega un Enlace de YouTube</label>
                 <input type="url" value={youtubeUrl} onChange={(e)=>setYoutubeUrl(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" placeholder="https://www.youtube.com/watch?v=..." />
+             </div>
+             <div className="col-span-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
+                <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2 flex items-center gap-2">
+                  <Monitor size={15} className="text-emerald-400" /> Fondo de Proyeccion
+                </label>
+                <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950">
+                  {fondoUrl && (
+                    <div className="relative mb-3 h-36 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+                      {isVideoMediaUrl(fondoUrl) ? (
+                        <video src={fondoUrl} autoPlay loop muted playsInline className="h-full w-full object-cover" />
+                      ) : (
+                        <img src={fondoUrl} alt="Fondo" className="h-full w-full object-cover" />
+                      )}
+                      <button type="button" onClick={() => setFondoUrl('')} className="absolute right-2 top-2 rounded-lg bg-red-600/90 p-2 text-white">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="url"
+                      value={fondoUrl}
+                      onChange={e => setFondoUrl(e.target.value)}
+                      placeholder="Pegar URL de imagen, GIF o video corto"
+                      className="kp-input min-w-0 flex-1 p-2.5 text-xs"
+                    />
+                    <label className="flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-xl bg-emerald-500/15 px-4 py-2.5 text-xs font-black text-emerald-300 transition-colors hover:bg-emerald-500/25">
+                      {isUploadingFondo ? 'Subiendo...' : 'Subir fondo'}
+                      <Upload size={14} />
+                      <input type="file" accept="image/*,video/*" className="hidden" onChange={handleUploadFondo} disabled={isUploadingFondo || isSaving} />
+                    </label>
+                  </div>
+                  <p className="mt-2 text-[10px] font-bold text-zinc-500">Recomendado: video MP4/WebM corto en loop. Tambien acepta GIF o imagen.</p>
+                </div>
              </div>
           </div>
         </div>
