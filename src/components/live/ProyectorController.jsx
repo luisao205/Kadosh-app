@@ -11,6 +11,16 @@ import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
 import { isVideoMediaUrl } from '../../utils/mediaUtils';
 import AutoFitText from './AutoFitText';
 
+const getSectionKey = (section, index) => {
+  const title = String(section?.titulo || 'seccion')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'seccion';
+  return `${index}_${title}`;
+};
+
 const ProyectorController = ({ user }) => {
   const { eventoId } = useParams();
   const navigate = useNavigate();
@@ -397,15 +407,18 @@ const ProyectorController = ({ user }) => {
 
   // Convertir las secciones en Diapositivas (Slides)
   const slides = [];
-  secciones.forEach(sec => {
+  secciones.forEach((sec, index) => {
     let texto = sec.lineas.map(linea => 
       linea.map(palabra => palabra.map(silaba => silaba.texto === '\u00A0' ? '' : silaba.texto).join('')).join(' ')
     ).join('\n');
+    const sectionKey = getSectionKey(sec, index);
     slides.push({
       titulo: sec.titulo,
       texto: texto.trim() || ' ',
       lineas: sec.lineas,
       cues: (sec.items || []).filter(item => item.type === 'cue').map(item => item.text),
+      sectionKey,
+      media: Array.isArray(activeSong?.sectionMedia?.[sectionKey]) ? activeSong.sectionMedia[sectionKey] : [],
       originalIndex: slides.length
     });
   });
@@ -516,6 +529,8 @@ const ProyectorController = ({ user }) => {
     if (slide.originalIndex !== undefined && slide.originalIndex < slides.length - 1) {
       nextSlide = slides[slide.originalIndex + 1];
     }
+    const sectionPrimaryMedia = Array.isArray(slide.media) ? slide.media.find(resource => resource?.url) : null;
+    const slideBackground = sectionPrimaryMedia?.url || fondoActivo || activeSong?.fondoUrl || null;
 
     // Encontrar el siguiente elemento del setlist (Canción o Nota)
     let offset = 0;
@@ -563,9 +578,10 @@ const ProyectorController = ({ user }) => {
         content: slide.texto,
         media: null,
         timer: evento?.proyectorCountdown || null,
-        background: fondoActivo || null,
+        background: slideBackground,
         updatedAt: Date.now()
       },
+      proyectorFondo: slideBackground,
       proyectorSongId: activeSongId,
       proyectorSlideIndex: slide.originalIndex ?? -1,
       proyectorNextSlide: nextSlide ? { titulo: nextSlide.titulo, texto: nextSlide.texto, lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null } : null,
@@ -650,6 +666,22 @@ const ProyectorController = ({ user }) => {
     };
     try { await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true }); } 
     catch (e) { console.error(e); }
+  };
+
+  const projectSectionMedia = (resource) => {
+    if (!resource?.url) return;
+    projectMedia({
+      ...resource,
+      name: resource.name || resource.title || 'Multimedia de seccion',
+      mode: 'foreground'
+    });
+  };
+
+  const getMediaIcon = (type) => {
+    if (type === 'video') return <Film size={14} className="text-violet-300" />;
+    if (type === 'audio') return <Volume2 size={14} className="text-emerald-300" />;
+    if (type === 'pdf') return <Layers size={14} className="text-amber-300" />;
+    return <ImageIcon size={14} className="text-blue-300" />;
   };
 
   const handleTransicionChange = async (e) => {
@@ -990,6 +1022,9 @@ const ProyectorController = ({ user }) => {
       else animationClass = `${baseTransition} opacity-100`;
     }
   }
+
+  const previewSectionMedia = Array.isArray(previewSlide?.media) ? previewSlide.media.find(resource => resource?.url) : null;
+  const previewBackground = previewSectionMedia?.url || fondoActivo;
 
   return (
     <div className="relative h-screen bg-zinc-950 flex flex-col text-white font-sans overflow-hidden">
@@ -1338,7 +1373,14 @@ const ProyectorController = ({ user }) => {
                       <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest truncate">
                         {s.titulo}{s.cues?.length ? ` - ${s.cues[0]}` : ''}
                       </span>
-                      {liveSlide?.texto === s.texto && !isBlackout && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]" title="En vivo"></span>}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {s.media?.length > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[8px] font-black text-violet-200" title="Multimedia de seccion">
+                            <ImageIcon size={10} /> {s.media.length}
+                          </span>
+                        )}
+                        {liveSlide?.texto === s.texto && !isBlackout && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]" title="En vivo"></span>}
+                      </div>
                     </div>
                     <div className="p-3 flex-1 flex items-center justify-center text-center overflow-hidden">
                       <p className="text-xs sm:text-sm font-bold text-zinc-300 line-clamp-4 leading-relaxed">
@@ -1380,10 +1422,10 @@ const ProyectorController = ({ user }) => {
                   </>
                 ) : previewSlide ? (
                   <>
-                    {fondoActivo && isVideoMediaUrl(fondoActivo) ? (
-                      <video src={fondoActivo} autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
-                    ) : fondoActivo && (
-                      <img src={fondoActivo} className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
+                    {previewBackground && isVideoMediaUrl(previewBackground) ? (
+                      <video src={previewBackground} autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
+                    ) : previewBackground && (
+                      <img src={previewBackground} className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
                     )}
                     {previewSlide.texto.trim() === '' ? (
                       <span className="relative z-10 text-white/30 italic font-medium">Instrumental</span>
@@ -1404,6 +1446,40 @@ const ProyectorController = ({ user }) => {
                   <p className="text-zinc-700 font-bold uppercase tracking-widest text-xs">Sin Selección</p>
                 )}
               </div>
+              {previewSlide?.media?.length > 0 && (
+                <div className="mt-3 rounded-2xl border border-violet-500/20 bg-violet-500/10 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-violet-200">
+                      <ImageIcon size={14} /> Multimedia ({previewSlide.media.length})
+                    </p>
+                    <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-300 truncate">Principal automatica</span>
+                  </div>
+                  <div className="space-y-2 max-h-36 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden">
+                    {previewSlide.media.map((resource, index) => (
+                      <div key={resource.id || `${resource.url}-${index}`} className="flex items-center gap-2 rounded-xl border border-white/10 bg-zinc-950/70 px-2.5 py-2">
+                        <div className="shrink-0">{getMediaIcon(resource.type)}</div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-bold text-white">{resource.title || resource.name || `Recurso ${index + 1}`}</p>
+                          <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{resource.type || 'media'}{resource.source ? ` - ${resource.source}` : ''}</p>
+                        </div>
+                        {index === 0 ? (
+                          <span className="shrink-0 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1.5 text-[9px] font-black uppercase tracking-wide text-emerald-200">
+                            Auto
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => projectSectionMedia(resource)}
+                            className="shrink-0 rounded-lg bg-violet-600 px-2.5 py-1.5 text-[9px] font-black uppercase tracking-wide text-white hover:bg-violet-500 active:scale-95"
+                          >
+                            Proyectar
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button 
                 onClick={() => previewMedia ? projectMedia(previewMedia) : projectSlide(previewSlide)} 
                 disabled={!previewSlide && !previewMedia}
@@ -1688,7 +1764,14 @@ const ProyectorController = ({ user }) => {
                   >
                     <div className="px-2 py-1.5 bg-zinc-950/80 border-b border-zinc-800 flex justify-between items-center shrink-0">
                       <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest truncate">{s.titulo}{s.cues?.length ? ` - ${s.cues[0]}` : ''}</span>
-                      {liveSlide?.texto === s.texto && !isBlackout && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]"></span>}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {s.media?.length > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black text-violet-200">
+                            <ImageIcon size={9} /> {s.media.length}
+                          </span>
+                        )}
+                        {liveSlide?.texto === s.texto && !isBlackout && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]"></span>}
+                      </div>
                     </div>
                     <div className="p-2 flex-1 flex items-center justify-center text-center overflow-hidden">
                       <p className="text-[10px] sm:text-xs font-bold text-zinc-300 line-clamp-4 leading-snug">

@@ -10,6 +10,7 @@ import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
 import { isVideoMediaUrl } from '../../utils/mediaUtils';
 
 const TONOS_DISPONIBLES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
+const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const SECTION_NAMES = ['Intro', 'Verso', 'Verse', 'Pre-Coro', 'Pre-Coro 2', 'Pre-Chorus', 'Coro', 'Chorus', 'Puente', 'Bridge', 'Final', 'Outro', 'Instrumental', 'Espontáneo', 'Espontaneo'];
 const CUE_PRESETS = ['Subida', 'Entra batería', 'Solo voces', 'Todos juntos', 'Corte', 'Baja dinámica', 'Repetir coro', 'Final suave'];
 const CHORD_REGEX = /^[A-G][#b]?(?:m|maj|min|dim|aug|sus|add)?(?:\d{0,2})?(?:[#b]?\d{0,2})?(?:\/[A-G][#b]?)?$/;
@@ -65,6 +66,7 @@ const AddSongAI = ({ user }) => {
   const [artista, setArtista] = useState('');
   const [bpm, setBpm] = useState('');
   const [tono, setTono] = useState('C');
+  const [etiquetas, setEtiquetas] = useState([]);
   const [cantantesDisponibles, setCantantesDisponibles] = useState([]);
   const [tonosCantantes, setTonosCantantes] = useState({});
   const [audioFile, setAudioFile] = useState(null);
@@ -245,6 +247,7 @@ const AddSongAI = ({ user }) => {
         artista,
         tonoOriginal: tonoNormalizado,
         tonosAlternativos: tonosAlternativos,
+        etiquetas,
         bpm: Number(bpm) || 0,
         letraRaw: letraGenerada,
         audioUrl,
@@ -262,7 +265,7 @@ const AddSongAI = ({ user }) => {
         fechaCreacion: new Date().toISOString()
       });
       showToast(`¡Canción "${titulo}" guardada exitosamente en Kadosh App!`, "success");
-      setTitulo(''); setArtista(''); setTono('C'); setTonosCantantes({}); setBpm(''); setLetraGenerada(''); setBusqueda(''); setAudioFile(null); setYoutubeUrl(''); setFondoUrl('');
+      setTitulo(''); setArtista(''); setTono('C'); setEtiquetas([]); setTonosCantantes({}); setBpm(''); setLetraGenerada(''); setBusqueda(''); setAudioFile(null); setYoutubeUrl(''); setFondoUrl('');
     } catch (error) {
       console.error("Error guardando en Firebase:", error);
       showToast("Hubo un error al guardar la canción. Verifica tu conexión a Firebase.");
@@ -434,12 +437,32 @@ const AddSongAI = ({ user }) => {
                   )}
                 </div>
              </div>
-             <div className="col-span-1">
-                <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">BPM</label>
-                <input type="number" value={bpm} onChange={(e)=>setBpm(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" placeholder="Ej. 120" />
-             </div>
-             <div className="col-span-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
-                <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Pista o Secuencia de Audio (MP3)</label>
+              <div className="col-span-1">
+                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">BPM</label>
+                 <input type="number" value={bpm} onChange={(e)=>setBpm(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" placeholder="Ej. 120" />
+              </div>
+              <div className="col-span-2">
+                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Filtros de Repertorio</label>
+                 <div className="flex flex-wrap gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950">
+                   {ETIQUETAS_DISPONIBLES.map(tag => (
+                     <button
+                       key={tag}
+                       type="button"
+                       onClick={() => setEtiquetas(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
+                       className={`rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-wider transition-colors ${
+                         etiquetas.includes(tag)
+                           ? 'border-violet-300 bg-violet-100 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/20 dark:text-violet-300'
+                           : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800'
+                       }`}
+                     >
+                       {tag}
+                     </button>
+                   ))}
+                 </div>
+                 <p className="mt-2 text-[10px] font-bold text-zinc-500">Estos filtros aparecen en Repertorio y ayudan a encontrar la cancion sin editarla despues.</p>
+              </div>
+              <div className="col-span-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
+                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Pista o Secuencia de Audio (MP3)</label>
                 <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files[0])} className="kp-input w-full p-2 rounded-xl text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-blue-500/10 file:text-blue-300 hover:file:bg-blue-500/20 transition-all cursor-pointer" />
              </div>
              <div className="col-span-2 mt-1">

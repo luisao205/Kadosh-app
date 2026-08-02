@@ -28,6 +28,7 @@ const SongList = ({ user }) => {
   const [medleySongs, setMedleySongs] = useState([]);
   const [medleyKey, setMedleyKey] = useState('C');
   const [medleyBpm, setMedleyBpm] = useState('');
+  const [transposeMode, setTransposeMode] = useState('UNIFIED');
   const [isSavingMedley, setIsSavingMedley] = useState(false);
 
   const showToast = (message, type = 'error') => {
@@ -99,9 +100,16 @@ const SongList = ({ user }) => {
         contenido: '# ' + p,
         incluir: true
       }));
-      setMedleySongs([...medleySongs, { ...song, secciones }]);
+      const originalKey = song.tonoOriginal || song.tono || 'C';
+      setMedleySongs([...medleySongs, { ...song, originalKey, medleyKey: originalKey, secciones }]);
     }
     setMedleySearch('');
+  };
+
+  const updateMedleySongKey = (songId, key) => {
+    setMedleySongs(prev => prev.map(song => (
+      song.id === songId ? { ...song, medleyKey: key } : song
+    )));
   };
 
   const moveMedleySong = (index, direction) => {
@@ -134,7 +142,11 @@ const SongList = ({ user }) => {
     try {
       let combinedRaw = "";
       medleySongs.forEach(song => {
-        const offset = calcularOffset(song.tonoOriginal, medleyKey);
+        const originalKey = song.originalKey || song.tonoOriginal || song.tono || 'C';
+        const targetKey = transposeMode === 'PER_SONG'
+          ? (song.medleyKey || originalKey)
+          : medleyKey;
+        const offset = calcularOffset(originalKey, targetKey);
         
         // Filtrar solo las secciones que el usuario dejó marcadas
         const seccionesIncluidas = song.secciones ? song.secciones.filter(s => s.incluir).map(s => s.contenido).join('\n') : song.letraRaw;
@@ -149,13 +161,25 @@ const SongList = ({ user }) => {
         titulo: newTitle,
         artista: "Kadosh Medleys",
         tonoOriginal: medleyKey,
+        transposeMode,
+        cancionesOrigen: medleySongs.map(song => song.id),
+        medleyConfig: {
+          transposeMode,
+          unifiedKey: medleyKey,
+          songs: medleySongs.map(song => ({
+            songId: song.id,
+            title: song.titulo,
+            originalKey: song.originalKey || song.tonoOriginal || song.tono || 'C',
+            medleyKey: song.medleyKey || song.originalKey || song.tonoOriginal || song.tono || 'C'
+          }))
+        },
         bpm: Number(medleyBpm) || 0,
         letraRaw: combinedRaw.trim(),
         etiquetas: ['Ministración'],
         fechaCreacion: new Date().toISOString()
       });
       showToast("Medley generado exitosamente", "success");
-      setShowMedleyModal(false); setMedleySongs([]);
+      setShowMedleyModal(false); setMedleySongs([]); setTransposeMode('UNIFIED'); setMedleyKey('C'); setMedleyBpm('');
       navigate(`/editar/${newDoc.id}`); // Llevamos al usuario directo al editor para que lo afine
     } catch(e) { showToast("Error al generar el Medley."); }
     setIsSavingMedley(false);
@@ -188,6 +212,12 @@ const SongList = ({ user }) => {
     const matchFavorito = mostrarSoloFavoritos ? misFavoritos.includes(c.id) : true;
     return matchTexto && matchEtiqueta && matchFavorito;
   });
+  const medleySearchResults = medleySearch.trim()
+    ? canciones
+      .map(song => ({ song, searchMatch: getSongSearchMatch(song, medleySearch) }))
+      .filter(result => result.searchMatch.matches)
+      .slice(0, 30)
+    : [];
 
   const formatTiempo = (fechaIso) => {
     if (!fechaIso) return 'Nunca tocada';
@@ -340,15 +370,30 @@ const SongList = ({ user }) => {
                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">1. Busca y selecciona las canciones</label>
                 <div className="relative">
                   <Search size={16} className="absolute left-3 top-3 text-zinc-400"/>
-                  <input type="text" value={medleySearch} onChange={e => setMedleySearch(e.target.value)} placeholder="Escribe para buscar..." className="w-full pl-9 pr-3 py-2.5 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white outline-none" />
+                  <input type="text" value={medleySearch} onChange={e => setMedleySearch(e.target.value)} placeholder="Buscar por titulo, artista, etiqueta o letra..." className="w-full pl-9 pr-3 py-2.5 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white outline-none" />
                   {medleySearch && (
                     <div className="absolute z-10 w-full mt-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-xl max-h-48 overflow-y-auto">
-                      {canciones.filter(c => c.titulo.toLowerCase().includes(medleySearch.toLowerCase())).map(c => (
-                        <button key={c.id} onClick={() => addToMedley(c)} className="w-full text-left px-4 py-2 hover:bg-violet-50 dark:hover:bg-violet-500/10 border-b border-zinc-100 dark:border-zinc-800 last:border-0 text-sm flex justify-between">
-                          <span className="font-bold text-zinc-800 dark:text-zinc-200 truncate">{c.titulo}</span>
-                          <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-500 dark:text-zinc-400 font-bold">{c.tonoOriginal}</span>
+                      {medleySearchResults.map(({ song: c, searchMatch }) => (
+                        <button key={c.id} onClick={() => addToMedley(c)} className="w-full text-left px-4 py-2.5 hover:bg-violet-50 dark:hover:bg-violet-500/10 border-b border-zinc-100 dark:border-zinc-800 last:border-0 text-sm flex justify-between gap-3">
+                          <span className="min-w-0">
+                            <span className="block font-bold text-zinc-800 dark:text-zinc-200 truncate">{c.titulo}</span>
+                            <span className="block text-[10px] font-bold text-zinc-500 dark:text-zinc-400 truncate">
+                              {c.artista || 'Sin artista'} · Coincidencia: {searchMatch.field === 'title' ? 'titulo' : searchMatch.field === 'artist' ? 'artista' : searchMatch.field === 'tags' ? 'etiqueta' : 'letra'}
+                            </span>
+                            {searchMatch.field === 'lyrics' && searchMatch.snippet && (
+                              <span className="mt-0.5 block line-clamp-2 text-[10px] font-bold leading-snug text-emerald-600 dark:text-emerald-300">
+                                {searchMatch.snippet}
+                              </span>
+                            )}
+                          </span>
+                          <span className="shrink-0 text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-500 dark:text-zinc-400 font-bold h-fit">{c.tonoOriginal || c.tono || '?'}</span>
                         </button>
                       ))}
+                      {medleySearchResults.length === 0 && (
+                        <div className="px-4 py-4 text-center text-xs font-bold text-zinc-500">
+                          No hay canciones que coincidan por titulo, artista, etiqueta o letra.
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -367,10 +412,22 @@ const SongList = ({ user }) => {
                           </div>
                           <div className="flex-1 truncate">
                             <p className="text-sm font-bold text-zinc-800 dark:text-zinc-200 truncate">{song.titulo}</p>
-                            <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500">Tono orig: {song.tonoOriginal || '?'}</p>
+                            <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500">Tono orig: {song.originalKey || song.tonoOriginal || song.tono || '?'}</p>
                           </div>
                           <button onClick={() => setMedleySongs(medleySongs.filter(s => s.id !== song.id))} className="p-1.5 text-zinc-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg"><Trash2 size={16}/></button>
                         </div>
+                        {transposeMode === 'PER_SONG' && (
+                          <div className="pl-6 grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[9px] font-black uppercase tracking-wider text-zinc-400 mb-1">Original</label>
+                              <input value={song.originalKey || song.tonoOriginal || song.tono || ''} readOnly className="w-full rounded-lg border border-zinc-200 bg-zinc-100 px-2 py-1.5 text-xs font-bold text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400" />
+                            </div>
+                            <div>
+                              <label className="block text-[9px] font-black uppercase tracking-wider text-zinc-400 mb-1">Tono en Medley</label>
+                              <input value={song.medleyKey || song.originalKey || song.tonoOriginal || song.tono || ''} onChange={e => updateMedleySongKey(song.id, e.target.value)} className="w-full rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-xs font-bold uppercase text-zinc-800 focus:ring-2 focus:ring-violet-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-white" />
+                            </div>
+                          </div>
+                        )}
                         {/* Selectores de Secciones */}
                         {song.secciones && song.secciones.length > 0 && (
                           <div className="flex flex-wrap gap-1 pl-6">
@@ -387,9 +444,26 @@ const SongList = ({ user }) => {
                 </div>
               )}
 
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950">
+                <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">3. Modo de Transposicion</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setTransposeMode('UNIFIED')} className={`rounded-xl border px-3 py-2 text-xs font-black transition-colors ${transposeMode === 'UNIFIED' ? 'border-violet-300 bg-violet-100 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/20 dark:text-violet-300' : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800'}`}>
+                    Unificar tono
+                  </button>
+                  <button type="button" onClick={() => setTransposeMode('PER_SONG')} className={`rounded-xl border px-3 py-2 text-xs font-black transition-colors ${transposeMode === 'PER_SONG' ? 'border-violet-300 bg-violet-100 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/20 dark:text-violet-300' : 'border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800'}`}>
+                    Por cancion
+                  </button>
+                </div>
+                <p className="mt-2 text-[10px] font-bold leading-snug text-zinc-500 dark:text-zinc-400">
+                  {transposeMode === 'UNIFIED'
+                    ? 'Todas las canciones se transponen al tono final seleccionado.'
+                    : 'Cada cancion usa su propio tono del Medley; si se deja vacio usa el tono original.'}
+                </p>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">3. Tono Final (Para todas)</label>
+                  <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">{transposeMode === 'UNIFIED' ? '4. Tono Final (Para todas)' : '4. Tono general del Medley'}</label>
                   <input type="text" value={medleyKey} onChange={e => setMedleyKey(e.target.value)} placeholder="Ej. G" className="w-full p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white font-bold uppercase text-center" />
                 </div>
                 <div>
@@ -399,6 +473,9 @@ const SongList = ({ user }) => {
               </div>
               
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400 bg-blue-50 dark:bg-blue-500/10 text-blue-800 dark:text-blue-300 p-3 rounded-xl border border-blue-100 dark:border-blue-500/20 leading-tight">
+                <b>Magia Kadosh:</b> El sistema extraera la letra de las {medleySongs.length || '...'} canciones seleccionadas y {transposeMode === 'UNIFIED' ? <b>transpondra todos sus acordes automaticamente al Tono Final ({medleyKey || '?'})</b> : <b>respetara el tono configurado para cada cancion</b>}, fusionandolas en una sola cancion.
+              </p>
+              <p className="hidden">
                 <b>Magia Kadosh:</b> El sistema extraerá la letra de las {medleySongs.length || '...'} canciones seleccionadas, <b>transpondrá todos sus acordes automáticamente al Tono Final ({medleyKey || '?'})</b>, y las fusionará en una sola "Súper Canción".
               </p>
             </div>
