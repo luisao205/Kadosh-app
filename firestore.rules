@@ -82,6 +82,11 @@ service cloud.firestore {
       allow create, update, delete: if isMediaOrAdmin();
     }
 
+    match /mediaLibrary/{mediaId} {
+      allow read: if isMediaOrAdmin();
+      allow create, update, delete: if isMediaOrAdmin();
+    }
+
     match /sistema/{document=**} {
       allow read: if signedIn();
       allow write: if isMediaOrAdmin();

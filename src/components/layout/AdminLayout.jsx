@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, signOut } from 'firebase/auth';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../config/firebase';
+import { canAccessMediaLibrary } from '../../utils/mediaLibraryPermissions';
 
 const AdminLayout = ({ children, user }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -20,10 +21,10 @@ const AdminLayout = ({ children, user }) => {
     { name: 'Dashboard', path: '/', icon: <Home size={20} /> },
     { name: 'Repertorio', path: '/canciones', icon: <Music size={20} /> },
     { name: 'Eventos', path: '/eventos', icon: <Calendar size={20} /> },
-    { name: 'Biblioteca Multimedia', path: '/biblioteca-multimedia', icon: <Images size={20} className="text-violet-400" /> },
+    canAccessMediaLibrary(user) ? { name: 'Biblioteca Multimedia', path: '/biblioteca-multimedia', icon: <Images size={20} className="text-violet-400" /> } : null,
     { name: 'Controlador Multimedia', path: '/multimedia-hub', icon: <Monitor size={20} className="text-violet-500" /> },
     { name: 'Mi Perfil', path: '/perfil', icon: <User size={20} /> },
-  ];
+  ].filter(Boolean);
 
   const handleLogout = async () => {
     try {

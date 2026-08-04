@@ -3,7 +3,7 @@ import { Check, Search, X } from 'lucide-react';
 import { MEDIA_TYPES, createMediaReference, normalizeMediaText } from '../../utils/mediaLibrary';
 import MediaPreview from './MediaPreview';
 import { getMediaTypeIcon, getMediaTypeLabel } from './mediaDisplay';
-import { MOCK_MEDIA_ITEMS } from './mediaMockData';
+import useMediaLibrary from '../../hooks/useMediaLibrary';
 
 const MediaPicker = ({
   open,
@@ -19,8 +19,11 @@ const MediaPicker = ({
   const [query, setQuery] = useState('');
   const [activeType, setActiveType] = useState('all');
   const [selectedItems, setSelectedItems] = useState([]);
+  const shouldLoadLibrary = open && !Array.isArray(items);
+  const mediaLibrary = useMediaLibrary({ enabled: shouldLoadLibrary });
 
-  const sourceItems = Array.isArray(items) ? items : MOCK_MEDIA_ITEMS;
+  const sourceItems = Array.isArray(items) ? items : mediaLibrary.items;
+  const isLoading = loading || mediaLibrary.loading;
   const allowedTypes = acceptedTypes.length > 0 ? acceptedTypes : Object.values(MEDIA_TYPES);
 
   const filteredItems = useMemo(() => {
@@ -43,7 +46,6 @@ const MediaPicker = ({
   }, [activeType, allowedTypes, query, sourceItems]);
 
   const previewItem = selectedItems[selectedItems.length - 1] || filteredItems[0] || null;
-  const hasMockData = !Array.isArray(items);
 
   if (!open) return null;
 
@@ -64,7 +66,13 @@ const MediaPicker = ({
 
   const handleSelect = () => {
     if (!onSelect || selectedItems.length === 0) return;
-    const references = selectedItems.map(createMediaReference);
+    const references = selectedItems.map(item => ({
+      ...createMediaReference(item),
+      id: item.id || item.mediaId || null,
+      mediaId: item.mediaId || item.id || null,
+      usageCount: Number.isFinite(item.usageCount) ? item.usageCount : 0,
+      usedBy: Array.isArray(item.usedBy) ? item.usedBy : []
+    }));
     onSelect(multiple ? references : references[0]);
   };
 
@@ -136,19 +144,27 @@ const MediaPicker = ({
                 })}
               </div>
 
-              {hasMockData && (
-                <p className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-100">
-                  Datos de ejemplo. El componente esta listo para recibir recursos reales por props.
+              {mediaLibrary.error && (
+                <p className="rounded-2xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] font-bold text-red-100">
+                  No se pudo cargar mediaLibrary. Revisa permisos o conexion.
                 </p>
               )}
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              {loading ? (
+              {isLoading ? (
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                   {Array.from({ length: 8 }).map((_, index) => (
                     <div key={index} className="h-44 animate-pulse rounded-2xl border border-white/10 bg-zinc-900" />
                   ))}
+                </div>
+              ) : sourceItems.length === 0 ? (
+                <div className="flex min-h-[18rem] items-center justify-center rounded-3xl border border-dashed border-white/10 bg-zinc-950/70 text-center">
+                  <div>
+                    <Search size={34} className="mx-auto mb-3 text-zinc-700" />
+                    <p className="text-sm font-black text-white">Aun no existen recursos multimedia.</p>
+                    <p className="mt-1 text-xs text-zinc-500">Cuando agregues o sincronices recursos apareceran aqui.</p>
+                  </div>
                 </div>
               ) : filteredItems.length === 0 ? (
                 <div className="flex min-h-[18rem] items-center justify-center rounded-3xl border border-dashed border-white/10 bg-zinc-950/70 text-center">
@@ -215,4 +231,3 @@ const MediaPicker = ({
 };
 
 export default MediaPicker;
-

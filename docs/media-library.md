@@ -31,6 +31,16 @@ parser, proyector, reglas de Firestore ni estructura actual de `sectionMedia`.
 
   favoriteBy: ["uid"],
   usageCount: 0,
+  usedBy: [
+    {
+      songId: "songId",
+      songTitle: "No hay lugar mas alto",
+      location: "section",
+      sectionKey: "2_coro",
+      sectionTitle: "Coro"
+    }
+  ],
+  firstUsedAt: null,
   lastUsedAt: null,
 
   createdAt: 1780000000000,
@@ -106,6 +116,99 @@ Exports principales:
 - `createMediaReference()`
 - `normalizeLegacyMediaResource()`
 
+## Sincronizador reutilizable - Fase 3.5
+
+Archivo:
+
+```txt
+src/utils/mediaLibrarySync.js
+```
+
+La Fase 3.5 prepara un sincronizador permanente para reconstruir la biblioteca
+desde canciones existentes sin escribir todavia en Firestore.
+
+Entradas:
+
+```js
+buildMediaLibrarySyncPlan(canciones)
+```
+
+El sincronizador escanea cada cancion y detecta:
+
+- `fondoUrl`
+- `recursos[]`
+- `sectionMedia{}`
+
+Cada recurso encontrado se normaliza usando los helpers existentes de
+`mediaLibrary.js`, especialmente `normalizeLegacyMediaResource()` y
+`createMediaLibraryDocument()`.
+
+### Deduplicacion
+
+Para evitar registros repetidos, cada recurso se agrupa por la mejor identidad
+disponible, en este orden:
+
+1. `mediaId`
+2. `cloudinaryPublicId`
+3. `storagePath`
+4. URL normalizada
+
+Esto permite que el mismo archivo usado como fondo, recurso o multimedia de
+seccion termine en un unico documento candidato de `mediaLibrary`.
+
+### Usos exactos
+
+Cada documento generado queda preparado con:
+
+```js
+{
+  usageCount: 2,
+  usedBy: [
+    {
+      songId: "abc",
+      songTitle: "Cancion",
+      location: "background"
+    },
+    {
+      songId: "abc",
+      songTitle: "Cancion",
+      location: "section",
+      sectionKey: "2_coro",
+      sectionTitle: "Coro"
+    }
+  ],
+  firstUsedAt: null,
+  lastUsedAt: null
+}
+```
+
+`firstUsedAt` y `lastUsedAt` quedan preparados para futuras fases. Si los datos
+actuales no incluyen fechas reales de uso, permanecen en `null`.
+
+### Resultado
+
+`buildMediaLibrarySyncPlan()` devuelve:
+
+```js
+{
+  generatedAt,
+  mediaDocuments,
+  duplicates,
+  invalidResources,
+  stats: {
+    totalSongsScanned,
+    totalMediaDocuments,
+    totalUsages,
+    duplicateGroups,
+    invalidResources
+  }
+}
+```
+
+Este resultado esta listo para que una fase posterior lo escriba en Firestore,
+muestre "usado en X canciones", detalle canciones/secciones, detecte duplicados
+y encuentre recursos invalidos.
+
 ## Compatibilidad
 
 Las canciones actuales siguen funcionando aunque no exista `mediaLibrary`.
@@ -115,6 +218,10 @@ normalizar con `normalizeLegacyMediaResource()` sin migracion manual.
 
 Los recursos antiguos con `title`, `name`, `titulo`, `type`, `tipo` o solo `url`
 se pueden convertir a referencia minima.
+
+El sincronizador de Fase 3.5 no modifica `canciones`, `fondoUrl`, `recursos` ni
+`sectionMedia`; solo genera una estructura en memoria lista para guardar en una
+fase posterior.
 
 ## Riesgos
 
@@ -126,3 +233,83 @@ se pueden convertir a referencia minima.
   aun no escribe en Firestore.
 - Firestore Rules deberan actualizarse en una fase posterior antes de exponer
   escritura real sobre `mediaLibrary`.
+
+## Sincronizacion hacia Firestore - Fase 4B
+
+Archivo:
+
+```txt
+src/utils/mediaLibraryFirestoreSync.js
+```
+
+La Fase 4B agrega una capa reutilizable para escribir en Firestore el resultado
+generado por `buildMediaLibrarySyncPlan()`. No se ejecuta automaticamente y no
+crea botones de interfaz todavia.
+
+Funciones principales:
+
+- `loadSongsForMediaLibrarySync()`
+- `syncMediaLibraryFromSongs(canciones, options)`
+- `syncMediaLibraryFromFirestoreSongs(options)`
+
+### Flujo
+
+```txt
+canciones
+  -> buildMediaLibrarySyncPlan()
+  -> buscar documentos existentes en mediaLibrary
+  -> crear o actualizar mediaLibrary
+```
+
+`syncMediaLibraryFromFirestoreSongs()` lee todas las canciones desde la coleccion
+`canciones`, genera el plan con el sincronizador existente y escribe la coleccion
+`mediaLibrary`.
+
+`syncMediaLibraryFromSongs()` permite reutilizar el mismo flujo cuando las
+canciones ya fueron cargadas por otra pantalla o proceso administrativo.
+
+### Idempotencia
+
+La sincronizacion puede ejecutarse varias veces. Para evitar duplicados reutiliza
+la misma identidad calculada en `mediaLibrarySync.js`:
+
+1. `mediaId`
+2. `cloudinaryPublicId`
+3. `storagePath`
+4. URL normalizada
+
+Si el recurso ya existe, solo actualiza datos de uso:
+
+- `usageCount`
+- `usedBy`
+- `firstUsedAt`
+- `lastUsedAt`
+- `updatedAt`
+
+Si el recurso no existe, crea un documento completo a partir del documento
+generado por `createMediaLibraryDocument()` dentro del plan de sincronizacion.
+
+### Escritura segura
+
+Los documentos nuevos usan un ID estable derivado de la identidad del recurso.
+Esto evita duplicados aunque la sincronizacion se repita o se reconstruya la
+biblioteca en el futuro.
+
+Las escrituras se hacen en batches para respetar los limites de Firestore.
+
+### Compatibilidad
+
+Esta fase no modifica:
+
+- `canciones`
+- `fondoUrl`
+- `recursos`
+- `sectionMedia`
+- editores de canciones
+- proyector
+- eventos
+- medleys
+
+El sistema actual sigue funcionando aunque la sincronizacion nunca se ejecute.
+La siguiente fase podra llamar esta funcion desde un boton administrativo como
+"Sincronizar Biblioteca".

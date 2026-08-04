@@ -3,11 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, onSnapshot, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
-import { Save, ArrowLeft, Edit3, AlertCircle, Play, Pause, Volume2, Volume1, VolumeX, X, Library, Video, Link as LinkIcon, FileText as FileIcon, Upload, Trash2, SlidersHorizontal, Headphones, Monitor } from 'lucide-react';
+import { Save, ArrowLeft, Edit3, AlertCircle, Play, Pause, Volume2, Volume1, VolumeX, X, Library, Video, Link as LinkIcon, FileText as FileIcon, Upload, Trash2, SlidersHorizontal, Headphones, Monitor, Image as ImageIcon, RefreshCw } from 'lucide-react';
 import { detectarTonoDesdeAcordes, traducirAcorde } from '../../utils/musicCore';
 import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
 import { isVideoMediaUrl } from '../../utils/mediaUtils';
 import { parsearCancion } from '../../utils/songParser';
+import MediaPicker from '../media/MediaPicker';
+import { MEDIA_LIBRARY_COLLECTION, createMediaReference } from '../../utils/mediaLibrary';
+import { getMediaTypeLabel } from '../media/mediaDisplay';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const INSTRUMENTOS_RECURSOS = ['General', 'Voz Principal', 'Coros', 'Batería', 'Piano', 'Bajo', 'Guitarra Acústica', 'Guitarra Eléctrica', 'Percusión'];
@@ -60,7 +63,9 @@ const EditSong = ({ user }) => {
   const [showExample, setShowExample] = useState(false);
   const [showSingerModal, setShowSingerModal] = useState(false);
   const [showSectionMediaModal, setShowSectionMediaModal] = useState(false);
+  const [showSectionMediaPicker, setShowSectionMediaPicker] = useState(false);
   const [selectedSectionMediaIndex, setSelectedSectionMediaIndex] = useState(0);
+  const [sectionMediaPickerTarget, setSectionMediaPickerTarget] = useState(null);
   const [toast, setToast] = useState(null);
 
   const audioRef = useRef(null);
@@ -211,6 +216,93 @@ const EditSong = ({ user }) => {
     }));
   };
 
+  const buildSectionMediaUsage = (sectionKey, sectionTitle) => ({
+    songId: id,
+    songTitle: titulo || 'Cancion sin titulo',
+    location: 'section',
+    sectionKey,
+    sectionTitle: sectionTitle || sectionKey
+  });
+
+  const sameMediaUsage = (usageA = {}, usageB = {}) => (
+    usageA.songId === usageB.songId
+    && usageA.location === usageB.location
+    && (usageA.sectionKey || '') === (usageB.sectionKey || '')
+  );
+
+  const updateMediaLibraryUsage = async (mediaResource, usage, action = 'add') => {
+    const mediaId = mediaResource?.mediaId || mediaResource?.id;
+    if (!mediaId || mediaResource?.source !== 'library') return;
+
+    try {
+      const mediaRef = doc(db, MEDIA_LIBRARY_COLLECTION, mediaId);
+      const mediaSnap = await getDoc(mediaRef);
+      if (!mediaSnap.exists()) return;
+
+      const data = mediaSnap.data() || {};
+      const currentUsedBy = Array.isArray(data.usedBy) ? data.usedBy : [];
+      const nextUsedBy = action === 'remove'
+        ? currentUsedBy.filter(item => !sameMediaUsage(item, usage))
+        : [
+            ...currentUsedBy.filter(item => !sameMediaUsage(item, usage)),
+            usage
+          ];
+
+      await updateDoc(mediaRef, {
+        usedBy: nextUsedBy,
+        usageCount: nextUsedBy.length,
+        lastUsedAt: action === 'remove' ? (nextUsedBy.length ? Date.now() : null) : Date.now(),
+        updatedAt: Date.now()
+      });
+    } catch (error) {
+      console.error('Error actualizando uso de mediaLibrary:', error);
+      showToast('No se pudo actualizar el uso en Biblioteca Multimedia.');
+    }
+  };
+
+  const createSectionMediaReference = (media, usageDelta = 0) => ({
+    ...createMediaReference(media),
+    id: `library_${media.mediaId || media.id || Date.now()}_${Date.now()}`,
+    mediaId: media.mediaId || media.id || null,
+    title: media.title || media.name || 'Recurso multimedia',
+    source: 'library',
+    usageCount: (Number.isFinite(media.usageCount) ? media.usageCount : 0) + usageDelta,
+    usedBy: Array.isArray(media.usedBy) ? media.usedBy : [],
+    createdAt: new Date().toISOString()
+  });
+
+  const openSectionMediaPicker = (sectionKey, sectionTitle, replaceResourceId = null) => {
+    setSectionMediaPickerTarget({ sectionKey, sectionTitle, replaceResourceId });
+    setShowSectionMediaPicker(true);
+  };
+
+  const handleSelectLibrarySectionMedia = async (media) => {
+    if (!sectionMediaPickerTarget || !media) return;
+
+    const { sectionKey, sectionTitle, replaceResourceId } = sectionMediaPickerTarget;
+    const usage = buildSectionMediaUsage(sectionKey, sectionTitle);
+    const nextResource = createSectionMediaReference(media, 1);
+    const previousResource = replaceResourceId
+      ? (sectionMedia[sectionKey] || []).find(resource => resource.id === replaceResourceId)
+      : null;
+
+    setSectionMedia(prev => ({
+      ...prev,
+      [sectionKey]: replaceResourceId
+        ? (prev[sectionKey] || []).map(resource => resource.id === replaceResourceId ? nextResource : resource)
+        : [...(prev[sectionKey] || []), nextResource]
+    }));
+
+    if (previousResource?.mediaId) {
+      await updateMediaLibraryUsage(previousResource, usage, 'remove');
+    }
+    await updateMediaLibraryUsage({ ...nextResource, id: nextResource.mediaId }, usage, 'add');
+
+    setShowSectionMediaPicker(false);
+    setSectionMediaPickerTarget(null);
+    showToast('Recurso de Biblioteca asignado a la seccion.', 'success');
+  };
+
   const addSectionMediaResource = (sectionKey) => {
     const draft = getSectionDraft(sectionKey);
     if (!draft.title || !draft.url) {
@@ -293,11 +385,16 @@ const EditSong = ({ user }) => {
     }));
   };
 
-  const removeSectionMediaResource = (sectionKey, resourceId) => {
+  const removeSectionMediaResource = async (sectionKey, resourceId, sectionTitle = sectionKey) => {
+    const resourceToRemove = (sectionMedia[sectionKey] || []).find(resource => resource.id === resourceId);
     setSectionMedia(prev => ({
       ...prev,
       [sectionKey]: (prev[sectionKey] || []).filter(resource => resource.id !== resourceId)
     }));
+
+    if (resourceToRemove?.mediaId) {
+      await updateMediaLibraryUsage(resourceToRemove, buildSectionMediaUsage(sectionKey, sectionTitle), 'remove');
+    }
   };
 
   const handleUploadPDF = async (e) => {
@@ -861,38 +958,119 @@ const EditSong = ({ user }) => {
                           </p>
                         )}
 
-                        {resources.map(resource => (
-                          <div key={resource.id} className="grid grid-cols-1 gap-2 rounded-xl border border-zinc-200 bg-white p-2 dark:border-zinc-800 dark:bg-zinc-900 sm:grid-cols-[1fr_110px_1fr_auto]">
-                            <input
-                              type="text"
-                              value={resource.title || ''}
-                              onChange={e => updateSectionMediaResource(sectionKey, resource.id, { title: e.target.value })}
-                              className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
-                              placeholder="Titulo"
-                            />
-                            <select
-                              value={resource.type || 'link'}
-                              onChange={e => updateSectionMediaResource(sectionKey, resource.id, { type: e.target.value })}
-                              className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
-                            >
-                              <option value="image" className="bg-white dark:bg-zinc-900">Imagen</option>
-                              <option value="video" className="bg-white dark:bg-zinc-900">Video</option>
-                              <option value="audio" className="bg-white dark:bg-zinc-900">Audio</option>
-                              <option value="pdf" className="bg-white dark:bg-zinc-900">PDF</option>
-                              <option value="link" className="bg-white dark:bg-zinc-900">Link</option>
-                            </select>
-                            <input
-                              type="url"
-                              value={resource.url || ''}
-                              onChange={e => updateSectionMediaResource(sectionKey, resource.id, { url: e.target.value })}
-                              className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
-                              placeholder="URL"
-                            />
-                            <button type="button" onClick={() => removeSectionMediaResource(sectionKey, resource.id)} className="p-2 text-zinc-400 hover:text-red-500 transition-colors">
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        ))}
+                        {resources.map(resource => {
+                          const isLibraryResource = resource.source === 'library' || Boolean(resource.mediaId);
+                          const PreviewIcon = resource.type === 'image' ? ImageIcon : resource.type === 'video' ? Video : resource.type === 'pdf' ? FileIcon : LinkIcon;
+
+                          return (
+                            <div key={resource.id} className="rounded-2xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                                <div className="flex h-20 w-full shrink-0 items-center justify-center overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 sm:w-28">
+                                  {resource.type === 'image' && resource.url ? (
+                                    <img src={resource.thumbnailUrl || resource.url} alt={resource.title || 'Recurso'} className="h-full w-full object-cover" />
+                                  ) : resource.type === 'video' && resource.url ? (
+                                    <video src={resource.url} muted playsInline className="h-full w-full object-cover" />
+                                  ) : (
+                                    <PreviewIcon size={28} />
+                                  )}
+                                </div>
+
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-black text-zinc-900 dark:text-white">{resource.title || 'Recurso multimedia'}</p>
+                                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-wider">
+                                    <span className="rounded-full bg-zinc-100 px-2 py-1 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                                      {getMediaTypeLabel(resource.type)}
+                                    </span>
+                                    {isLibraryResource ? (
+                                      <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-emerald-600 dark:text-emerald-300">
+                                        Biblioteca
+                                      </span>
+                                    ) : (
+                                      <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-amber-600 dark:text-amber-300">
+                                        URL directa
+                                      </span>
+                                    )}
+                                    {isLibraryResource && (
+                                      <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-1 text-violet-600 dark:text-violet-300">
+                                        Usado {Number(resource.usageCount || 0)} veces
+                                      </span>
+                                    )}
+                                  </div>
+                                  {resource.url && (
+                                    <p className="mt-2 truncate text-[11px] font-medium text-zinc-400">{resource.url}</p>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-3 gap-2 sm:w-auto sm:grid-cols-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => resource.url && window.open(resource.url, '_blank', 'noopener,noreferrer')}
+                                    className="rounded-xl border border-zinc-200 px-3 py-2 text-[10px] font-black uppercase text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                  >
+                                    Vista previa
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => openSectionMediaPicker(sectionKey, section.titulo || `Seccion ${safeIndex + 1}`, resource.id)}
+                                    className="rounded-xl border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-[10px] font-black uppercase text-violet-700 hover:bg-violet-500/20 dark:text-violet-300"
+                                  >
+                                    Cambiar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeSectionMediaResource(sectionKey, resource.id, section.titulo || `Seccion ${safeIndex + 1}`)}
+                                    className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-600 hover:bg-red-500/20 dark:text-red-300"
+                                  >
+                                    Quitar
+                                  </button>
+                                </div>
+                              </div>
+
+                              {!isLibraryResource && (
+                                <div className="mt-3 grid grid-cols-1 gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-800 sm:grid-cols-[1fr_110px_1fr]">
+                                  <input
+                                    type="text"
+                                    value={resource.title || ''}
+                                    onChange={e => updateSectionMediaResource(sectionKey, resource.id, { title: e.target.value })}
+                                    className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
+                                    placeholder="Titulo"
+                                  />
+                                  <select
+                                    value={resource.type || 'link'}
+                                    onChange={e => updateSectionMediaResource(sectionKey, resource.id, { type: e.target.value })}
+                                    className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
+                                  >
+                                    <option value="image" className="bg-white dark:bg-zinc-900">Imagen</option>
+                                    <option value="video" className="bg-white dark:bg-zinc-900">Video</option>
+                                    <option value="audio" className="bg-white dark:bg-zinc-900">Audio</option>
+                                    <option value="pdf" className="bg-white dark:bg-zinc-900">PDF</option>
+                                    <option value="link" className="bg-white dark:bg-zinc-900">Link</option>
+                                  </select>
+                                  <input
+                                    type="url"
+                                    value={resource.url || ''}
+                                    onChange={e => updateSectionMediaResource(sectionKey, resource.id, { url: e.target.value })}
+                                    className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
+                                    placeholder="URL"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="rounded-2xl border border-violet-500/20 bg-violet-500/10 p-3">
+                        <button
+                          type="button"
+                          onClick={() => openSectionMediaPicker(sectionKey, section.titulo || `Seccion ${safeIndex + 1}`)}
+                          className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black uppercase tracking-wider text-white shadow-sm transition-colors hover:bg-violet-700"
+                        >
+                          <Library size={16} /> Biblioteca Multimedia
+                        </button>
+                        <p className="mt-2 text-center text-[10px] font-bold text-violet-700/80 dark:text-violet-200/80">
+                          Usa recursos existentes sin volver a subir archivos.
+                        </p>
                       </div>
 
                       <div className="grid grid-cols-1 gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950 sm:grid-cols-[1fr_110px_1fr_auto_auto]">
@@ -981,6 +1159,18 @@ const EditSong = ({ user }) => {
           </div>
         </div>
       )}
+
+      <MediaPicker
+        open={showSectionMediaPicker}
+        onClose={() => {
+          setShowSectionMediaPicker(false);
+          setSectionMediaPickerTarget(null);
+        }}
+        onSelect={handleSelectLibrarySectionMedia}
+        title="Seleccionar desde Biblioteca"
+        context="multimedia-por-seccion"
+        acceptedTypes={['image', 'video', 'audio', 'pdf', 'link']}
+      />
 
       {/* Toast Notification */}
       {toast && (
