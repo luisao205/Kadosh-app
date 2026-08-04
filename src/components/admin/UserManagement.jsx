@@ -1,8 +1,9 @@
-﻿import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, deleteDoc, doc, addDoc } from 'firebase/firestore';
+﻿import React, { useState, useEffect, useMemo } from 'react';
+import { collection, onSnapshot, deleteDoc, doc, addDoc, updateDoc, getDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { crearUsuarioPorAdmin, actualizarUsuarioPorAdmin, crearPerfilSinAcceso, habilitarAccesoWeb } from '../../utils/authUtils';
-import { Users, UserPlus, Shield, Music, Trash2, Edit, AlertCircle, Key, MonitorPlay, Eye, EyeOff } from 'lucide-react';
+import { Users, UserPlus, Shield, Music, Trash2, Edit, AlertCircle, Key, MonitorPlay, Eye, EyeOff, Search } from 'lucide-react';
+import { ACCOUNT_STATUSES, ACCOUNT_STATUS_OPTIONS, SUSPENSION_TYPES, SUSPENSION_TYPE_OPTIONS, getAccountStatusLabel, normalizeAccountStatus } from '../../utils/accountStatus';
 
 const INSTRUMENTOS_DISPONIBLES = [
   "Voz Principal", "Coros", "Bateria", "Piano",
@@ -21,6 +22,14 @@ const isOwnerRole = (role) => {
 
 const isAdminLikeRole = (role) => role === 'admin' || isOwnerRole(role);
 
+const normalizeSearchText = (value = '') => String(value)
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[^a-z0-9@._\s-]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
 const UserManagement = ({ user }) => {
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
@@ -34,8 +43,14 @@ const UserManagement = ({ user }) => {
   const [nuevoInstrumentoCustom, setNuevoInstrumentoCustom] = useState('');
   const [isActivating, setIsActivating] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [accountStatus, setAccountStatus] = useState(ACCOUNT_STATUSES.ACTIVE);
+  const [suspensionReason, setSuspensionReason] = useState('');
+  const [suspensionType, setSuspensionType] = useState(SUSPENSION_TYPES.INDEFINITE);
+  const [suspensionEndDate, setSuspensionEndDate] = useState('');
+  const [notifyAccountStatus, setNotifyAccountStatus] = useState(true);
   
   const [usuarios, setUsuarios] = useState([]);
+  const [userSearchTerm, setUserSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState(null);
@@ -54,6 +69,31 @@ const UserManagement = ({ user }) => {
     });
     return () => unsubscribe();
   }, []);
+
+  const filteredUsuarios = useMemo(() => {
+    const search = normalizeSearchText(userSearchTerm);
+    if (!search) return usuarios;
+
+    return usuarios.filter(integrante => {
+      const searchableFields = [
+        integrante.nombre,
+        integrante.email,
+        integrante.rol,
+        getAccountStatusLabel(integrante.accountStatus),
+        normalizeAccountStatus(integrante.accountStatus),
+        integrante.funcion,
+        integrante.funcionMinisterial,
+        integrante.ministerio,
+        integrante.area,
+        integrante.cargo,
+        ...(Array.isArray(integrante.instrumentos) ? integrante.instrumentos : []),
+        ...(Array.isArray(integrante.funciones) ? integrante.funciones : []),
+        ...(Array.isArray(integrante.ministerios) ? integrante.ministerios : [])
+      ];
+
+      return normalizeSearchText(searchableFields.filter(Boolean).join(' ')).includes(search);
+    });
+  }, [usuarios, userSearchTerm]);
 
   const toggleInstrumento = (inst) => {
     setInstrumentosSeleccionados(prev => 
@@ -96,16 +136,79 @@ const UserManagement = ({ user }) => {
         showToast("El nombre es obligatorio.");
         return;
       }
+      if (editingUserId === user?.uid && accountStatus !== ACCOUNT_STATUSES.ACTIVE) {
+        showToast("No puedes suspender o desactivar tu propia cuenta.");
+        return;
+      }
+      if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && !suspensionReason.trim()) {
+        showToast("El motivo de la suspension es obligatorio.");
+        return;
+      }
+      if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && suspensionType === SUSPENSION_TYPES.UNTIL_DATE && !suspensionEndDate) {
+        showToast("Selecciona la fecha de finalizacion de la suspension.");
+        return;
+      }
       setIsSaving(true);
       try {
+        const userRef = doc(db, 'usuarios', editingUserId);
+        const previousSnap = await getDoc(userRef);
+        const previousData = previousSnap.exists() ? previousSnap.data() : {};
+        const previousStatus = normalizeAccountStatus(previousData.accountStatus);
+        const now = new Date().toISOString();
+        const statusPayload = {
+          accountStatus,
+          accountStatusUpdatedAt: now,
+          suspension: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? {
+            reason: suspensionReason.trim(),
+            type: suspensionType,
+            startedAt: previousStatus === ACCOUNT_STATUSES.SUSPENDED && previousData.suspension?.startedAt ? previousData.suspension.startedAt : now,
+            endsAt: suspensionType === SUSPENSION_TYPES.UNTIL_DATE ? suspensionEndDate : null,
+            notifyUser: notifyAccountStatus
+          } : null,
+          accountStatusAudit: arrayUnion({
+            previousStatus,
+            newStatus: accountStatus,
+            reason: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? suspensionReason.trim() : '',
+            suspensionType: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? suspensionType : null,
+            suspensionEndsAt: accountStatus === ACCOUNT_STATUSES.SUSPENDED && suspensionType === SUSPENSION_TYPES.UNTIL_DATE ? suspensionEndDate : null,
+            reactivatedAt: previousStatus !== ACCOUNT_STATUSES.ACTIVE && accountStatus === ACCOUNT_STATUSES.ACTIVE ? now : null,
+            adminId: user?.uid || null,
+            adminName: user?.nombre || user?.email || 'Administrador',
+            createdAt: now
+          })
+        };
+
         await actualizarUsuarioPorAdmin(editingUserId, nombre, rol, instrumentosSeleccionados, fechaNacimiento);
-        await addDoc(collection(db, 'notificaciones'), {
-          titulo: 'Rol Actualizado',
-          mensaje: `Un administrador ha actualizado tus permisos a: ${rol}.`,
-          destinatarios: [editingUserId],
-          emisorId: user?.uid,
-          fechaCreacion: new Date().toISOString()
-        });
+        await updateDoc(userRef, statusPayload);
+        if (previousStatus !== accountStatus) {
+          if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && notifyAccountStatus) {
+            await addDoc(collection(db, 'notificaciones'), {
+              titulo: 'Cuenta Suspendida',
+              mensaje: `Tu cuenta ha sido suspendida. Motivo: ${suspensionReason.trim()}.`,
+              destinatarios: [editingUserId],
+              accountStatusException: 'suspension',
+              emisorId: user?.uid,
+              fechaCreacion: now
+            });
+          } else if (previousStatus !== ACCOUNT_STATUSES.ACTIVE && accountStatus === ACCOUNT_STATUSES.ACTIVE) {
+            await addDoc(collection(db, 'notificaciones'), {
+              titulo: 'Acceso Restablecido',
+              mensaje: 'Tu acceso a Kadosh ha sido restablecido.',
+              destinatarios: [editingUserId],
+              accountStatusException: 'reactivation',
+              emisorId: user?.uid,
+              fechaCreacion: now
+            });
+          }
+        } else if (previousData.rol !== rol && accountStatus === ACCOUNT_STATUSES.ACTIVE) {
+          await addDoc(collection(db, 'notificaciones'), {
+            titulo: 'Rol Actualizado',
+            mensaje: `Un administrador ha actualizado tus permisos a: ${rol}.`,
+            destinatarios: [editingUserId],
+            emisorId: user?.uid,
+            fechaCreacion: now
+          });
+        }
         showToast(`Usuario ${nombre} actualizado exitosamente.`, 'success');
         cancelEdit();
       } catch (error) {
@@ -160,6 +263,12 @@ const UserManagement = ({ user }) => {
     setIsActivating(false);
     setFechaNacimiento(user.fechaNacimiento || '');
     setInstrumentosSeleccionados(user.instrumentos || []);
+    const status = normalizeAccountStatus(user.accountStatus);
+    setAccountStatus(status);
+    setSuspensionReason(user.suspension?.reason || '');
+    setSuspensionType(user.suspension?.type || SUSPENSION_TYPES.INDEFINITE);
+    setSuspensionEndDate(user.suspension?.endsAt || '');
+    setNotifyAccountStatus(true);
     
     // Hacer scroll hacia arriba suavemente para moviles
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -174,6 +283,11 @@ const UserManagement = ({ user }) => {
     setFechaNacimiento('');
     setSinAcceso(false);
     setIsActivating(false);
+    setAccountStatus(ACCOUNT_STATUSES.ACTIVE);
+    setSuspensionReason('');
+    setSuspensionType(SUSPENSION_TYPES.INDEFINITE);
+    setSuspensionEndDate('');
+    setNotifyAccountStatus(true);
     setInstrumentosSeleccionados([]);
   };
 
@@ -214,11 +328,11 @@ const UserManagement = ({ user }) => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Formulario Crear Usuario */}
-        <div className="kp-card p-6 rounded-3xl lg:col-span-1 h-fit sticky top-6">
-          <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
+        <div className="kp-card p-0 rounded-3xl lg:col-span-1 h-fit lg:sticky lg:top-6 lg:max-h-[calc(100dvh-8rem)] lg:overflow-y-auto">
+          <h2 className="sticky top-0 z-10 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md px-6 pt-6 pb-4 text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-0 flex items-center gap-2 border-b border-zinc-200/60 dark:border-white/10 rounded-t-3xl">
             <UserPlus size={20} className="text-indigo-600 dark:text-indigo-400" /> {editingUserId ? 'Editar Integrante' : 'Nuevo Integrante'}
           </h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4 px-6 pb-6 pt-4">
             <div>
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Nombre Completo</label>
               <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" placeholder="Ej. Juan Perez" required />
@@ -276,6 +390,55 @@ const UserManagement = ({ user }) => {
                 <option value="dueño" className="bg-white dark:bg-zinc-900">Admin Principal (Oculto)</option>
               </select>
             </div>}
+            {editingUserId && !isActivating && (
+              <div className="rounded-2xl border border-white/10 bg-zinc-950/50 p-4 space-y-3">
+                <div>
+                  <p className="text-sm font-black text-zinc-100">Estado de la Cuenta</p>
+                  <p className="text-xs text-zinc-500 mt-1">Controla si este integrante puede acceder a Kadosh.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Estado</label>
+                  <select value={accountStatus} onChange={(e) => setAccountStatus(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm">
+                    {ACCOUNT_STATUS_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value} className="bg-white dark:bg-zinc-900">{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {accountStatus === ACCOUNT_STATUSES.SUSPENDED && (
+                  <div className="space-y-3 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3">
+                    <div>
+                      <label className="block text-xs font-bold text-amber-200 mb-1">Motivo de la suspension</label>
+                      <textarea
+                        value={suspensionReason}
+                        onChange={(e) => setSuspensionReason(e.target.value)}
+                        className="kp-input w-full min-h-[86px] p-2.5 rounded-xl text-sm resize-none"
+                        placeholder="Explica el motivo de forma clara para el usuario."
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-amber-200 mb-1">Tipo de suspension</label>
+                      <select value={suspensionType} onChange={(e) => setSuspensionType(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm">
+                        {SUSPENSION_TYPE_OPTIONS.map(option => (
+                          <option key={option.value} value={option.value} className="bg-white dark:bg-zinc-900">{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {suspensionType === SUSPENSION_TYPES.UNTIL_DATE && (
+                      <div>
+                        <label className="block text-xs font-bold text-amber-200 mb-1">Fecha de finalizacion</label>
+                        <input type="date" value={suspensionEndDate} onChange={(e) => setSuspensionEndDate(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" required />
+                      </div>
+                    )}
+                    <label className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-black/20 p-3 text-xs font-bold text-amber-100 cursor-pointer">
+                      <input type="checkbox" checked={notifyAccountStatus} onChange={(e) => setNotifyAccountStatus(e.target.checked)} className="rounded text-amber-500 focus:ring-amber-500" />
+                      Enviar notificacion al usuario
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
             {!isActivating && <div>
               <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Instrumentos / Funcion</label>
               <div className="flex flex-wrap gap-2">
@@ -310,7 +473,7 @@ const UserManagement = ({ user }) => {
                 </button>
               </div>
             </div>}
-            <div className="flex gap-2 pt-2">
+            <div className="sticky bottom-0 z-10 -mx-6 -mb-6 mt-4 flex gap-2 border-t border-zinc-200/60 dark:border-white/10 bg-white/95 dark:bg-zinc-950/95 px-6 py-4 backdrop-blur-md rounded-b-3xl">
               {editingUserId && (
                 <button type="button" onClick={cancelEdit} className="kp-button-secondary w-1/3 flex items-center justify-center py-3 px-4 rounded-xl text-sm font-bold transition-all active:scale-95">
                   Cancelar
@@ -325,12 +488,29 @@ const UserManagement = ({ user }) => {
 
         {/* Lista de Usuarios */}
         <div className="kp-card p-6 rounded-3xl lg:col-span-2">
-          <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">Integrantes Registrados</h2>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-zinc-900 dark:text-white">Integrantes Registrados</h2>
+              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                {filteredUsuarios.length} de {usuarios.length} integrantes
+              </p>
+            </div>
+            <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-zinc-950/60 px-3 py-2.5 sm:w-80">
+              <Search size={16} className="shrink-0 text-zinc-500" />
+              <input
+                type="search"
+                value={userSearchTerm}
+                onChange={(e) => setUserSearchTerm(e.target.value)}
+                placeholder="Buscar nombre, correo, rol, funcion o estado..."
+                className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-zinc-600"
+              />
+            </div>
+          </div>
           {loading ? (
             <div className="text-zinc-500 text-center py-8 animate-pulse">Cargando equipo...</div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {usuarios.map(user => (
+              {filteredUsuarios.map(user => (
                 <div key={user.id} className="kp-panel flex items-center gap-4 p-4 rounded-2xl relative overflow-hidden">
                   {user.fotoPerfil ? (
                     <img src={user.fotoPerfil} alt={user.nombre} className="w-12 h-12 rounded-xl object-cover shadow-sm border border-zinc-200 dark:border-zinc-700 shrink-0" />
@@ -359,6 +539,15 @@ const UserManagement = ({ user }) => {
                     <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md ${isAdminLikeRole(user.rol) ? 'bg-amber-200/50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400' : user.rol === 'multimedia' ? 'bg-violet-200/50 dark:bg-violet-500/20 text-violet-700 dark:text-violet-400' : 'bg-blue-200/50 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400'}`}>
                       {isOwnerRole(user.rol) ? 'admin' : user.rol}
                     </span>
+                    <span className={`ml-1 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md ${
+                      normalizeAccountStatus(user.accountStatus) === ACCOUNT_STATUSES.SUSPENDED
+                        ? 'bg-amber-200/50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                        : normalizeAccountStatus(user.accountStatus) === ACCOUNT_STATUSES.DISABLED
+                          ? 'bg-red-200/50 dark:bg-red-500/20 text-red-700 dark:text-red-300'
+                          : 'bg-emerald-200/50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                    }`}>
+                      {getAccountStatusLabel(user.accountStatus)}
+                    </span>
                   </div>
                   
                   {user.instrumentos && user.instrumentos.length > 0 && (
@@ -371,6 +560,7 @@ const UserManagement = ({ user }) => {
                 </div>
               ))}
               {usuarios.length === 0 && <p className="kp-empty-state text-sm py-8 px-4 rounded-2xl col-span-2 text-center">No hay usuarios registrados.</p>}
+              {usuarios.length > 0 && filteredUsuarios.length === 0 && <p className="kp-empty-state text-sm py-8 px-4 rounded-2xl col-span-2 text-center">No encontramos integrantes con esa busqueda.</p>}
             </div>
           )}
         </div>

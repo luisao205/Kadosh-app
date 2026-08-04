@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import LiveModeUI from './components/live/LiveModeUI';
 import Proyector from './components/live/Proyector';
@@ -11,6 +11,7 @@ import MultimediaHub from './components/live/MultimediaHub';
 import AdminLayout from './components/layout/AdminLayout';
 import AdminDashboard from './components/admin/AdminDashboard';
 import Login from './components/layout/Login';
+import MediaCenter from './components/admin/MediaCenter';
 import AddSongAI from './components/admin/AddSongAI';
 import SongList from './components/admin/SongList';
 import EditSong from './components/admin/EditSong';
@@ -18,17 +19,70 @@ import UserManagement from './components/admin/UserManagement';
 import EventManagement from './components/admin/EventManagement';
 import SetlistViewer from './components/admin/SetlistViewer';
 import UserProfile from './components/admin/UserProfile';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
 import { db, messaging } from './config/firebase';
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { App as CapacitorApp } from '@capacitor/app';
+import { ACCOUNT_STATUSES, getAccountStatusLabel, isAccountAllowed, normalizeAccountStatus } from './utils/accountStatus';
+
+const AccountBlockedScreen = ({ user }) => {
+  const status = normalizeAccountStatus(user?.accountStatus);
+  const suspension = user?.suspension || {};
+  const title = status === ACCOUNT_STATUSES.DISABLED ? 'Cuenta desactivada' : 'Cuenta suspendida';
+  const startedAt = suspension.startedAt ? new Date(suspension.startedAt).toLocaleString() : 'Sin fecha registrada';
+  const endsAt = suspension.endsAt ? new Date(suspension.endsAt).toLocaleDateString() : null;
+  const handleLogout = async () => {
+    await signOut(getAuth());
+  };
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-xl rounded-[2rem] border border-amber-500/20 bg-zinc-900/80 p-8 shadow-2xl shadow-black/40 text-center">
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-3xl border border-amber-500/25 bg-amber-500/10 text-amber-200">
+          <span className="text-2xl font-black">!</span>
+        </div>
+        <p className="text-xs font-black uppercase tracking-[0.24em] text-amber-300">{getAccountStatusLabel(status)}</p>
+        <h1 className="mt-2 text-3xl font-black tracking-tight">{title}</h1>
+        <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+          Tu acceso a Kadosh esta temporalmente restringido. Contacta al administrador del ministerio para mas informacion.
+        </p>
+
+        <div className="mt-6 space-y-3 rounded-3xl border border-white/10 bg-black/25 p-4 text-left">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Motivo</p>
+            <p className="mt-1 text-sm font-semibold text-zinc-100">{suspension.reason || 'No especificado'}</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Fecha de inicio</p>
+              <p className="mt-1 text-sm font-semibold text-zinc-100">{startedAt}</p>
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Fecha de finalizacion</p>
+              <p className="mt-1 text-sm font-semibold text-zinc-100">{endsAt || 'Indefinida'}</p>
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="mt-6 rounded-2xl border border-white/10 bg-zinc-950 px-5 py-3 text-xs font-black uppercase tracking-wide text-zinc-300 hover:bg-zinc-800 hover:text-white"
+        >
+          Cerrar sesion
+        </button>
+      </div>
+    </div>
+  );
+};
 
 function App() {
   const [user, setUser] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
+  const userAccessRef = useRef(true);
+  const notificationsStartedRef = useRef(false);
 
   useEffect(() => {
     const auth = getAuth();
@@ -92,6 +146,7 @@ function App() {
             }
 
             onMessage(messaging, (payload) => {
+              if (!userAccessRef.current) return;
               alert(`🔔 ${payload.notification.title}\n${payload.notification.body}`);
             });
           }
@@ -107,31 +162,54 @@ function App() {
         
         const docSnap = await getDoc(docRef);
 
+        let initialUserData = docSnap.exists() ? docSnap.data() : null;
+
         if (!docSnap.exists()) {
           const esElDueno = firebaseUser.email === import.meta.env.VITE_OWNER_EMAIL;
           const userData = { email: firebaseUser.email, nombre: esElDueno ? 'Dueño Principal' : 'Usuario Nuevo', rol: esElDueno ? 'dueño' : 'musico', fechaCreacion: new Date().toISOString() };
+          userData.accountStatus = 'active';
           await setDoc(docRef, userData);
+          initialUserData = userData;
         }
 
         // Disparamos la lógica de notificaciones inmediatamente
-        inicializarNotificaciones(firebaseUser.uid);
+        userAccessRef.current = isAccountAllowed(initialUserData?.accountStatus);
+        if (userAccessRef.current && !notificationsStartedRef.current) {
+          notificationsStartedRef.current = true;
+          inicializarNotificaciones(firebaseUser.uid);
+        }
 
         // Escuchamos los cambios del perfil en TIEMPO REAL
         unsubscribeSnapshot = onSnapshot(docRef, (snap) => {
           if (snap.exists()) {
             const userData = snap.data();
+            const normalizedStatus = normalizeAccountStatus(userData.accountStatus);
+            const wasAllowed = userAccessRef.current;
+            userAccessRef.current = isAccountAllowed(normalizedStatus);
+            if (!userAccessRef.current) {
+              notificationsStartedRef.current = false;
+              if (Capacitor.isNativePlatform()) {
+                PushNotifications.removeAllListeners().catch(() => {});
+              }
+            }
+            if (!wasAllowed && userAccessRef.current && !notificationsStartedRef.current) {
+              notificationsStartedRef.current = true;
+              inicializarNotificaciones(firebaseUser.uid);
+            }
             // Migración silenciosa: Si un usuario antiguo tiene guardado el viejo tamaño 24, lo forzamos a 16
             if (userData.preferencias?.fontSize === 24) {
               updateDoc(docRef, { 'preferencias.fontSize': 16 }).catch(e => console.error(e));
               userData.preferencias.fontSize = 16;
             }
-            setUser({ uid: firebaseUser.uid, email: firebaseUser.email, ...userData });
+            setUser({ uid: firebaseUser.uid, email: firebaseUser.email, accountStatus: normalizedStatus, ...userData });
           }
           setLoadingAuth(false);
         });
 
       } else {
         setUser(null);
+        userAccessRef.current = true;
+        notificationsStartedRef.current = false;
         setLoadingAuth(false);
         if (unsubscribeSnapshot) unsubscribeSnapshot();
       }
@@ -184,6 +262,10 @@ function App() {
     return <Login />;
   }
 
+  if (!isAccountAllowed(user.accountStatus)) {
+    return <AccountBlockedScreen user={user} />;
+  }
+
   return (
     <Router>
       <Routes>
@@ -194,6 +276,7 @@ function App() {
         <Route path="/editar/:id" element={<AdminLayout user={user}><EditSong user={user} /></AdminLayout>} />
         <Route path="/equipo" element={<AdminLayout user={user}><UserManagement user={user} /></AdminLayout>} />
         <Route path="/eventos" element={<AdminLayout user={user}><EventManagement user={user} /></AdminLayout>} />
+        <Route path="/biblioteca-multimedia" element={<AdminLayout user={user}><MediaCenter user={user} /></AdminLayout>} />
         <Route path="/multimedia-hub" element={<AdminLayout user={user}><MultimediaHub user={user} /></AdminLayout>} />
         <Route path="/setlist/:id" element={<AdminLayout user={user}><SetlistViewer user={user} /></AdminLayout>} />
         <Route path="/perfil" element={<AdminLayout user={user}><UserProfile user={user} /></AdminLayout>} />

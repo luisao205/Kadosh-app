@@ -15,6 +15,18 @@ const sanitizeTopicName = (name) =>
       .replace(/[\u0300-\u036f]/g, "")
       .replace(/[^a-zA-Z0-9-_.~%]+/g, "_");
 
+const normalizeAccountStatus = (status) => {
+  if (status === "suspended" || status === "Suspendida") return "suspended";
+  if (status === "disabled" || status === "Desactivada") return "disabled";
+  return "active";
+};
+
+const canReceiveRegularPush = (user) => normalizeAccountStatus(user.accountStatus) === "active";
+
+const isAccountStatusException = (notif) =>
+  notif.accountStatusException === "suspension" ||
+  notif.accountStatusException === "reactivation";
+
 /**
  * Cloud Function that sends a push notification when a new document is added
  * to the 'notificaciones' collection.
@@ -29,6 +41,7 @@ exports.enviarNotificacionPush = functions.firestore
     const destinatarios = notif.destinatarios || [];
     const emisorId = notif.emisorId;
     const excluidos = notif.excluidos || [];
+    const allowStatusException = isAccountStatusException(notif);
 
     if (destinatarios.length === 0) {
       console.log("No destinatarios, exiting.");
@@ -58,7 +71,7 @@ exports.enviarNotificacionPush = functions.firestore
     };
 
     // Usamos Tokens si hay exclusiones o si los destinatarios no son el grupo global "all"
-    const usarTokens = excluidos.length > 0 || !destinatarios.includes("all");
+    const usarTokens = allowStatusException || excluidos.length > 0 || !destinatarios.includes("all");
 
     if (usarTokens) {
       console.log("Iniciando envío por Tokens (Máxima precisión)");
@@ -77,7 +90,7 @@ exports.enviarNotificacionPush = functions.firestore
                         (user.rol && destinatarios.includes(user.rol)) ||
                         (user.instrumentos && user.instrumentos.some((i) => destinatarios.includes(i)));
 
-        if (isForMe && user.fcmToken) {
+        if (isForMe && user.fcmToken && (allowStatusException || canReceiveRegularPush(user))) {
           tokens.push(user.fcmToken);
         }
       });
@@ -223,12 +236,30 @@ exports.manageUserTopics = functions.firestore
         return null;
       }
 
+      const accountIsActive = canReceiveRegularPush(afterData);
+
       const oldTopics = new Set();
       if (change.before.exists) {
         const oldRoles = beforeData.rol ? [beforeData.rol] : [];
         const oldInstruments = beforeData.instrumentos || [];
         oldRoles.forEach((r) => oldTopics.add(`rol_${sanitizeTopicName(r)}`));
         oldInstruments.forEach((i) => oldTopics.add(`instrumento_${sanitizeTopicName(i)}`));
+        oldTopics.add("all");
+      }
+
+      if (!accountIsActive) {
+        const currentRoles = afterData.rol ? [afterData.rol] : [];
+        const currentInstruments = afterData.instrumentos || [];
+        currentRoles.forEach((r) => oldTopics.add(`rol_${sanitizeTopicName(r)}`));
+        currentInstruments.forEach((i) => oldTopics.add(`instrumento_${sanitizeTopicName(i)}`));
+        oldTopics.add("all");
+
+        await Promise.all([...oldTopics].map((topic) =>
+          admin.messaging().unsubscribeFromTopic(token, topic)
+            .then(() => console.log(`Suspended/disabled user ${context.params.userId} unsubscribed from ${topic}`))
+            .catch((e) => console.error(`Error unsubscribing inactive user from ${topic}`, e))
+        ));
+        return null;
       }
 
       const newTopics = new Set();

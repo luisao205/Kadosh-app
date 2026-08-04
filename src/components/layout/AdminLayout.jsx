@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell, Monitor } from 'lucide-react';
+import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell, Monitor, Images, Camera } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, signOut } from 'firebase/auth';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
@@ -11,13 +11,16 @@ const AdminLayout = ({ children, user }) => {
   const [sysNotifs, setSysNotifs] = useState([]); // Historial de notificaciones
   const [showNotifs, setShowNotifs] = useState(false); // Panel de notificaciones
   const [unreadNotifs, setUnreadNotifs] = useState(0); // Contador rojo
+  const [hideProfilePhotoReminder, setHideProfilePhotoReminder] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const shouldShowProfilePhotoReminder = !user?.fotoPerfil && !hideProfilePhotoReminder;
 
   const navItems = [
     { name: 'Dashboard', path: '/', icon: <Home size={20} /> },
     { name: 'Repertorio', path: '/canciones', icon: <Music size={20} /> },
     { name: 'Eventos', path: '/eventos', icon: <Calendar size={20} /> },
+    { name: 'Biblioteca Multimedia', path: '/biblioteca-multimedia', icon: <Images size={20} className="text-violet-400" /> },
     { name: 'Controlador Multimedia', path: '/multimedia-hub', icon: <Monitor size={20} className="text-violet-500" /> },
     { name: 'Mi Perfil', path: '/perfil', icon: <User size={20} /> },
   ];
@@ -30,6 +33,10 @@ const AdminLayout = ({ children, user }) => {
       console.error("Error al cerrar sesión:", error);
     }
   };
+
+  useEffect(() => {
+    setHideProfilePhotoReminder(false);
+  }, [user?.uid, user?.fotoPerfil]);
 
   // Escuchador de Notificaciones en Tiempo Real
   useEffect(() => {
@@ -266,6 +273,39 @@ const AdminLayout = ({ children, user }) => {
         </header>
         
         <main className="flex-1 min-h-0 overflow-y-auto p-4 md:p-8">
+          {shouldShowProfilePhotoReminder && (
+            <div className="mb-5 rounded-3xl border border-violet-500/25 bg-violet-500/10 p-4 text-white shadow-lg shadow-violet-950/10">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="shrink-0 rounded-2xl border border-violet-500/25 bg-violet-500/15 p-2.5 text-violet-200">
+                    <Camera size={20} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-white">Completa tu perfil</p>
+                    <p className="mt-1 text-xs font-medium leading-relaxed text-zinc-300">
+                      Agrega una foto para que los integrantes puedan reconocerte.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/perfil')}
+                    className="rounded-2xl bg-violet-600 px-4 py-2.5 text-xs font-black uppercase tracking-wide text-white hover:bg-violet-500 active:scale-95"
+                  >
+                    Subir foto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHideProfilePhotoReminder(true)}
+                    className="rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-2.5 text-xs font-black uppercase tracking-wide text-zinc-300 hover:bg-zinc-900 active:scale-95"
+                  >
+                    Ahora no
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {children}
         </main>
       </div>

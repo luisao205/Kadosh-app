@@ -21,6 +21,7 @@ export const crearUsuarioPorAdmin = async (email, password, nombre, rol, instrum
       rol,
       instrumentos,
       fechaNacimiento,
+      accountStatus: 'active',
       fechaCreacion: new Date().toISOString()
     });
 
@@ -40,6 +41,7 @@ export const crearPerfilSinAcceso = async (nombre, rol, instrumentos = [], fecha
       rol,
       instrumentos,
       fechaNacimiento,
+      accountStatus: 'active',
       sinAcceso: true,
       fechaCreacion: new Date().toISOString()
     });
