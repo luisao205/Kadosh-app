@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX, Cake } from 'lucide-react';
+import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX, Cake, Edit3 } from 'lucide-react';
 import { calcularOffsetSemitonos, transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 
@@ -25,9 +25,13 @@ const writeMusicianLocal = (key, value) => {
   }
 };
 
+const AREAS_RESPONSABLES = ['Responsable general', 'Alabanza', 'Multimedia', 'Sonido', 'Predicacion', 'Direccion'];
+
 const SetlistViewer = ({ user }) => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = location.state?.returnTo || '/eventos';
   const [evento, setEvento] = useState(null);
   const [canciones, setCanciones] = useState([]);
   const [equipo, setEquipo] = useState([]);
@@ -74,7 +78,7 @@ const SetlistViewer = ({ user }) => {
       try {
         const eventoSnap = await getDoc(doc(db, 'eventos', id));
         if (!eventoSnap.exists()) {
-          navigate('/eventos');
+          navigate(returnTo);
           return;
         }
         const eventoData = eventoSnap.data();
@@ -89,14 +93,26 @@ const SetlistViewer = ({ user }) => {
             setCanciones(cancionesSnaps.map(snap => ({ id: snap.id, ...snap.data() })));
         }
 
-        if (eventoData.equipo && eventoData.equipo.length > 0) {
-          const equipoPromises = eventoData.equipo.map(item => {
+        const responsibleIds = [
+          ...Object.values(eventoData.responsables || {}),
+          eventoData.predicadorId || eventoData.responsables?.Predicacion || eventoData.predicadorAsignado
+        ].filter(Boolean);
+        const equipoBase = Array.isArray(eventoData.equipo) ? eventoData.equipo : [];
+        const equipoLookupItems = [
+          ...equipoBase,
+          ...responsibleIds
+            .filter(uid => !equipoBase.some(item => (typeof item === 'string' ? item : item.id) === uid))
+            .map(uid => ({ id: uid, rol: 'Responsable' }))
+        ];
+
+        if (equipoLookupItems.length > 0) {
+          const equipoPromises = equipoLookupItems.map(item => {
             const userId = typeof item === 'string' ? item : item.id;
             return getDoc(doc(db, 'usuarios', userId));
           });
           const equipoSnaps = await Promise.all(equipoPromises);
           setEquipo(equipoSnaps.map((snap, index) => {
-            const item = eventoData.equipo[index];
+            const item = equipoLookupItems[index];
             const rolAsignado = typeof item === 'string' ? null : item.rol;
             return { id: snap.id, ...snap.data(), rolAsignado };
           }));
@@ -108,7 +124,7 @@ const SetlistViewer = ({ user }) => {
       }
     };
     fetchData();
-  }, [id, navigate]);
+  }, [id, navigate, returnTo]);
 
   // Bloquear el scroll del fondo cuando el Ensayo está abierto
   useEffect(() => {
@@ -129,6 +145,38 @@ const SetlistViewer = ({ user }) => {
     });
     return validSongs;
   }, [evento, canciones]);
+
+  const ensayoSummary = useMemo(() => {
+    if (!evento) return { readyCount: 0, total: 0 };
+    const items = evento.setlist || (evento.canciones || []).map(songId => ({ type: 'song', value: songId }));
+    const songItems = items
+      .filter(item => item.type === 'song')
+      .map((item, index) => ({ ...item, idLocal: item.idLocal || `${item.value}_${index}` }));
+    const checklist = evento.ensayoChecklist || {};
+    const readyCount = songItems.filter(item => {
+      const check = checklist[item.idLocal] || checklist[item.value] || {};
+      return check.repasada && check.tonoConfirmado && check.entradaDefinida && check.finalDefinido;
+    }).length;
+    return { readyCount, total: songItems.length };
+  }, [evento]);
+
+  const responsibleNames = useMemo(() => {
+    const grouped = AREAS_RESPONSABLES.reduce((acc, area) => {
+      const uid = area === 'Predicacion'
+        ? (evento?.predicadorId || evento?.responsables?.Predicacion || evento?.predicadorAsignado)
+        : evento?.responsables?.[area];
+      const responsible = uid ? equipo.find(u => u.id === uid) : null;
+      if (!responsible) return acc;
+      if (!acc[uid]) acc[uid] = { uid, nombre: responsible.nombre, areas: [] };
+      acc[uid].areas.push(area);
+      return acc;
+    }, {});
+    const result = Object.values(grouped);
+    if (!result.some(item => item.areas.includes('Predicacion')) && typeof evento?.predicador === 'string' && evento.predicador.trim()) {
+      result.push({ uid: 'legacy-preacher', nombre: evento.predicador, areas: ['Predicacion'] });
+    }
+    return result;
+  }, [evento, equipo]);
 
   const cumpleanerosHoy = useMemo(() => {
     if (!evento || !evento.fecha || equipo.length === 0) return [];
@@ -370,7 +418,7 @@ const SetlistViewer = ({ user }) => {
                   <div className="absolute top-full right-0 sm:left-0 sm:right-auto mt-2 w-56 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-xl p-2 z-50 animate-in fade-in zoom-in-95">
                     {/* Solo Admin/Dueño/Multimedia ven el Controlador General */}
                       {(user?.rol === 'admin' || user?.rol === 'dueño' || user?.rol === 'multimedia') && (
-                        <button onClick={() => handleOpenScreen(`/control-proyector/${id}`)} className="w-full text-left px-3 py-2.5 text-sm font-bold text-zinc-700 dark:text-zinc-300 hover:bg-violet-50 dark:hover:bg-violet-500/10 hover:text-violet-700 dark:hover:text-violet-400 rounded-lg flex items-center gap-2 transition-colors">
+                        <button onClick={() => navigate(`/control-proyector/${id}`, { state: { returnTo: `/setlist/${id}` } })} className="w-full text-left px-3 py-2.5 text-sm font-bold text-zinc-700 dark:text-zinc-300 hover:bg-violet-50 dark:hover:bg-violet-500/10 hover:text-violet-700 dark:hover:text-violet-400 rounded-lg flex items-center gap-2 transition-colors">
                           <Monitor size={16} /> Controlador General
                         </button>
                       )}
@@ -392,11 +440,33 @@ const SetlistViewer = ({ user }) => {
           <button onClick={() => window.print()} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-bold text-sm shadow-sm transition-colors active:scale-95 w-full sm:w-max">
             <Printer size={16} /> Imprimir PDF
           </button>
-          <button onClick={() => navigate('/eventos')} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl hover:bg-zinc-50 dark:hover:bg-zinc-800 font-bold text-sm text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors active:scale-95 w-full sm:w-max">
+          <button onClick={() => navigate(returnTo)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl hover:bg-zinc-50 dark:hover:bg-zinc-800 font-bold text-sm text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors active:scale-95 w-full sm:w-max">
             <ArrowLeft size={16} /> Volver
           </button>
         </div>
       </header>
+
+      {(responsibleNames.length > 0 || ensayoSummary.total > 0) && (
+        <section className="mb-8 rounded-3xl border border-white/10 bg-zinc-950/45 p-4 md:p-5">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            {ensayoSummary.total > 0 && (
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Checklist de ensayo</p>
+                <p className="mt-1 text-lg font-black text-zinc-100">{ensayoSummary.readyCount} de {ensayoSummary.total} canciones listas</p>
+              </div>
+            )}
+            {responsibleNames.length > 0 && (
+              <div className="flex flex-wrap gap-2 md:justify-end">
+                {responsibleNames.map(item => (
+                  <span key={`${item.area}-${item.nombre}`} className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-violet-300">
+                    {item.nombre}: {item.areas.join(' · ')}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Setlist y Notas Generales */}
@@ -467,6 +537,15 @@ const SetlistViewer = ({ user }) => {
                           <span className="block text-xs font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded uppercase">{traducirAcorde(tonoFinal || 'C', formatoAcordes)}</span>
                           <span className="block text-[10px] font-bold text-zinc-400 mt-1">{cancion.bpm} BPM</span>
                         </div>
+                        {user?.rol !== 'musico' && (
+                          <button
+                            onClick={() => navigate(`/editar/${cancion.id}`, { state: { returnTo: `/setlist/${id}` } })}
+                            className="p-3 bg-zinc-100 text-zinc-600 hover:bg-blue-600 hover:text-white rounded-xl transition-all shadow-sm active:scale-95"
+                            title="Editar canción"
+                          >
+                            <Edit3 size={18} />
+                          </button>
+                        )}
                         <button onClick={() => { const cantante = evento.cantantesPorCancion?.[cancion.id] || ''; navigate(`/live/${cancion.id}?evento=${id}&modo=ensayo${cantante ? `&cantante=${encodeURIComponent(cantante)}` : ''}`); }} className="p-3 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-xl transition-all shadow-sm active:scale-95" title="Abrir Teleprompter">
                           <Play size={18} className="ml-0.5" />
                         </button>

@@ -1,6 +1,6 @@
 import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
 import { db } from '../config/firebase';
-import { MEDIA_LIBRARY_COLLECTION } from './mediaLibrary.js';
+import { MEDIA_LIBRARY_COLLECTION, createMediaLibraryDocument } from './mediaLibrary.js';
 import { buildMediaLibrarySyncPlan, getMediaIdentityKey } from './mediaLibrarySync.js';
 
 const SONGS_COLLECTION = 'canciones';
@@ -28,6 +28,12 @@ const getBatch = (firestore) => (
     ? firestore.batch()
     : writeBatch(firestore)
 );
+
+const setDocumentData = async (firestore, ref, data, options = { merge: true }) => {
+  const batch = getBatch(firestore);
+  batch.set(ref, data, options);
+  await batch.commit();
+};
 
 const createStableMediaDocId = (identityKey = '') => {
   let hash = 5381;
@@ -78,6 +84,101 @@ const getExistingMediaIndex = async (firestore) => {
   return byIdentityKey;
 };
 
+export const isSameMediaUsage = (usageA = {}, usageB = {}) => (
+  usageA.songId === usageB.songId
+  && usageA.location === usageB.location
+  && (usageA.sectionKey || '') === (usageB.sectionKey || '')
+  && (usageA.resourceId || '') === (usageB.resourceId || '')
+);
+
+export const calculateMediaUsageFields = (currentUsedBy = [], usage, action = 'add', now = Date.now()) => {
+  const safeCurrentUsedBy = Array.isArray(currentUsedBy) ? currentUsedBy : [];
+  const nextUsedBy = action === 'remove'
+    ? safeCurrentUsedBy.filter(item => !isSameMediaUsage(item, usage))
+    : [
+        ...safeCurrentUsedBy.filter(item => !isSameMediaUsage(item, usage)),
+        usage
+      ];
+
+  return {
+    usedBy: nextUsedBy,
+    usageCount: nextUsedBy.length,
+    firstUsedAt: nextUsedBy.length ? now : null,
+    lastUsedAt: nextUsedBy.length ? now : null,
+    updatedAt: now
+  };
+};
+
+export const createOrReuseMediaLibraryResource = async (resource = {}, options = {}) => {
+  const firestore = await resolveFirestore(options.firestore);
+  const now = options.now || Date.now();
+  const usage = options.usage || null;
+  const identityKey = getMediaIdentityKey(resource);
+
+  if (!identityKey) {
+    throw new Error('media_identity_required');
+  }
+
+  const existingByIdentityKey = await getExistingMediaIndex(firestore);
+  const existing = existingByIdentityKey.get(identityKey);
+
+  if (existing) {
+    const usageFields = usage
+      ? calculateMediaUsageFields(existing.data.usedBy, usage, 'add', now)
+      : { updatedAt: now };
+    if (usageFields.firstUsedAt) {
+      usageFields.firstUsedAt = existing.data.firstUsedAt || usageFields.firstUsedAt;
+    }
+    const ref = getDocRef(firestore, MEDIA_LIBRARY_COLLECTION, existing.id);
+    await setDocumentData(firestore, ref, { identityKey, ...usageFields });
+
+    return {
+      id: existing.id,
+      media: {
+        ...existing.data,
+        id: existing.id,
+        mediaId: existing.id,
+        identityKey,
+        ...usageFields
+      },
+      created: false
+    };
+  }
+
+  const mediaDocument = createMediaLibraryDocument({
+    ...resource,
+    usageCount: usage ? 1 : 0,
+    usedBy: usage ? [usage] : [],
+    firstUsedAt: usage ? now : null,
+    lastUsedAt: usage ? now : null
+  }, {
+    now,
+    userId: options.userId || null
+  });
+  const documentId = options.id || createStableMediaDocId(identityKey);
+  const ref = getDocRef(firestore, MEDIA_LIBRARY_COLLECTION, documentId);
+  const data = {
+    ...mediaDocument,
+    identityKey,
+    usedBy: usage ? [usage] : [],
+    usageCount: usage ? 1 : 0,
+    firstUsedAt: usage ? now : null,
+    lastUsedAt: usage ? now : null
+  };
+
+  await setDocumentData(firestore, ref, data);
+
+  return {
+    id: documentId,
+    media: {
+      ...data,
+      id: documentId,
+      mediaId: documentId
+    },
+    created: true
+  };
+};
+
 export const loadSongsForMediaLibrarySync = async (firestore) => {
   const resolvedFirestore = await resolveFirestore(firestore);
   const snapshot = await getCollectionSnapshot(resolvedFirestore, SONGS_COLLECTION);
@@ -111,16 +212,19 @@ export const syncMediaLibraryFromSongs = async (songs = [], options = {}) => {
 
     if (existing) {
       const ref = getDocRef(firestore, MEDIA_LIBRARY_COLLECTION, existing.id);
+      const usageFields = {
+        usedBy: mediaDocument.usedBy || [],
+        usageCount: mediaDocument.usageCount || 0,
+        firstUsedAt: existing.data.firstUsedAt || mediaDocument.firstUsedAt || null,
+        lastUsedAt: mediaDocument.lastUsedAt || now,
+        updatedAt: now
+      };
       operations.push({
         ref,
         merge: true,
         data: {
           identityKey,
-          usageCount: mediaDocument.usageCount || 0,
-          usedBy: mediaDocument.usedBy || [],
-          firstUsedAt: existing.data.firstUsedAt || mediaDocument.firstUsedAt || null,
-          lastUsedAt: mediaDocument.lastUsedAt || now,
-          updatedAt: now
+          ...usageFields
         }
       });
       updated.push(existing.id);

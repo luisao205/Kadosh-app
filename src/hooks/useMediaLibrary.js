@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { MEDIA_LIBRARY_COLLECTION, createMediaLibraryDocument, normalizeMediaText } from '../utils/mediaLibrary';
+import { isMediaTrashed } from '../utils/mediaTrash';
 
 const normalizeMediaLibraryDoc = (docSnap) => {
   const data = docSnap.data() || {};
@@ -22,6 +23,11 @@ const normalizeMediaLibraryDoc = (docSnap) => {
     mediaId: data.mediaId || docSnap.id,
     title: data.title || normalized.title,
     normalizedTitle: data.normalizedTitle || normalizeMediaText(data.title || normalized.title),
+    favorite: data.favorite ?? false,
+    category: data.category ?? null,
+    fileName: data.fileName || data.originalName || data.name || '',
+    originalName: data.originalName || '',
+    tags: Array.isArray(data.tags) ? data.tags : [],
     usageCount: Number.isFinite(data.usageCount) ? data.usageCount : 0,
     usedBy: Array.isArray(data.usedBy) ? data.usedBy : [],
     metadata: {
@@ -39,7 +45,7 @@ const sortMediaItems = (items) => [...items].sort((a, b) => {
 });
 
 export const useMediaLibrary = ({ enabled = true } = {}) => {
-  const [items, setItems] = useState([]);
+  const [allItems, setAllItems] = useState([]);
   const [loading, setLoading] = useState(Boolean(enabled));
   const [error, setError] = useState(null);
 
@@ -54,7 +60,7 @@ export const useMediaLibrary = ({ enabled = true } = {}) => {
       collection(db, MEDIA_LIBRARY_COLLECTION),
       (snapshot) => {
         const nextItems = snapshot.docs.map(normalizeMediaLibraryDoc);
-        setItems(sortMediaItems(nextItems));
+        setAllItems(sortMediaItems(nextItems));
         setError(null);
         setLoading(false);
       },
@@ -69,15 +75,21 @@ export const useMediaLibrary = ({ enabled = true } = {}) => {
   }, [enabled]);
 
   const counts = useMemo(() => {
-    const nextCounts = { all: items.length };
-    items.forEach(item => {
+    const activeItems = allItems.filter(item => !isMediaTrashed(item));
+    const nextCounts = { all: activeItems.length };
+    activeItems.forEach(item => {
       nextCounts[item.type] = (nextCounts[item.type] || 0) + 1;
     });
     return nextCounts;
-  }, [items]);
+  }, [allItems]);
+
+  const items = useMemo(() => allItems.filter(item => !isMediaTrashed(item)), [allItems]);
+  const trashedItems = useMemo(() => allItems.filter(isMediaTrashed), [allItems]);
 
   return {
     items,
+    trashedItems,
+    allItems,
     counts,
     loading,
     error,
@@ -86,4 +98,3 @@ export const useMediaLibrary = ({ enabled = true } = {}) => {
 };
 
 export default useMediaLibrary;
-

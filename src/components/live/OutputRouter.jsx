@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import Proyector from './Proyector';
 import StageDisplay from './StageDisplay';
 import StageDisplayMusicos from './StageDisplayMusicos';
 import PreacherDisplay from './PreacherDisplay';
 import { Loader2 } from 'lucide-react';
+import { OUTPUT_HEARTBEAT_INTERVAL_MS, isOutputScreenTestActive } from '../../utils/outputPresence';
 
 const OutputRouter = ({ user }) => {
   const { eventoId, outputId } = useParams();
@@ -14,6 +15,8 @@ const OutputRouter = ({ user }) => {
   const [loading, setLoading] = useState(true);
   const [identify, setIdentify] = useState(false);
   const [label, setLabel] = useState('');
+  const [screenTest, setScreenTest] = useState(null);
+  const outputSessionId = useMemo(() => `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, []);
 
   useEffect(() => {
     // La configuración de la matriz (qué contenido va a cada ID) es GLOBAL
@@ -21,9 +24,17 @@ const OutputRouter = ({ user }) => {
       if (snap.exists()) {
         const data = snap.data();
         const config = data.outputs?.[outputId];
+        if (!config) {
+          setType(null);
+          setLabel('');
+          setScreenTest(null);
+          setLoading(false);
+          return;
+        }
         if (config) {
           setType(config.type);
           setLabel(config.label);
+          setScreenTest(isOutputScreenTestActive(config) ? config.screenTest : null);
           // Activar identificación si el timestamp es de hace menos de 4 segundos
           if (config.identifyAt && (Date.now() - config.identifyAt < 4000)) {
             setIdentify(true);
@@ -35,6 +46,26 @@ const OutputRouter = ({ user }) => {
     return () => unsub();
   }, [outputId]);
 
+  useEffect(() => {
+    if (!type || !outputId) return undefined;
+
+    const globalDocRef = doc(db, 'eventos', 'global');
+    const writeHeartbeat = async () => {
+      try {
+        await updateDoc(globalDocRef, {
+          [`outputs.${outputId}.lastSeenAt`]: Date.now(),
+          [`outputs.${outputId}.activeSessionId`]: outputSessionId,
+        });
+      } catch (error) {
+        console.warn('No se pudo actualizar presencia de salida:', error);
+      }
+    };
+
+    writeHeartbeat();
+    const interval = setInterval(writeHeartbeat, OUTPUT_HEARTBEAT_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [outputId, outputSessionId, type]);
+
   // Timer independiente para la identificación
   useEffect(() => {
     if (identify) {
@@ -42,6 +73,13 @@ const OutputRouter = ({ user }) => {
       return () => clearTimeout(timer);
     }
   }, [identify]);
+
+  useEffect(() => {
+    if (!screenTest?.until) return undefined;
+    const remainingMs = Math.max(0, Number(screenTest.until) - Date.now());
+    const timer = setTimeout(() => setScreenTest(null), remainingMs);
+    return () => clearTimeout(timer);
+  }, [screenTest?.id, screenTest?.until]);
 
   if (loading) return (
     <div className="h-screen bg-black flex items-center justify-center">
@@ -67,6 +105,28 @@ const OutputRouter = ({ user }) => {
              <h1 className="text-white text-[10vw] font-black leading-none mb-4 drop-shadow-2xl">{label}</h1>
              <p className="text-violet-200 text-2xl md:text-4xl font-black uppercase tracking-[1em] opacity-80">Identificando Salida</p>
            </div>
+        </div>
+      )}
+      {screenTest && (
+        <div className="fixed inset-0 z-[190] overflow-hidden bg-zinc-950 text-white flex items-center justify-center">
+          <div
+            className="absolute inset-0 opacity-35"
+            style={{
+              backgroundImage: 'linear-gradient(90deg, rgba(255,255,255,.18) 1px, transparent 1px), linear-gradient(0deg, rgba(255,255,255,.18) 1px, transparent 1px)',
+              backgroundSize: '8vw 8vw',
+            }}
+          />
+          <div className="absolute inset-6 border-[1.2vw] border-white/80 rounded-[3vw]" />
+          <div className="absolute left-0 top-0 h-16 w-16 bg-red-500" />
+          <div className="absolute right-0 top-0 h-16 w-16 bg-emerald-500" />
+          <div className="absolute left-0 bottom-0 h-16 w-16 bg-blue-500" />
+          <div className="absolute right-0 bottom-0 h-16 w-16 bg-amber-400" />
+          <div className="relative z-10 mx-8 max-w-5xl text-center">
+            <p className="text-violet-300 text-lg md:text-3xl font-black uppercase tracking-[0.65em] mb-6">Prueba de pantalla</p>
+            <h1 className="text-[10vw] md:text-[8vw] font-black leading-none drop-shadow-2xl">{label || 'Salida'}</h1>
+            <p className="mt-8 text-xl md:text-4xl font-black text-zinc-300 uppercase tracking-[0.2em]">ID: {outputId}</p>
+            <div className="mt-10 mx-auto h-3 w-64 max-w-full rounded-full bg-gradient-to-r from-red-500 via-emerald-400 to-blue-500" />
+          </div>
         </div>
       )}
       {type === 'proyector' && <Proyector eventoIdOverride={eventoId} />}

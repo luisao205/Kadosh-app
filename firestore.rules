@@ -23,15 +23,245 @@ service cloud.firestore {
     }
 
     function isAdminLike() {
-      return hasAnyRole(['dueño', 'admin']);
+      return hasAnyRole(['dueño', 'dueno', 'admin']);
+    }
+
+    function isOwnerOnly() {
+      return hasAnyRole(['dueño', 'dueno']);
     }
 
     function isMediaOrAdmin() {
-      return hasAnyRole(['dueño', 'admin', 'multimedia']);
+      return hasAnyRole(['dueño', 'dueno', 'admin', 'multimedia']);
+    }
+
+    function isOwnerOrMedia() {
+      return hasAnyRole(['dueño', 'dueno', 'multimedia']);
+    }
+
+    function isAdminReadOnly() {
+      return hasAnyRole(['admin']);
+    }
+
+    function isPastorRole() {
+      return hasAnyRole(['pastor']);
+    }
+
+    function isPastorLegacyRole() {
+      return hasAnyRole(['predicador']);
     }
 
     function canUsePreacherPrivate() {
-      return hasAnyRole(['dueño', 'admin', 'multimedia', 'predicador']);
+      return hasAnyRole(['dueño', 'dueno', 'admin', 'multimedia', 'predicador', 'pastor']);
+    }
+
+    function canReadPreachingShared() {
+      return signedIn()
+        && (
+          isOwnerOrMedia()
+          || isAdminReadOnly()
+          || ((isPastorRole() || isPastorLegacyRole()) && resource.data.preacherId == request.auth.uid)
+        );
+    }
+
+    function canCreatePreachingShared() {
+      return signedIn()
+        && (
+          isOwnerOrMedia()
+          || (isPastorRole()
+            && request.resource.data.preacherType == 'user'
+            && request.resource.data.preacherId == request.auth.uid)
+        );
+    }
+
+    function canUpdatePreachingShared() {
+      return signedIn()
+        && (
+          isOwnerOrMedia()
+          || (isPastorRole()
+            && resource.data.preacherId == request.auth.uid
+            && request.resource.data.preacherId == request.auth.uid
+            && request.resource.data.preacherType == 'user')
+        );
+    }
+
+    function preachingPath(predicaId) {
+      return /databases/$(database)/documents/predicas/$(predicaId);
+    }
+
+    function canUsePreachingPrivate(predicaId) {
+      return signedIn()
+        && isPastorRole()
+        && exists(preachingPath(predicaId))
+        && get(preachingPath(predicaId)).data.preacherId == request.auth.uid
+        && get(preachingPath(predicaId)).data.preacherType == 'user';
+    }
+
+    function eventPath(eventoId) {
+      return /databases/$(database)/documents/eventos/$(eventoId);
+    }
+
+    function eventPreachingId(eventoId) {
+      return exists(eventPath(eventoId)) ? get(eventPath(eventoId)).data.predicaId : null;
+    }
+
+    function isAssignedPastorForEventPreaching(eventoId) {
+      return signedIn()
+        && isPastorRole()
+        && eventPreachingId(eventoId) != null
+        && exists(preachingPath(eventPreachingId(eventoId)))
+        && get(preachingPath(eventPreachingId(eventoId))).data.preacherId == request.auth.uid
+        && get(preachingPath(eventPreachingId(eventoId))).data.preacherType == 'user';
+    }
+
+    function isValidPastorRequestCreate(eventoId) {
+      return isAssignedPastorForEventPreaching(eventoId)
+        && request.resource.data.predicaId == eventPreachingId(eventoId)
+        && request.resource.data.requestedBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.type in ['verse', 'point', 'quick_alert'];
+    }
+
+    function isPastorCancellingOwnRequest(eventoId) {
+      return isAssignedPastorForEventPreaching(eventoId)
+        && resource.data.requestedBy == request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.requestedBy == resource.data.requestedBy
+        && request.resource.data.predicaId == resource.data.predicaId
+        && request.resource.data.status == 'cancelled';
+    }
+
+    function isOwnerOrMediaHandlingRequest() {
+      return isOwnerOrMedia()
+        && resource.data.status == 'pending'
+        && request.resource.data.status in ['projected', 'ignored'];
+    }
+
+    function changedEventKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    function onlyEventKeys(keys) {
+      return changedEventKeys().hasOnly(keys);
+    }
+
+    function adminEventFields() {
+      return [
+        'titulo',
+        'fecha',
+        'fechaEnsayo',
+        'tipoEvento',
+        'notas',
+        'setlist',
+        'canciones',
+        'equipo',
+        'estadoAsistencia',
+        'cantantesPorCanción',
+        'cantantesPorCancion',
+        'corosPorCanción',
+        'corosPorCancion',
+        'responsables',
+        'predicadorId',
+        'predicadorNombre',
+        'predicadorAsignado',
+        'predicador',
+        'predicaId',
+        'predicaTitle',
+        'ensayoChecklist',
+        'estado',
+        'completado',
+        'canceladoAt',
+        'canceladoPor',
+        'fechaActualizacion',
+        'fechaCreacion',
+        'creadoPor'
+      ];
+    }
+
+    function projectorEventFields() {
+      return [
+        'projectorState',
+        'proyectorSlide',
+        'proyectorMedia',
+        'proyectorLogo',
+        'proyectorApagado',
+        'proyectorFondo',
+        'proyectorFondoMedia',
+        'proyectorTransicion',
+        'proyectorModoTransmision',
+        'proyectorCountdown',
+        'proyectorSongId',
+        'proyectorSlideIndex',
+        'proyectorNextSlide',
+        'proyectorNextSong',
+        'proyectorOffset',
+        'liveState',
+        'currentSongId',
+        'proyectorAlerta',
+        'proyectorTicker',
+        'outputs'
+      ];
+    }
+
+    function sharedEventParticipationFields() {
+      return [
+        'estadoAsistencia',
+        'comentarios',
+        'directorId',
+        'currentSongId',
+        'scrollY',
+        'directorAutoScroll',
+        'proyectorAlerta'
+      ];
+    }
+
+    function pastorProjectionFields() {
+      return [
+        'projectorState',
+        'proyectorSlide',
+        'proyectorMedia',
+        'proyectorLogo',
+        'proyectorApagado',
+        'proyectorFondoMedia',
+        'proyectorSongId',
+        'proyectorSlideIndex',
+        'proyectorNextSlide',
+        'proyectorNextSong'
+      ];
+    }
+
+    function isPastorPreachingProjectorState(eventoId) {
+      return isAssignedPastorForEventPreaching(eventoId)
+        && request.resource.data.projectorState is map
+        && request.resource.data.projectorState.type in ['preaching', 'clearPreaching']
+        && request.resource.data.projectorState.sourceActor == 'pastor'
+        && request.resource.data.projectorState.actorUid == request.auth.uid
+        && request.resource.data.projectorState.predicaId == eventPreachingId(eventoId);
+    }
+
+    function isCurrentPastorPreachingProjectorState(eventoId) {
+      return isAssignedPastorForEventPreaching(eventoId)
+        && resource.data.projectorState is map
+        && resource.data.projectorState.type == 'preaching'
+        && resource.data.projectorState.sourceActor == 'pastor'
+        && resource.data.projectorState.actorUid == request.auth.uid
+        && resource.data.projectorState.predicaId == eventPreachingId(eventoId);
+    }
+
+    function canUpdateEventAsAdmin() {
+      return isAdminLike() && onlyEventKeys(adminEventFields());
+    }
+
+    function canUpdateEventAsMedia() {
+      return isMediaOrAdmin() && onlyEventKeys(projectorEventFields());
+    }
+
+    function canUpdateEventAsParticipant() {
+      return signedIn() && onlyEventKeys(sharedEventParticipationFields());
+    }
+
+    function canUpdateEventAsPastorProjection(eventoId) {
+      return onlyEventKeys(pastorProjectionFields())
+        && (isPastorPreachingProjectorState(eventoId) || isCurrentPastorPreachingProjectorState(eventoId));
     }
 
     function isOwnerBootstrap() {
@@ -65,8 +295,27 @@ service cloud.firestore {
       // Private preacher data must never live here; it belongs in /private/preacher.
       allow read: if signedIn();
       allow create: if isAdminLike();
-      allow update: if signedIn();
+      allow update: if canUpdateEventAsAdmin()
+        || canUpdateEventAsMedia()
+        || canUpdateEventAsPastorProjection(eventoId)
+        || canUpdateEventAsParticipant();
       allow delete: if isAdminLike();
+
+      match /preacherRequests/{requestId} {
+        allow read: if isOwnerOrMedia() || isAdminReadOnly() || isAssignedPastorForEventPreaching(eventoId);
+        allow create: if isValidPastorRequestCreate(eventoId);
+        allow update: if isPastorCancellingOwnRequest(eventoId) || isOwnerOrMediaHandlingRequest();
+        allow delete: if false;
+      }
+
+      match /preachingStatus/{predicaId} {
+        allow read: if isOwnerOrMedia() || isAdminReadOnly() || isAssignedPastorForEventPreaching(eventoId);
+        allow create, update: if isAssignedPastorForEventPreaching(eventoId)
+          && predicaId == eventPreachingId(eventoId)
+          && request.resource.data.pastorUid == request.auth.uid
+          && request.resource.data.predicaId == predicaId;
+        allow delete: if false;
+      }
 
       match /private/preacher {
         allow read, write: if canUsePreacherPrivate();
@@ -84,10 +333,37 @@ service cloud.firestore {
 
     match /mediaLibrary/{mediaId} {
       allow read: if isMediaOrAdmin();
-      allow create, update, delete: if isMediaOrAdmin();
+      allow create, update: if isMediaOrAdmin();
+      allow delete: if isAdminLike();
     }
 
-    match /sistema/{document=**} {
+    match /predicas/{predicaId} {
+      allow read: if canReadPreachingShared();
+      allow create: if canCreatePreachingShared();
+      allow update: if canUpdatePreachingShared();
+      allow delete: if false;
+
+      match /private/preacher {
+        allow read, create, update: if canUsePreachingPrivate(predicaId);
+        allow delete: if canUsePreachingPrivate(predicaId) || isOwnerOrMedia();
+      }
+
+      match /private/{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /sistema/teamAccessPin {
+      allow read, create, update: if isOwnerOnly();
+      allow delete: if false;
+    }
+
+    match /sistema/{document} {
+      allow read: if document != 'teamAccessPin' && signedIn();
+      allow write: if document != 'teamAccessPin' && isMediaOrAdmin();
+    }
+
+    match /sistema/{document}/{subdocument=**} {
       allow read: if signedIn();
       allow write: if isMediaOrAdmin();
     }

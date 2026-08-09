@@ -6,8 +6,10 @@ import { db } from '../../config/firebase';
 import { calcularOffsetSemitonos, transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, VolumeX, FileText, X, Save, Activity, Maximize, Minimize, Library, Video, ExternalLink, SlidersHorizontal, Headphones, Square, Crown } from 'lucide-react';
+import { useFeedback } from '../ui/FeedbackProvider';
 
 const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
+  const { notify } = useFeedback();
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -16,7 +18,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
   const isRehearsalReading = searchParams.get('modo') === 'ensayo';
   const returnPath = eventoId ? `/setlist/${eventoId}` : '/canciones';
   
-  const [cancion, setCancion] = useState(null);
+  const [cancion, setCanción] = useState(null);
   const [evento, setEvento] = useState(null);
   const [loading, setLoading] = useState(true);
   const [wakeLock, setWakeLock] = useState(null);
@@ -67,7 +69,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const data = docSnap.data();
-          setCancion(data);
+          setCanción(data);
 
           // AUTO-TRANSPOSICIÓN MAGISTRAL
           if (cantanteQuery && data.tonosAlternativos) {
@@ -79,11 +81,11 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
             }
           }
         } else {
-          alert("La canción no existe");
+          notify("La cancion no existe.", { type: 'error' });
           navigate(returnPath);
         }
       } catch (error) {
-        console.error("Error al cargar la canción para Live Mode:", error);
+        console.error("Error al cargar la cancion para Live Mode:", error);
       } finally {
         setLoading(false);
       }
@@ -101,7 +103,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
           // Lógica de seguidor (Follower)
           const liveSongId = data.liveState?.activeSongId || data.currentSongId;
           if (!isRehearsalReading && liveSongId && liveSongId !== id && data.directorId !== user?.uid) {
-            const cantante = data.cantantesPorCancion?.[liveSongId] || '';
+            const cantante = data.cantantesPorCanción?.[liveSongId] || '';
             navigate(buildLiveSongUrl(liveSongId, cantante));
           }
 
@@ -109,7 +111,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
             if (data.directorAutoScroll !== undefined) {
                setIsAutoScrolling(data.directorAutoScroll);
             }
-            // Scroll sincronizado (tolerancia mayor si el auto-scroll nativo está trabajando)
+            // Scroll sincronizado (tolerancia mayor si el auto-scroll nativo est? trabajando)
             const umbralTolerancia = data.directorAutoScroll ? 300 : 50;
             if (data.scrollY !== undefined && Math.abs(window.scrollY - data.scrollY) > umbralTolerancia) {
                window.scrollTo({ top: data.scrollY, behavior: 'smooth' });
@@ -119,7 +121,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
       });
     }
 
-    // Cargar la nota personal del usuario para esta canción
+    // Cargar la nota personal del usuario para esta cancion
     if (user?.uid && id) {
       const fetchNota = async () => {
         const notaSnap = await getDoc(doc(db, 'usuarios', user.uid, 'notas', id));
@@ -130,7 +132,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
       fetchNota();
     }
 
-    // Reiniciar reproductor al cambiar de canción
+    // Reiniciar reproductor al cambiar de cancion
     setIsPlaying(false);
     setCurrentTime(0);
 
@@ -176,7 +178,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
     }, intervalMs);
 
     return () => clearInterval(interval);
-  }, [cancion?.bpm]);
+  }, [canción?.bpm]);
 
   // 3. Lógica de Auto-Scroll (Ahora ultra-fluido a 60fps con requestAnimationFrame)
   const toggleAutoScroll = () => {
@@ -222,7 +224,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
       setTrackMutes(initialMutes);
       setTrackPans(initialPans);
     }
-  }, [cancion?.multitracks]);
+  }, [canción?.multitracks]);
 
   // Cálculos para navegación del Setlist (Extraídos arriba para usarlos en el teclado)
   const orderedSongIds = evento?.setlist
@@ -238,7 +240,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
   // 5. Soporte para Pedales Bluetooth / Flechas del Teclado
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Ignorar si el usuario está escribiendo en el bloc de notas
+      // Ignorar si el usuario est? escribiendo en el bloc de notas
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
       switch (e.key) {
@@ -321,7 +323,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
        updateDoc(doc(db, 'eventos', eventoId), { currentSongId: targetId, scrollY: 0, directorAutoScroll: false }).catch(e=>console.error(e));
     }
 
-    const cantante = evento?.cantantesPorCancion?.[targetId] || '';
+    const cantante = evento?.cantantesPorCanción?.[targetId] || '';
     navigate(buildLiveSongUrl(targetId, cantante));
   };
 
@@ -718,13 +720,13 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
          )}
 
          <div className="md:columns-2 lg:columns-3 xl:columns-4 gap-8 md:gap-12">
-         {seccionesParsed.map((seccion, idxSeccion) => (
+         {seccionesParsed.map((sección, idxSeccion) => (
            <div key={idxSeccion} className="mb-8 break-inside-avoid">
               <span className={`text-[0.65em] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg mb-3 inline-block shadow-sm ${preferences.darkMode ? 'bg-zinc-800 text-blue-400 border border-zinc-700' : 'bg-blue-50 text-blue-700 border border-blue-200'}`}>
-                {seccion.titulo}
+                {sección.titulo}
               </span>
               
-              {seccion.lineas.map((linea, idxLinea) => (
+              {sección.lineas.map((linea, idxLinea) => (
                 <div key={idxLinea} className="flex flex-wrap items-end gap-x-1.5 md:gap-x-2 gap-y-4 sm:gap-y-6 mt-4 font-medium leading-tight">
                   {linea.map((palabra, idxPalabra) => (
                     <div key={idxPalabra} className="flex items-end whitespace-nowrap">
@@ -880,7 +882,7 @@ const LiveModeUI = ({ user, esGuitarrista, preferences }) => {
               </div>
             </div>
             
-            {/* Controles de Navegación dentro de la Mezcladora */}
+            {/* Controles de Navegaci?n dentro de la Mezcladora */}
             {eventoId && (
               <div className="flex items-center justify-between p-4 border-t border-zinc-800 bg-zinc-950">
                 <button onClick={() => prevSongId && goToSong(prevSongId)} disabled={!prevSongId} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all ${!prevSongId ? 'bg-zinc-900 text-zinc-700 cursor-not-allowed border border-zinc-800' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white active:scale-95 shadow-md'}`}>

@@ -12,10 +12,12 @@ import AdminLayout from './components/layout/AdminLayout';
 import AdminDashboard from './components/admin/AdminDashboard';
 import Login from './components/layout/Login';
 import MediaCenter from './components/admin/MediaCenter';
+import PreachingManagement from './components/admin/PreachingManagement';
 import AddSongAI from './components/admin/AddSongAI';
 import SongList from './components/admin/SongList';
 import EditSong from './components/admin/EditSong';
 import UserManagement from './components/admin/UserManagement';
+import TeamPinGate from './components/admin/TeamPinGate';
 import EventManagement from './components/admin/EventManagement';
 import SetlistViewer from './components/admin/SetlistViewer';
 import UserProfile from './components/admin/UserProfile';
@@ -27,14 +29,19 @@ import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { App as CapacitorApp } from '@capacitor/app';
 import { ACCOUNT_STATUSES, getAccountStatusLabel, isAccountAllowed, normalizeAccountStatus } from './utils/accountStatus';
+import { canAccessMediaLibrary } from './utils/mediaLibraryPermissions';
+import { canAccessController, canAccessMultimediaTools, canAccessPreachings, canManageSongs, canManageTeam, canViewEventsAndSetlists } from './utils/rolePermissions';
+import { clearTeamPinAccessState } from './utils/teamPinAccess';
+import { FeedbackProvider, notifyFeedback } from './components/ui/FeedbackProvider';
 
 const AccountBlockedScreen = ({ user }) => {
   const status = normalizeAccountStatus(user?.accountStatus);
-  const suspension = user?.suspension || {};
+  const suspensión = user?.suspensión || {};
   const title = status === ACCOUNT_STATUSES.DISABLED ? 'Cuenta desactivada' : 'Cuenta suspendida';
-  const startedAt = suspension.startedAt ? new Date(suspension.startedAt).toLocaleString() : 'Sin fecha registrada';
-  const endsAt = suspension.endsAt ? new Date(suspension.endsAt).toLocaleDateString() : null;
+  const startedAt = suspensión.startedAt ? new Date(suspensión.startedAt).toLocaleString() : 'Sin fecha registrada';
+  const endsAt = suspensión.endsAt ? new Date(suspensión.endsAt).toLocaleDateString() : null;
   const handleLogout = async () => {
+    clearTeamPinAccessState();
     await signOut(getAuth());
   };
 
@@ -53,7 +60,7 @@ const AccountBlockedScreen = ({ user }) => {
         <div className="mt-6 space-y-3 rounded-3xl border border-white/10 bg-black/25 p-4 text-left">
           <div>
             <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Motivo</p>
-            <p className="mt-1 text-sm font-semibold text-zinc-100">{suspension.reason || 'No especificado'}</p>
+            <p className="mt-1 text-sm font-semibold text-zinc-100">{suspensión.reason || 'No especificado'}</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
@@ -61,7 +68,7 @@ const AccountBlockedScreen = ({ user }) => {
               <p className="mt-1 text-sm font-semibold text-zinc-100">{startedAt}</p>
             </div>
             <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Fecha de finalizacion</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Fecha de finalización</p>
               <p className="mt-1 text-sm font-semibold text-zinc-100">{endsAt || 'Indefinida'}</p>
             </div>
           </div>
@@ -77,6 +84,33 @@ const AccountBlockedScreen = ({ user }) => {
     </div>
   );
 };
+
+const UnauthorizedScreen = ({ title = 'Sin autorizacion', message = 'Tu rol actual no tiene permiso para abrir esta sección.' }) => (
+  <div className="min-h-[55vh] flex items-center justify-center p-6">
+    <div className="kp-card w-full max-w-lg rounded-3xl p-8 text-center">
+      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/10 text-red-300">
+        <span className="text-2xl font-black">!</span>
+      </div>
+      <p className="text-xs font-black uppercase tracking-[0.24em] text-red-300">Acceso restringido</p>
+      <h1 className="mt-2 text-2xl font-black text-white">{title}</h1>
+      <p className="mt-3 text-sm font-semibold leading-relaxed text-zinc-400">{message}</p>
+    </div>
+  </div>
+);
+
+const ProtectedAdminRoute = ({ user, allowed, children, message }) => (
+  <AdminLayout user={user}>
+    {allowed ? children : <UnauthorizedScreen message={message} />}
+  </AdminLayout>
+);
+
+const ProtectedLiveRoute = ({ allowed, children, message }) => (
+  allowed ? children : (
+    <div className="min-h-screen bg-zinc-950 text-white">
+      <UnauthorizedScreen message={message} />
+    </div>
+  )
+);
 
 function App() {
   const [user, setUser] = useState(null);
@@ -96,7 +130,7 @@ function App() {
             id: 'urgente',
             name: 'Alertas Urgentes Kadosh', // Nombre más descriptivo
             description: 'Notificaciones de setlists y eventos',
-            importance: 5, // Prioridad Máxima
+            importance: 5, // Prioridad M?xima
             visibility: 1,
             sound: 'default',
             vibration: true,
@@ -111,23 +145,23 @@ function App() {
               // Actualizamos el token siempre para asegurar que no sea uno viejo
               const userRef = doc(db, 'usuarios', uid);
               await updateDoc(userRef, { fcmToken: token.value, ultimaConexion: new Date().toISOString() });
-              console.log('Token registrado con éxito');
+              console.log('Token registrado con ?xito');
             });
 
             PushNotifications.addListener('pushNotificationReceived', (notification) => {
-              // Esto hace que vibre y suene si la App está abierta
+              // Esto hace que vibre y suene si la App est? abierta
               console.log('Notificación recibida:', notification);
             });
 
             PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
-              // Esto hace que al tocar la notificación te lleve a la sección correcta
+              // Esto hace que al tocar la notificación te lleve a la secci?n correcta
               const data = notification.notification.data;
               if (data && data.url) window.location.href = data.url;
             });
 
              await PushNotifications.register();
           } else {
-            alert("Aviso: No has permitido las notificaciones. No recibirás avisos del setlist.");
+            notifyFeedback("No has permitido las notificaciones. No recibirás avisos del setlist.", { type: 'warning' });
           }
         } else {
           // 💻 MODO WEB
@@ -147,7 +181,7 @@ function App() {
 
             onMessage(messaging, (payload) => {
               if (!userAccessRef.current) return;
-              alert(`🔔 ${payload.notification.title}\n${payload.notification.body}`);
+              notifyFeedback(payload.notification.body, { title: payload.notification.title, type: 'info', duration: 7000 });
             });
           }
         }
@@ -172,7 +206,7 @@ function App() {
           initialUserData = userData;
         }
 
-        // Disparamos la lógica de notificaciones inmediatamente
+        // Disparamos la l?gica de notificaciones inmediatamente
         userAccessRef.current = isAccountAllowed(initialUserData?.accountStatus);
         if (userAccessRef.current && !notificationsStartedRef.current) {
           notificationsStartedRef.current = true;
@@ -196,7 +230,7 @@ function App() {
               notificationsStartedRef.current = true;
               inicializarNotificaciones(firebaseUser.uid);
             }
-            // Migración silenciosa: Si un usuario antiguo tiene guardado el viejo tamaño 24, lo forzamos a 16
+            // Migraci?n silenciosa: Si un usuario antiguo tiene guardado el viejo tamaño 24, lo forzamos a 16
             if (userData.preferencias?.fontSize === 24) {
               updateDoc(docRef, { 'preferencias.fontSize': 16 }).catch(e => console.error(e));
               userData.preferencias.fontSize = 16;
@@ -207,6 +241,7 @@ function App() {
         });
 
       } else {
+        clearTeamPinAccessState();
         setUser(null);
         userAccessRef.current = true;
         notificationsStartedRef.current = false;
@@ -255,30 +290,44 @@ function App() {
   }, []);
 
   if (loadingAuth) {
-    return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500 font-bold animate-pulse">Cargando Kadosh App...</div>;
+    return (
+      <FeedbackProvider>
+        <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500 font-bold animate-pulse">Cargando Kadosh App...</div>
+      </FeedbackProvider>
+    );
   }
 
   if (!user) {
-    return <Login />;
+    return (
+      <FeedbackProvider>
+        <Login />
+      </FeedbackProvider>
+    );
   }
 
   if (!isAccountAllowed(user.accountStatus)) {
-    return <AccountBlockedScreen user={user} />;
+    return (
+      <FeedbackProvider>
+        <AccountBlockedScreen user={user} />
+      </FeedbackProvider>
+    );
   }
 
   return (
-    <Router>
-      <Routes>
+    <FeedbackProvider>
+      <Router>
+        <Routes>
         {/* Rutas de Administración (Envueltas en el Layout) */}
         <Route path="/" element={<AdminLayout user={user}><AdminDashboard user={user} /></AdminLayout>} />
         <Route path="/canciones" element={<AdminLayout user={user}><SongList user={user} /></AdminLayout>} />
-        <Route path="/añadir" element={<AdminLayout user={user}><AddSongAI user={user} /></AdminLayout>} />
-        <Route path="/editar/:id" element={<AdminLayout user={user}><EditSong user={user} /></AdminLayout>} />
-        <Route path="/equipo" element={<AdminLayout user={user}><UserManagement user={user} /></AdminLayout>} />
-        <Route path="/eventos" element={<AdminLayout user={user}><EventManagement user={user} /></AdminLayout>} />
-        <Route path="/biblioteca-multimedia" element={<AdminLayout user={user}><MediaCenter user={user} /></AdminLayout>} />
-        <Route path="/multimedia-hub" element={<AdminLayout user={user}><MultimediaHub user={user} /></AdminLayout>} />
-        <Route path="/setlist/:id" element={<AdminLayout user={user}><SetlistViewer user={user} /></AdminLayout>} />
+        <Route path="/añadir" element={<ProtectedAdminRoute user={user} allowed={canManageSongs(user)} message="Solo el equipo autorizado puede agregar canciones."><AddSongAI user={user} /></ProtectedAdminRoute>} />
+        <Route path="/editar/:id" element={<ProtectedAdminRoute user={user} allowed={canManageSongs(user)} message="Solo el equipo autorizado puede editar canciones."><EditSong user={user} /></ProtectedAdminRoute>} />
+        <Route path="/equipo" element={<ProtectedAdminRoute user={user} allowed={canManageTeam(user)} message="Solo el dueno puede gestionar integrantes y roles."><TeamPinGate user={user}><UserManagement user={user} /></TeamPinGate></ProtectedAdminRoute>} />
+        <Route path="/eventos" element={<ProtectedAdminRoute user={user} allowed={canViewEventsAndSetlists(user)} message="Tu rol no tiene acceso a Eventos y Setlists."><EventManagement user={user} /></ProtectedAdminRoute>} />
+        <Route path="/predicas" element={<ProtectedAdminRoute user={user} allowed={canAccessPreachings(user)} message="Tu rol no tiene acceso al módulo de Predicas."><PreachingManagement user={user} /></ProtectedAdminRoute>} />
+        <Route path="/biblioteca-multimedia" element={<ProtectedAdminRoute user={user} allowed={canAccessMediaLibrary(user)} message="La Biblioteca Multimedia esta disponible para dueno, administradores y multimedia."><MediaCenter user={user} /></ProtectedAdminRoute>} />
+        <Route path="/multimedia-hub" element={<ProtectedAdminRoute user={user} allowed={canAccessMultimediaTools(user)} message="Central Multimedia esta disponible para dueno, administradores y multimedia."><MultimediaHub user={user} /></ProtectedAdminRoute>} />
+        <Route path="/setlist/:id" element={<ProtectedAdminRoute user={user} allowed={canViewEventsAndSetlists(user)} message="Tu rol no tiene acceso a este setlist."><SetlistViewer user={user} /></ProtectedAdminRoute>} />
         <Route path="/perfil" element={<AdminLayout user={user}><UserProfile user={user} /></AdminLayout>} />
         
         {/* Ruta del Modo Culto (Pantalla Completa, SIN Layout) */}
@@ -291,15 +340,17 @@ function App() {
         <Route path="/predicador/:eventoId" element={<PreacherDisplay user={user} />} />
         <Route path="/output/:eventoId/:outputId" element={<OutputRouter user={user} />} />
         
-        {/* Ruta Privada de Retorno para los Músicos en Tarima */}
+        {/* Ruta Privada de Retorno para los Másicos en Tarima */}
         <Route path="/retorno/:eventoId" element={<StageDisplay />} />
         <Route path="/retorno-musicos/:eventoId" element={<StageDisplayMusicos user={user} />} />
         
         {/* Ruta del Controlador Multimedia */}
-        <Route path="/control-proyector/:eventoId" element={<ProyectorController user={user} />} />
-      </Routes>
-    </Router>
+        <Route path="/control-proyector/:eventoId" element={<ProtectedLiveRoute allowed={canAccessController(user)} message="Solo el equipo multimedia autorizado puede abrir el controlador."><ProyectorController user={user} /></ProtectedLiveRoute>} />
+        </Routes>
+      </Router>
+    </FeedbackProvider>
   );
 }
 
 export default App;
+

@@ -1,14 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, collection, addDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, addDoc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db, messaging } from '../../config/firebase';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getToken } from 'firebase/messaging';
-import { User, Save, Moon, Sun, Type, Camera, Loader2, Quote, Mic2, Palette, Check, X, Bell, BellRing, Settings } from 'lucide-react';
+import { User, Save, Moon, Sun, Type, Camera, Loader2, Quote, Mic2, Palette, Check, X, Bell, BellRing, Settings, Lock } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { Camera as NativeCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { getAccountStatusLabel, normalizeAccountStatus } from '../../utils/accountStatus';
+import { isOwner } from '../../utils/rolePermissions';
+import { clearTeamPinSession, createPinSalt, hashTeamPin, isCompletePin, sanitizePin, TEAM_PIN_DOC_PATH } from '../../utils/teamPinAccess';
+import { useFeedback } from '../ui/FeedbackProvider';
 
 const UserProfile = ({ user }) => {
+  const { notify } = useFeedback();
   // Extraemos las preferencias guardadas o usamos unas por defecto
   const prefGuardadas = user?.preferencias || {};
   
@@ -22,10 +27,17 @@ const UserProfile = ({ user }) => {
   const [fotoUrl, setFotoUrl] = useState(user?.fotoPerfil || '');
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [viewingPhoto, setViewingPhoto] = useState(false);
-  const [toast, setToast] = useState(null);
+  const [viewingPhoto, setViewingPhoto] = useState(false);
   const [permisoConcedido, setPermisoConcedido] = useState(false);
   const [isSendingTestNotification, setIsSendingTestNotification] = useState(false);
+  const [teamPinConfig, setTeamPinConfig] = useState(null);
+  const [loadingTeamPin, setLoadingTeamPin] = useState(false);
+  const [savingTeamPin, setSavingTeamPin] = useState(false);
+  const [teamPinError, setTeamPinError] = useState('');
+  const [teamPinForm, setTeamPinForm] = useState({ current: '', next: '', confirm: '' });
+  const [teamPinAttempts, setTeamPinAttempts] = useState(0);
+  const [teamPinLockedUntil, setTeamPinLockedUntil] = useState(0);
+  const isOwnerUser = isOwner(user);
 
   useEffect(() => {
     const checkPerms = async () => {
@@ -39,10 +51,25 @@ const UserProfile = ({ user }) => {
     checkPerms();
   }, []);
 
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
+  useEffect(() => {
+    if (!isOwnerUser) return;
+    let mounted = true;
+    const loadTeamPin = async () => {
+      setLoadingTeamPin(true);
+      try {
+        const snap = await getDoc(doc(db, ...TEAM_PIN_DOC_PATH));
+        if (mounted) setTeamPinConfig(snap.exists() ? snap.data() : null);
+      } catch (error) {
+        console.error('Error cargando PIN de Equipo:', error);
+        if (mounted) setTeamPinError('No se pudo cargar la configuración del PIN.');
+      } finally {
+        if (mounted) setLoadingTeamPin(false);
+      }
+    };
+    loadTeamPin();
+    return () => { mounted = false; };
+  }, [isOwnerUser]);
+  const showToast = (message, type = 'success') => notify(message, { type });
 
   const themeStyles = {
     violet: 'bg-violet-600 hover:bg-violet-700 text-white ring-violet-200 dark:ring-violet-900',
@@ -247,6 +274,126 @@ const UserProfile = ({ user }) => {
     }
   };
 
+  const handleTeamPinInput = (field, value) => {
+    setTeamPinForm(prev => ({ ...prev, [field]: sanitizePin(value) }));
+    setTeamPinError('');
+  };
+
+  const resetTeamPinForm = () => {
+    setTeamPinForm({ current: '', next: '', confirm: '' });
+  };
+
+  const saveTeamPinConfig = async (pin, existingConfig = null) => {
+    const salt = createPinSalt();
+    const pinHash = await hashTeamPin(pin, salt);
+    const nowVersion = Date.now().toString();
+    const payload = {
+      pinHash,
+      pinSalt: salt,
+      updatedAt: serverTimestamp(),
+      updatedBy: user.uid,
+      pinVersion: nowVersion,
+      version: 1
+    };
+    if (!existingConfig?.pinHash) {
+      payload.createdAt = serverTimestamp();
+      payload.createdBy = user.uid;
+    }
+    await setDoc(doc(db, ...TEAM_PIN_DOC_PATH), payload, { merge: true });
+    clearTeamPinSession();
+    setTeamPinConfig({ ...(existingConfig || {}), ...payload, updatedAt: new Date().toISOString() });
+    resetTeamPinForm();
+  };
+
+  const handleCreateTeamPin = async () => {
+    if (savingTeamPin) return;
+    if (!isCompletePin(teamPinForm.next) || teamPinForm.next !== teamPinForm.confirm) {
+      setTeamPinError('El PIN debe tener 4 digitos y coincidir con la confirmacion.');
+      return;
+    }
+    setSavingTeamPin(true);
+    setTeamPinError('');
+    try {
+      await saveTeamPinConfig(teamPinForm.next, null);
+      showToast('PIN de Equipo creado correctamente.');
+    } catch (error) {
+      console.error('Error creando PIN de Equipo:', error);
+      setTeamPinError('No se pudo crear el PIN de Equipo.');
+    } finally {
+      setSavingTeamPin(false);
+    }
+  };
+
+  const handleChangeTeamPin = async () => {
+    if (savingTeamPin) return;
+    if (teamPinLockedUntil > Date.now()) {
+      setTeamPinError('Espera antes de intentar nuevamente.');
+      return;
+    }
+    if (!teamPinConfig?.pinHash || !teamPinConfig?.pinSalt) {
+      setTeamPinError('No hay PIN configurado para cambiar.');
+      return;
+    }
+    if (!isCompletePin(teamPinForm.current) || !isCompletePin(teamPinForm.next) || teamPinForm.next !== teamPinForm.confirm) {
+      setTeamPinError('Completa los campos con PINs de 4 digitos y confirma el nuevo PIN.');
+      return;
+    }
+    if (teamPinForm.current === teamPinForm.next) {
+      setTeamPinError('El PIN nuevo debe ser diferente al PIN actual.');
+      return;
+    }
+
+    setSavingTeamPin(true);
+    setTeamPinError('');
+    try {
+      const currentHash = await hashTeamPin(teamPinForm.current, teamPinConfig.pinSalt);
+      if (currentHash !== teamPinConfig.pinHash) {
+        const nextAttempts = teamPinAttempts + 1;
+        setTeamPinAttempts(nextAttempts);
+        setTeamPinForm(prev => ({ ...prev, current: '' }));
+        if (nextAttempts >= 5) {
+          setTeamPinLockedUntil(Date.now() + 60 * 1000);
+          setTeamPinAttempts(0);
+          setTeamPinError('Demasiados intentos. Espera un minuto antes de intentar otra vez.');
+        } else {
+          setTeamPinError(`PIN actual incorrecto. Intento ${nextAttempts} de 5.`);
+        }
+        return;
+      }
+
+      await saveTeamPinConfig(teamPinForm.next, teamPinConfig);
+      setTeamPinAttempts(0);
+      showToast('PIN de Equipo cambiado correctamente. Se pedirá el nuevo PIN al abrir Equipo.');
+    } catch (error) {
+      console.error('Error cambiando PIN de Equipo:', error);
+      setTeamPinError('No se pudo cambiar el PIN de Equipo.');
+    } finally {
+      setSavingTeamPin(false);
+    }
+  };
+
+  const formatAccountDate = (value) => {
+    if (!value) return 'No registrado';
+    const rawDate = value?.toDate ? value.toDate() : new Date(value);
+    if (Number.isNaN(rawDate.getTime())) return 'No registrado';
+    return rawDate.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' });
+  };
+
+  const accountStatus = normalizeAccountStatus(user?.accountStatus);
+  const accountFields = [
+    { label: 'Correo', value: user?.email },
+    { label: 'Rol', value: user?.rol || user?.role },
+    { label: 'Estado de cuenta', value: getAccountStatusLabel(accountStatus) },
+    { label: 'Fecha de ingreso', value: formatAccountDate(user?.fechaCreacion || user?.createdAt || user?.fechaIngreso) },
+    { label: 'Ultimo acceso', value: formatAccountDate(user?.ultimaConexion || user?.lastLoginAt || user?.ultimoAcceso) },
+    {
+      label: 'Instrumentos / funciones',
+      value: Array.isArray(user?.instrumentos)
+        ? user.instrumentos.join(', ')
+        : user?.funcion || user?.ministerio || user?.instrumento
+    }
+  ].filter(field => field.value);
+
   return (
     <div className="max-w-4xl mx-auto animate-in fade-in duration-500 pb-12">
       <header className="mb-8 flex flex-col gap-5 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 backdrop-blur-sm sm:flex-row sm:items-center md:p-6">
@@ -284,6 +431,107 @@ const UserProfile = ({ user }) => {
           </p>
         </div>
       </header>
+
+      <section className="mb-8 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 backdrop-blur-sm md:p-6">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-blue-500/20 bg-blue-500/10 text-blue-300">
+            <Settings size={20} />
+          </div>
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">Cuenta y seguridad</p>
+            <h2 className="text-lg font-black text-white">Informacion administrativa</h2>
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {accountFields.map(field => (
+            <div key={field.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">{field.label}</p>
+              <p className="mt-1 break-words text-sm font-bold text-zinc-100">{field.value}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-xs font-semibold leading-relaxed text-zinc-500">
+          Estos datos son administrados por el equipo autorizado. Desde aqui solo puedes actualizar tu foto, biografia y preferencias.
+        </p>
+
+        {isOwnerUser && (
+          <div className="mt-5 rounded-3xl border border-violet-500/20 bg-violet-500/10 p-4">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="rounded-2xl border border-violet-500/25 bg-violet-500/15 p-2.5 text-violet-200">
+                <Lock size={18} />
+              </div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-300">Seguridad de Equipo</p>
+                <h3 className="text-base font-black text-white">
+                  {teamPinConfig?.pinHash ? 'Cambiar PIN de Equipo' : 'Crear PIN de Equipo'}
+                </h3>
+                <p className="mt-1 text-xs font-semibold leading-relaxed text-zinc-400">
+                  {teamPinConfig?.pinHash
+                    ? 'Actualiza el PIN de 4 digitos que protege la administracion del equipo.'
+                    : 'Configura un PIN de 4 digitos para proteger el acceso a la administracion del equipo.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-4 rounded-2xl border border-white/10 bg-zinc-950/35 p-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Estado</p>
+              <p className="mt-1 text-sm font-bold text-zinc-100">
+                {loadingTeamPin ? 'Cargando...' : teamPinConfig?.pinHash ? 'PIN configurado' : 'PIN no configurado'}
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              {teamPinConfig?.pinHash && (
+                <input
+                  value={teamPinForm.current}
+                  onChange={(event) => handleTeamPinInput('current', event.target.value)}
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={4}
+                  className="kp-input rounded-2xl p-3 text-center text-sm font-black tracking-[0.3em]"
+                  placeholder="PIN actual"
+                />
+              )}
+              <input
+                value={teamPinForm.next}
+                onChange={(event) => handleTeamPinInput('next', event.target.value)}
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={4}
+                className="kp-input rounded-2xl p-3 text-center text-sm font-black tracking-[0.3em]"
+                placeholder="Nuevo PIN"
+              />
+              <input
+                value={teamPinForm.confirm}
+                onChange={(event) => handleTeamPinInput('confirm', event.target.value)}
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={4}
+                className="kp-input rounded-2xl p-3 text-center text-sm font-black tracking-[0.3em]"
+                placeholder={teamPinConfig?.pinHash ? 'Confirmar nuevo' : 'Confirmar PIN'}
+              />
+              <button
+                type="button"
+                onClick={teamPinConfig?.pinHash ? handleChangeTeamPin : handleCreateTeamPin}
+                disabled={savingTeamPin || loadingTeamPin}
+                className="kp-button-primary rounded-2xl px-4 py-3 text-xs font-black uppercase disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingTeamPin ? 'Guardando...' : teamPinConfig?.pinHash ? 'Cambiar PIN' : 'Crear PIN'}
+              </button>
+            </div>
+
+            {teamPinError && (
+              <p className="mt-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-xs font-bold text-red-200">{teamPinError}</p>
+            )}
+            <p className="mt-3 text-[11px] font-semibold leading-relaxed text-zinc-500">
+              El PIN no se muestra ni se guarda en texto plano. Al cambiarlo se invalida la sesion actual de acceso a Equipo.
+            </p>
+          </div>
+        )}
+      </section>
 
       <div className="kp-card p-6 md:p-8 rounded-3xl transition-colors">
         <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-6 border-b border-zinc-100 dark:border-zinc-800 pb-4">Preferencias de la Aplicación</h2>
@@ -416,9 +664,7 @@ const UserProfile = ({ user }) => {
             onClick={(e) => e.stopPropagation()} 
           />
         </div>
-      )}
-
-      {toast && (<div className={`fixed bottom-6 right-6 p-4 rounded-xl shadow-xl text-sm font-bold animate-in slide-in-from-bottom-5 z-50 ${toast.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>{toast.message}</div>)}
+      )}
     </div>
   );
 };

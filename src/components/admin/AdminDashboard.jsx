@@ -1,23 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Calendar, Music, BarChart3, TrendingUp, Mic2, Bell, CheckCircle2, XCircle, Cake, Trash2, MessageCircle, PlayCircle, Plus } from 'lucide-react';
+import { Calendar, Bell, CheckCircle2, XCircle, Cake, Trash2, MessageCircle, PlayCircle, MapPin, Clock, UserRound, Users, ListMusic, Image as ImageIcon, AlertTriangle } from 'lucide-react';
 import { collection, query, where, orderBy, limit, onSnapshot, getDoc, doc, getDocs, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { traducirAcorde } from '../../utils/musicCore';
 import confetti from 'canvas-confetti';
+import { useFeedback } from '../ui/FeedbackProvider';
 
 const AdminDashboard = ({ user }) => {
   const navigate = useNavigate();
+  const { confirm: askConfirm } = useFeedback();
 
   const esMusico = user?.rol === 'musico';
   const esDueno = user?.rol === 'dueño';
 
   const [proximoEvento, setProximoEvento] = useState(null);
   const [cancionesEvento, setCancionesEvento] = useState([]);
-  const [totalCanciones, setTotalCanciones] = useState(0);
   const [invitaciones, setInvitaciones] = useState([]);
   const [cumpleanos, setCumpleanos] = useState([]);
-  const [stats, setStats] = useState({ topCanciones: [], topCantantes: [], totalEventos: 0 });
   const [isCleaning, setIsCleaning] = useState(false);
   const [cleanResult, setCleanResult] = useState(null);
   const confettiFired = useRef(false);
@@ -27,24 +27,6 @@ const AdminDashboard = ({ user }) => {
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
 
   useEffect(() => {
-    // 1. Obtener Rankings (Desde el documento pre-calculado de las 3 AM)
-    const unsubStats = onSnapshot(doc(db, 'sistema', 'estadisticas'), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setStats(prev => ({
-          ...prev,
-          topCanciones: data.topCanciones || [],
-          topCantantes: data.topCantantes || [],
-        }));
-      } else {
-        console.debug("Estadísticas: El documento 'sistema/estadisticas' se creará en el próximo ciclo nocturno.");
-      }
-    });
-
-    // 2. Contadores en Tiempo Real (Escuchan las colecciones directamente)
-    const unsubCancionesCount = onSnapshot(collection(db, 'canciones'), (snap) => setTotalCanciones(snap.size));
-    const unsubEventosCount = onSnapshot(collection(db, 'eventos'), (snap) => setStats(prev => ({ ...prev, totalEventos: snap.size })));
-
     // Formato YYYY-MM-DD en hora local para no perder eventos programados para hoy más temprano
     const tzoffset = (new Date()).getTimezoneOffset() * 60000;
     const hoy = (new Date(Date.now() - tzoffset)).toISOString().slice(0, 10);
@@ -117,7 +99,7 @@ const AdminDashboard = ({ user }) => {
 
         const edadCumplida = bdayThisYear.getFullYear() - parseInt(y);
 
-        // LÓGICA DE SORPRESAS DE CUMPLEAÑOS (Solo procesado por el admin principal)
+        // L?GICA DE SORPRESAS DE CUMPLEAÑOS (Solo procesado por el admin principal)
         if ((esDueno || user?.rol === 'admin') && (diffDays === 7 || diffDays === 1 || diffDays === 0)) {
           const flagKey = `${bdayThisYear.getFullYear()}_${diffDays}d`;
           const sessionKey = `${u.id}_${flagKey}`;
@@ -168,12 +150,11 @@ const AdminDashboard = ({ user }) => {
       }
     });
 
-    return () => { unsubStats(); 
-      unsubCancionesCount(); 
-      unsubEventosCount(); 
-      unsubEventos(); 
-      unsubInv(); 
-      unsubUsuarios();  };
+    return () => {
+      unsubEventos();
+      unsubInv();
+      unsubUsuarios();
+    };
   }, []);
 
   const responderRSVP = async (eventoId, respuesta) => {
@@ -198,7 +179,7 @@ const AdminDashboard = ({ user }) => {
               }
             });
             if (disponibles.length > 0) sugerenciaMsg = `\n💡 Tienes a ${disponibles.join(', ')} disponible(s) en ${miRol}.`;
-            else sugerenciaMsg = `\n⚠️ No hay otros músicos registrados en ${miRol}.`;
+            else sugerenciaMsg = `\n?? No hay otros músicos registrados en ${miRol}.`;
           }
         }
       }
@@ -215,9 +196,16 @@ const AdminDashboard = ({ user }) => {
     } catch (error) { console.error(error); }
   };
 
-  // Limpieza Automática de Base de Datos (Solo Dueño)
+  // Limpieza Autom?tica de Base de Datos (Solo Dueño)
   const handleMantenimiento = async () => {
-    if (!window.confirm("¿Seguro que deseas iniciar la limpieza de la base de datos? Se eliminarán notificaciones de más de 30 días y eventos completados de más de 90 días.")) return;
+    const shouldClean = await askConfirm({
+      title: 'Iniciar limpieza',
+      message: 'Se eliminarán notificaciones de más de 30 días y eventos completados de más de 90 días. ¿Deseas continuar?',
+      confirmLabel: 'Iniciar limpieza',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!shouldClean) return;
     
     setIsCleaning(true);
     try {
@@ -246,6 +234,134 @@ const AdminDashboard = ({ user }) => {
     } catch (e) { console.error(e); } finally { setIsCleaning(false); }
   };
 
+  const hasSectionMedia = (song) => (
+    song?.sectionMedia
+    && typeof song.sectionMedia === 'object'
+    && Object.values(song.sectionMedia).some(items => Array.isArray(items) && items.length > 0)
+  );
+
+  const hasSongMedia = (song) => Boolean(song?.fondoUrl)
+    || (Array.isArray(song?.recursos) && song.recursos.length > 0)
+    || hasSectionMedia(song);
+
+  const getSetlistItems = () => (
+    proximoEvento?.setlist || (proximoEvento?.canciones || []).map(id => ({ type: 'song', value: id }))
+  );
+
+  const getSongItems = () => getSetlistItems().filter(item => item?.type === 'song');
+
+  const getEventDate = () => {
+    if (!proximoEvento?.fecha) return null;
+    const parsed = new Date(proximoEvento.fecha);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const getEventTimeLabel = () => {
+    const date = getEventDate();
+    if (!date) return proximoEvento?.hora || proximoEvento?.horaInicio || 'Hora sin definir';
+    return date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const getPredicadorName = () => {
+    if (!proximoEvento) return '';
+    const predicadorUid = proximoEvento.predicadorId || proximoEvento.responsables?.Predicacion || proximoEvento.predicadorAsignado;
+    const predicadorUsuario = predicadorUid ? cumpleanos.find(u => u.id === predicadorUid) : null;
+    return predicadorUsuario?.nombre
+      || proximoEvento.predicador
+      || proximoEvento.preacher
+      || proximoEvento.predicadorNombre
+      || proximoEvento.preacherName
+      || (predicadorUid ? 'Predicador asignado' : '');
+  };
+
+  const getEnsayoSummary = () => {
+    const songItems = getSongItems();
+    const checklist = proximoEvento?.ensayoChecklist || {};
+    const readyCount = songItems.filter(item => {
+      const check = checklist[item.idLocal] || checklist[item.value] || {};
+      return check.repasada && check.tonoConfirmado && check.entradaDefinida && check.finalDefinido;
+    }).length;
+
+    return {
+      total: songItems.length,
+      readyCount,
+      hasDate: Boolean(proximoEvento?.fechaEnsayo || proximoEvento?.ensayoFecha || proximoEvento?.ensayo),
+    };
+  };
+
+  const getPreparationChecklist = () => {
+    if (!proximoEvento) return [];
+
+    const songItems = getSongItems();
+    const equipo = Array.isArray(proximoEvento.equipo) ? proximoEvento.equipo : [];
+    const asistencia = proximoEvento.estadoAsistencia || {};
+    const confirmados = Object.values(asistencia).filter(value => value === 'confirmado').length;
+    const respuestasPendientes = Object.values(asistencia).filter(value => value === 'pendiente').length;
+    const cancionesConMedia = cancionesEvento.filter(hasSongMedia).length;
+    const cancionesSinMedia = cancionesEvento.filter(song => !hasSongMedia(song)).length;
+    const predicador = getPredicadorName();
+    const ensayo = getEnsayoSummary();
+
+    return [
+      {
+        label: 'Setlist',
+        detail: songItems.length > 0 ? `${songItems.length} canciones` : 'Sin canciones agregadas',
+        status: songItems.length > 0 ? 'ready' : 'incomplete'
+      },
+      {
+        label: 'Multimedia',
+        detail: cancionesEvento.length === 0
+          ? 'Sin canciones para revisar'
+          : cancionesSinMedia > 0
+            ? `${cancionesSinMedia} canciones sin recursos`
+            : `${cancionesConMedia} canciones preparadas`,
+        status: cancionesEvento.length === 0 ? 'incomplete' : cancionesSinMedia > 0 ? 'attention' : 'ready'
+      },
+      {
+        label: 'Predicador',
+        detail: predicador || 'No asignado',
+        status: predicador ? 'ready' : 'attention'
+      },
+      {
+        label: 'Equipo',
+        detail: equipo.length > 0
+          ? `${confirmados}/${equipo.length} confirmados${respuestasPendientes > 0 ? `, ${respuestasPendientes} pendientes` : ''}`
+          : 'Sin equipo convocado',
+        status: equipo.length === 0 ? 'attention' : respuestasPendientes > 0 ? 'attention' : 'ready'
+      },
+      {
+        label: 'Ensayo',
+        detail: ensayo.total > 0
+          ? `${ensayo.readyCount}/${ensayo.total} canciones listas${ensayo.hasDate ? '' : ' - sin fecha'}`
+          : 'Sin setlist para ensayo',
+        status: ensayo.total === 0 ? 'incomplete' : ensayo.readyCount === ensayo.total && ensayo.hasDate ? 'ready' : 'attention'
+      },
+      {
+        label: 'Pantallas',
+        detail: 'Por verificar en Central Multimedia',
+        status: 'attention'
+      }
+    ];
+  };
+
+  const preparationChecklist = getPreparationChecklist();
+  const operationalAlerts = preparationChecklist
+    .filter(item => item.status !== 'ready')
+    .map(item => {
+      if (item.label === 'Setlist') return 'El próximo culto todav?a no tiene setlist asignado.';
+      if (item.label === 'Multimedia') return 'Hay canciones sin fondo o recursos multimedia.';
+      if (item.label === 'Predicador') return 'No hay predicador asignado.';
+      if (item.label === 'Equipo') return item.detail === 'Sin equipo convocado' ? 'No hay equipo convocado.' : 'Hay respuestas pendientes del equipo.';
+      if (item.label === 'Ensayo') return item.detail.includes('sin fecha') ? 'Evento sin ensayo definido.' : 'El checklist de ensayo está incompleto.';
+      if (item.label === 'Pantallas') return 'Revisa pantallas y salidas antes de iniciar.';
+      return item.detail;
+    });
+  const generalPreparationStatus = preparationChecklist.some(item => item.status === 'incomplete')
+    ? 'Incompleto'
+    : preparationChecklist.some(item => item.status === 'attention')
+      ? 'En preparación'
+      : 'Listo';
+
   return (
     <div className="max-w-6xl mx-auto animate-in fade-in duration-500">
       <header className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 md:p-6 backdrop-blur-sm">
@@ -260,12 +376,10 @@ const AdminDashboard = ({ user }) => {
         )}
       </header>
 
-      <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-4">
+      <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2">
         {[
-          { label: 'Repertorio', path: '/canciones', icon: Music, color: 'text-blue-300' },
           { label: 'Eventos y Setlists', path: '/eventos', icon: Calendar, color: 'text-rose-300' },
-          { label: 'Controlador Multimedia', path: '/multimedia-hub', icon: PlayCircle, color: 'text-violet-300' },
-          { label: 'Añadir Canción', path: '/añadir', icon: Plus, color: 'text-emerald-300', adminOnly: true }
+          { label: 'Central Multimedia', path: '/multimedia-hub', icon: PlayCircle, color: 'text-violet-300' }
         ].filter(item => !item.adminOnly || !esMusico).map(item => {
           const Icon = item.icon;
           return (
@@ -309,7 +423,7 @@ const AdminDashboard = ({ user }) => {
               <div className="flex items-start sm:items-center gap-3">
                 <div className="p-2 bg-white/20 rounded-xl"><Bell size={24} className="text-white animate-bounce" /></div>
                 <div>
-                  <h3 className="font-black text-lg">¡Has sido convocado!</h3>
+                  <h3 className="font-black text-lg">?Has sido convocado!</h3>
                   <p className="text-amber-100 text-sm font-medium">Para el evento <b>{inv.titulo}</b> el {new Date(inv.fecha).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric' })}.</p>
                 </div>
               </div>
@@ -322,160 +436,146 @@ const AdminDashboard = ({ user }) => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Tarjeta de Próximo Evento (Ocupa 2 columnas en PC) */}
-        <div className="kp-card p-6 md:p-8 rounded-3xl lg:col-span-2 transition-colors">
-          <h2 className="text-xl font-bold text-zinc-800 dark:text-zinc-100 mb-6">{proximoEvento ? `Próximo: ${proximoEvento.titulo}` : 'Próximos Eventos'}</h2>
-          {proximoEvento ? (
-            <>
-              <div className="flex flex-wrap items-center gap-2 mb-4">
-                <span className="text-blue-600 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-500/10 px-3 py-1 rounded-lg text-sm flex items-center gap-2">
-                  <Calendar size={16} /> {new Date(proximoEvento.fecha).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
-                </span>
-                {proximoEvento.tipoEvento && (
-                  <span className="text-violet-600 dark:text-violet-400 font-bold bg-violet-50 dark:bg-violet-500/10 px-3 py-1 rounded-lg text-sm">
-                    {proximoEvento.tipoEvento}
-                  </span>
-                )}
+      <section className="kp-card rounded-[2rem] p-5 md:p-8">
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] font-black uppercase tracking-[0.28em] text-violet-300">PRÓXIMO CULTO</p>
+            <h2 className="mt-2 text-2xl md:text-4xl font-black tracking-tight text-zinc-900 dark:text-white">
+              {proximoEvento?.titulo || 'Sin evento programado'}
+            </h2>
+            <p className="mt-2 text-sm font-semibold text-zinc-500 dark:text-zinc-400">
+              Preparación operativa para el siguiente servicio.
+            </p>
+          </div>
+          <span className={`inline-flex w-fit items-center gap-2 rounded-full border px-4 py-2 text-[11px] font-black uppercase tracking-widest ${
+            generalPreparationStatus === 'Listo'
+              ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
+              : generalPreparationStatus === 'Incompleto'
+                ? 'border-red-500/25 bg-red-500/10 text-red-300'
+                : 'border-amber-500/25 bg-amber-500/10 text-amber-300'
+          }`}>
+            {generalPreparationStatus === 'Listo' ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+            {generalPreparationStatus}
+          </span>
+        </div>
+
+        {proximoEvento ? (
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+            <div className="space-y-5">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="kp-panel rounded-2xl p-4">
+                  <p className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-zinc-500"><Calendar size={14}/> Fecha</p>
+                  <p className="text-sm font-black text-zinc-100">{getEventDate()?.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }) || 'Fecha sin definir'}</p>
+                </div>
+                <div className="kp-panel rounded-2xl p-4">
+                  <p className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-zinc-500"><Clock size={14}/> Hora</p>
+                  <p className="text-sm font-black text-zinc-100">{getEventTimeLabel()}</p>
+                </div>
+                <div className="kp-panel rounded-2xl p-4">
+                  <p className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-zinc-500"><MapPin size={14}/> Lugar</p>
+                  <p className="truncate text-sm font-black text-zinc-100">{proximoEvento.lugar || proximoEvento.ubicacion || 'Lugar sin definir'}</p>
+                </div>
+                <div className="kp-panel rounded-2xl p-4">
+                  <p className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-zinc-500"><UserRound size={14}/> Predicador</p>
+                  <p className="truncate text-sm font-black text-zinc-100">{getPredicadorName() || 'No asignado'}</p>
+                </div>
               </div>
-              <div className="space-y-3">
-                {(() => {
-                  const setlistItems = proximoEvento.setlist || (proximoEvento.canciones || []).map(id => ({ type: 'song', value: id }));
-                  let songCounter = 1;
-                  return setlistItems.filter(i => i.type === 'song').map((item, idx) => {
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                  <p className="mb-1 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-blue-300"><ListMusic size={14}/> Setlist</p>
+                  <p className="text-3xl font-black text-white">{getSongItems().length}</p>
+                  <p className="text-xs font-semibold text-zinc-500">canciones asignadas</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                  <p className="mb-1 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-emerald-300"><Users size={14}/> Equipo</p>
+                  <p className="text-3xl font-black text-white">{Object.values(proximoEvento.estadoAsistencia || {}).filter(value => value === 'confirmado').length}/{Array.isArray(proximoEvento.equipo) ? proximoEvento.equipo.length : 0}</p>
+                  <p className="text-xs font-semibold text-zinc-500">confirmados</p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                  <p className="mb-1 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-violet-300"><ImageIcon size={14}/> Multimedia</p>
+                  <p className="text-3xl font-black text-white">{cancionesEvento.filter(hasSongMedia).length}/{cancionesEvento.length}</p>
+                  <p className="text-xs font-semibold text-zinc-500">canciones preparadas</p>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Setlist asignado</p>
+                    <p className="text-sm font-black text-zinc-100">{getSongItems().length > 0 ? 'Canciones del próximo culto' : 'Sin canciones agregadas'}</p>
+                  </div>
+                  <button onClick={() => navigate(`/setlist/${proximoEvento.id}`)} className="kp-button-secondary rounded-xl px-3 py-2 text-[10px] font-black uppercase">Abrir setlist</button>
+                </div>
+                <div className="space-y-2">
+                  {getSongItems().slice(0, 6).map((item, idx) => {
                     const cancion = cancionesEvento.find(c => c.id === item.value);
                     if (!cancion) return null;
-                    const currentCount = songCounter++;
-                    
-                    let tonoFinal = cancion.tonoOriginal;
-                    const cantanteAsignado = proximoEvento.cantantesPorCancion?.[cancion.id];
-                    if (cantanteAsignado && cancion.tonosAlternativos) {
-                      const opciones = cancion.tonosAlternativos.split(',');
-                      const opcionMatch = opciones.find(opt => opt.trim().toLowerCase().startsWith(cantanteAsignado.toLowerCase() + ':'));
-                      if (opcionMatch) tonoFinal = opcionMatch.split(':')[1].trim();
-                    }
-                    
-                  return ( 
-                  <div key={`${cancion.id}-${idx}`} onClick={() => {
-                    navigate(`/setlist/${proximoEvento.id}`);
-                  }} className="flex items-center justify-between p-4 bg-white/[0.04] rounded-2xl border border-white/10 hover:border-blue-400/40 transition-colors cursor-pointer group">
-                    <div>
-                      <p className="font-bold text-zinc-800 dark:text-zinc-200 group-hover:text-blue-700 dark:group-hover:text-blue-400 transition-colors flex flex-wrap items-center gap-2">
-                        {currentCount}. {cancion.titulo}
-                        {proximoEvento.cantantesPorCancion?.[cancion.id] && <span className="text-[9px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 px-1.5 py-0.5 rounded uppercase">{proximoEvento.cantantesPorCancion[cancion.id]}</span>}
-                      </p>
-                      <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium mt-0.5">Tono: {traducirAcorde(tonoFinal || 'C', formatoAcordes, notacion)} | {cancion.bpm} BPM</p>
-                    </div>
-                    <span className="px-3 py-1 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 text-xs font-bold rounded-full flex items-center gap-1"><Calendar size={12}/> Ver Evento</span>
-                  </div>
+                    return (
+                      <button key={`${cancion.id}-${idx}`} onClick={() => navigate(`/setlist/${proximoEvento.id}`)} className="flex w-full items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-left transition-colors hover:border-blue-400/40">
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-black text-zinc-100">{idx + 1}. {cancion.titulo}</span>
+                          <span className="text-xs font-semibold text-zinc-500">Tono: {traducirAcorde(cancion.tonoOriginal || 'C', formatoAcordes, notacion)} {cancion.bpm ? `| ${cancion.bpm} BPM` : ''}</span>
+                        </span>
+                        <span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${hasSongMedia(cancion) ? 'bg-emerald-500/10 text-emerald-300' : 'bg-amber-500/10 text-amber-300'}`}>
+                          {hasSongMedia(cancion) ? 'Media' : 'Sin media'}
+                        </span>
+                      </button>
                     );
-                  });
-                })()}
-                {(cancionesEvento.length === 0) && <p className="kp-empty-state rounded-2xl p-5 text-sm font-bold">No hay canciones agregadas a este evento.</p>}
+                  })}
+                  {getSongItems().length > 6 && <p className="px-2 text-xs font-bold text-zinc-500">+ {getSongItems().length - 6} canciones m?s en el setlist.</p>}
+                  {getSongItems().length === 0 && <p className="kp-empty-state rounded-2xl p-5 text-center text-sm font-bold">No hay canciones agregadas a este evento.</p>}
+                </div>
               </div>
-            </>
-          ) : (
-            <div className="kp-empty-state text-center py-10 rounded-2xl">
-              <p className="text-zinc-500 dark:text-zinc-400 font-medium mb-2">No tienes eventos próximos programados.</p>
-              {!esMusico && <button onClick={() => navigate('/eventos')} className="kp-button-secondary rounded-xl px-4 py-2 text-sm font-black">Agendar evento</button>}
             </div>
-          )}
-        </div>
 
-        {/* Tarjeta de Estadísticas Rápidas (Destacada) */}
-        <div className="bg-gradient-to-br from-blue-600/95 to-violet-700/95 p-8 rounded-3xl shadow-2xl shadow-violet-950/25 border border-violet-400/20 text-white relative overflow-hidden transition-colors">
-          <div className="absolute top-0 right-0 p-8 opacity-10">
-            <svg className="w-24 h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+            <aside className="space-y-5">
+              <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Checklist</p>
+                    <h3 className="text-lg font-black text-white">Preparaci?n del culto</h3>
+                  </div>
+                  <span className="rounded-full bg-white/[0.06] px-3 py-1 text-[10px] font-black uppercase text-zinc-300">{preparationChecklist.filter(item => item.status === 'ready').length}/{preparationChecklist.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {preparationChecklist.map(item => (
+                    <div key={item.label} className="flex items-start gap-3 rounded-2xl border border-white/10 bg-zinc-950/25 p-3">
+                      <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${item.status === 'ready' ? 'bg-emerald-500/15 text-emerald-300' : item.status === 'incomplete' ? 'bg-red-500/15 text-red-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                        {item.status === 'ready' ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-black text-zinc-100">{item.label}</span>
+                        <span className="block text-xs font-semibold text-zinc-500">{item.detail}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-amber-500/20 bg-amber-500/10 p-5">
+                <p className="mb-3 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-amber-300"><AlertTriangle size={15}/> Alertas ?tiles</p>
+                {operationalAlerts.length > 0 ? (
+                  <div className="space-y-2">
+                    {operationalAlerts.map((alert, idx) => (
+                      <p key={`${alert}-${idx}`} className="rounded-2xl border border-amber-500/15 bg-black/20 px-3 py-2 text-sm font-bold text-amber-50">{alert}</p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-sm font-black text-emerald-200">Todo lo principal est? listo para el próximo culto.</p>
+                )}
+              </div>
+            </aside>
           </div>
-          <h2 className="text-lg font-bold mb-2 text-blue-100">Repertorio Activo</h2>
-          <p className="text-5xl font-black mb-1">{totalCanciones}</p>
-          <p className="text-blue-200 text-sm mb-8 font-medium">Canciones disponibles</p>
-          
-          {!esMusico && (
-            <button 
-              onClick={() => navigate('/añadir')}
-              className="w-full bg-white text-blue-700 font-bold py-3 px-4 rounded-xl shadow-md hover:bg-blue-50 transition-colors active:scale-95"
-            >
-              + Añadir Canción
-            </button>
-          )}
-        </div>
-
-        {/* Tarjeta de Gestión de Equipo */}
-        {esDueno && (
-          <div className="kp-card p-6 md:p-8 rounded-3xl flex flex-col justify-center transition-colors">
-            <h2 className="text-xl font-bold text-zinc-800 dark:text-zinc-100 mb-2 flex items-center gap-2">
-              <Users size={24} className="text-indigo-600" /> Tu Equipo
-            </h2>
-            <p className="text-zinc-500 dark:text-zinc-400 text-sm font-medium mb-6">Administra los integrantes de la banda, sus accesos y roles en la aplicación.</p>
-            
-            <button 
-              onClick={() => navigate('/equipo')}
-              className="w-full mt-auto bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 font-bold py-3 px-4 rounded-xl shadow-md hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors flex items-center justify-center gap-2 active:scale-95"
-            >
-              Configurar Accesos
-            </button>
+        ) : (
+          <div className="kp-empty-state rounded-3xl px-5 py-12 text-center">
+            <Calendar className="mx-auto mb-4 text-zinc-600" size={44} />
+            <p className="mb-2 text-lg font-black text-zinc-200">No hay un culto próximo programado.</p>
+            <p className="mx-auto mb-5 max-w-md text-sm font-semibold text-zinc-500">Cuando programes un evento, aquí aparecerá el checklist operativo para preparar setlist, equipo, multimedia, predicador y ensayo.</p>
+            {!esMusico && <button onClick={() => navigate('/eventos')} className="kp-button-primary rounded-2xl px-5 py-3 text-xs font-black uppercase">Programar evento</button>}
           </div>
         )}
-      </div>
-
-      {/* NUEVA SECCIÓN: Estadísticas y Reportes */}
-      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in slide-in-from-bottom-5">
-        
-        {/* Top Canciones */}
-        <div className="kp-card p-6 rounded-3xl transition-colors">
-          <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
-            <TrendingUp size={20} className="text-blue-500" /> Top Canciones
-          </h3>
-          <div className="space-y-4">
-            {stats.topCanciones.length > 0 ? stats.topCanciones.map((c, i) => (
-              <div key={i} className="flex items-center justify-between group">
-                <div className="flex items-center gap-3 overflow-hidden">
-                  <span className="text-sm font-black text-zinc-300 dark:text-zinc-700 w-4 group-hover:text-blue-500 transition-colors">{i + 1}</span>
-                  <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300 truncate">{c.titulo}</span>
-                </div>
-                <span className="text-[10px] font-black bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2 py-1 rounded-md tracking-wider">{c.count} VECES</span>
-              </div>
-            )) : <p className="text-sm text-zinc-500 dark:text-zinc-500">No hay datos suficientes.</p>}
-          </div>
-        </div>
-
-        {/* Top Cantantes */}
-        <div className="kp-card p-6 rounded-3xl transition-colors">
-          <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
-            <Mic2 size={20} className="text-rose-500" /> Participación Vocal
-          </h3>
-          <div className="space-y-4">
-            {stats.topCantantes.length > 0 ? stats.topCantantes.map((c, i) => (
-              <div key={i} className="flex items-center justify-between">
-                <div className="flex items-center gap-3 overflow-hidden">
-                  <div className="w-7 h-7 rounded-full bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center font-bold text-xs uppercase shrink-0">{c.nombre?.charAt(0) || '?'}</div>
-                  <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300 truncate">{c.nombre}</span>
-                </div>
-                <span className="text-[10px] font-black bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 px-2 py-1 rounded-md tracking-wider">{c.count} CANTOS</span>
-              </div>
-            )) : <p className="text-sm text-zinc-500 dark:text-zinc-500">No hay datos suficientes.</p>}
-          </div>
-        </div>
-
-        {/* Resumen de Actividad */}
-        <div className="kp-card p-6 rounded-3xl transition-colors flex flex-col justify-center">
-          <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
-            <BarChart3 size={20} className="text-violet-500" /> Métricas Globales
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="kp-panel p-4 rounded-2xl text-center">
-              <p className="text-4xl font-black text-zinc-900 dark:text-white mb-1">{stats.totalEventos}</p>
-              <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Eventos</p>
-            </div>
-            <div className="kp-panel p-4 rounded-2xl text-center">
-              <p className="text-4xl font-black text-zinc-900 dark:text-white mb-1">{totalCanciones}</p>
-              <p className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Canciones</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
+      </section>
       {/* Tarjeta de Cumpleaños */}
       <div className="kp-card mt-6 p-6 rounded-3xl transition-colors animate-in slide-in-from-bottom-5">
         <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-4 flex items-center gap-2">
@@ -516,9 +616,9 @@ const AdminDashboard = ({ user }) => {
         <div className="mt-6 bg-red-50 dark:bg-red-950/20 p-6 rounded-3xl border border-red-200 dark:border-red-900/50 flex flex-col md:flex-row justify-between items-center gap-4">
           <div>
             <h3 className="text-sm font-black text-red-700 dark:text-red-400 flex items-center gap-2 mb-1"><Trash2 size={16}/> Mantenimiento del Sistema</h3>
-            <p className="text-xs font-medium text-red-600/80 dark:text-red-400/80">Limpia datos antiguos para que tu app siempre corra a máxima velocidad.</p>
+            <p className="text-xs font-medium text-red-600/80 dark:text-red-400/80">Limpia datos antiguos para que tu app siempre corra a m?xima velocidad.</p>
           </div>
-          <div className="flex items-center gap-3"> {/* Botón de prueba de notificación movido a UserProfile.jsx */}
+          <div className="flex items-center gap-3"> {/* Bot?n de prueba de notificaci?n movido a UserProfile.jsx */}
             {cleanResult && <span className="text-xs font-bold text-red-600 bg-red-100 px-3 py-2 rounded-lg">{cleanResult}</span>}
             <button onClick={handleMantenimiento} disabled={isCleaning} className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-colors shadow-sm disabled:opacity-50">{isCleaning ? 'Limpiando...' : 'Iniciar Limpieza'}</button>
           </div>

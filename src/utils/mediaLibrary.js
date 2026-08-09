@@ -18,6 +18,7 @@ export const MEDIA_PROVIDERS = Object.freeze({
 export const MEDIA_STATUS = Object.freeze({
   ACTIVE: 'active',
   ARCHIVED: 'archived',
+  TRASHED: 'trashed',
   PENDING_DELETE: 'pending_delete',
   DELETED: 'deleted'
 });

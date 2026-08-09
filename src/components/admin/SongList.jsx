@@ -1,23 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, deleteDoc, doc, updateDoc, addDoc } from 'firebase/firestore';
+import { collection, onSnapshot, deleteDoc, doc, updateDoc, addDoc, getDocs, getDoc, query, where, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { Music, Search, Trash2, Edit, Mic2, Play, Heart, Layers, Plus, X, ChevronUp, ChevronDown, Download } from 'lucide-react';
+import { Music, Search, Trash2, Edit, Mic2, Play, Heart, Layers, Plus, X, ChevronUp, ChevronDown, Download, Copy, Archive, RotateCcw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { calcularOffsetSemitonos, traducirAcorde, transponerNota } from '../../utils/musicCore';
 import { getSongSearchMatch } from '../../utils/songSearch';
+import { getSongQualityBadges } from '../../utils/songQuality';
+import { MEDIA_LIBRARY_COLLECTION } from '../../utils/mediaLibrary';
+import { calculateMediaUsageFields } from '../../utils/mediaLibraryFirestoreSync';
+import { useFeedback } from '../ui/FeedbackProvider';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 
 const SongList = ({ user }) => {
-  const [canciones, setCanciones] = useState([]);
+  const { confirm: askConfirm, notify } = useFeedback();
+  const [canciones, setCanciónes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filtro, setFiltro] = useState('');
   const [filtroEtiqueta, setFiltroEtiqueta] = useState('');
   const [lastPlayedMap, setLastPlayedMap] = useState({});
   const misFavoritos = user?.favoritos || [];
   const [mostrarSoloFavoritos, setMostrarSoloFavoritos] = useState(false);
-  const [toast, setToast] = useState(null);
+  const [mostrarArchivadas, setMostrarArchivadas] = useState(false);
   const [songToDelete, setSongToDelete] = useState(null);
+  const [deleteUsage, setDeleteUsage] = useState([]);
+  const [isDeletingSong, setIsDeletingSong] = useState(false);
+  const [duplicatingSongId, setDuplicatingSongId] = useState(null);
   const navigate = useNavigate();
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
   const notacion = user?.preferencias?.notacion || 'sharps';
@@ -30,11 +38,7 @@ const SongList = ({ user }) => {
   const [medleyBpm, setMedleyBpm] = useState('');
   const [transposeMode, setTransposeMode] = useState('UNIFIED');
   const [isSavingMedley, setIsSavingMedley] = useState(false);
-
-  const showToast = (message, type = 'error') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
+  const showToast = (message, type = 'error') => notify(message, { type });
 
   // Escuchar la base de datos en tiempo real
   useEffect(() => {
@@ -43,20 +47,28 @@ const SongList = ({ user }) => {
         id: doc.id,
         ...doc.data()
       }));
-      // Ordenar alfabéticamente por título
+      // Ordenar alfab?ticamente por título
       lista.sort((a, b) => a.titulo.localeCompare(b.titulo));
-      setCanciones(lista);
+      setCanciónes(lista);
       setLoading(false);
     });
 
-    // Cargar historial de eventos para calcular "Última vez tocada"
-    const unsubEventos = onSnapshot(collection(db, 'eventos'), (snap) => {
+    // Cargar solo eventos pasados recientes para calcular ultima vez tocada sin escuchar todo el historico.
+    const tzoffset = (new Date()).getTimezoneOffset() * 60000;
+    const hoy = (new Date(Date.now() - tzoffset)).toISOString().slice(0, 10);
+    const eventosRecientesQuery = query(
+      collection(db, 'eventos'),
+      where('fecha', '<=', hoy),
+      orderBy('fecha', 'desc'),
+      limit(120)
+    );
+    const unsubEventos = onSnapshot(eventosRecientesQuery, (snap) => {
       const map = {};
       const hoy = new Date();
       snap.docs.forEach(doc => {
         const ev = doc.data();
         const eventDate = new Date(ev.fecha);
-        if (eventDate <= hoy) { // Solo contar si ya pasó
+        if (eventDate <= hoy) { // Solo contar si ya pas?
           const ids = ev.setlist ? ev.setlist.filter(i => i.type === 'song').map(i => i.value) : (ev.canciones || []);
           ids.forEach(id => {
             if (!map[id] || eventDate > new Date(map[id])) {
@@ -72,19 +84,148 @@ const SongList = ({ user }) => {
   }, []);
 
   const handleDelete = (id, titulo) => {
+    setDeleteUsage([]);
     setSongToDelete({ id, titulo }); // Activa el modal
   };
 
+  const getSongUsageInEvents = (songId, eventosList) => {
+    return eventosList
+      .filter(ev => {
+        const setlistIds = Array.isArray(ev.setlist)
+          ? ev.setlist.filter(item => item?.type === 'song').map(item => item.value || item.songId || item.id)
+          : [];
+        const legacyIds = Array.isArray(ev.canciones)
+          ? ev.canciones.map(item => (typeof item === 'string' ? item : item?.id || item?.songId || item?.value))
+          : [];
+        return [...setlistIds, ...legacyIds].includes(songId);
+      })
+      .map(ev => ({
+        id: ev.id,
+        titulo: ev.titulo || ev.nombre || 'Evento sin titulo',
+        fecha: ev.fecha || ev.eventDate || ev.startDate || null
+      }));
+  };
+
   const confirmarEliminacion = async () => {
-    if (!songToDelete) return;
+    if (!songToDelete || isDeletingSong) return;
+    setIsDeletingSong(true);
     try {
+      const eventosSnap = await getDocs(collection(db, 'eventos'));
+      const eventosActuales = eventosSnap.docs.map(eventDoc => ({ id: eventDoc.id, ...eventDoc.data() }));
+      const usos = getSongUsageInEvents(songToDelete.id, eventosActuales);
+
+      if (usos.length > 0) {
+        setDeleteUsage(usos);
+        showToast(`No se puede eliminar: aparece en ${usos.length} evento(s).`, "error");
+        return;
+      }
+
       await deleteDoc(doc(db, 'canciones', songToDelete.id));
       showToast("Canción eliminada exitosamente.", "success");
+      setSongToDelete(null);
     } catch (error) {
       console.error("Error eliminando:", error);
       showToast("Hubo un error al eliminar.", "error");
     } finally {
-      setSongToDelete(null); // Cierra el modal
+      setIsDeletingSong(false);
+    }
+  };
+
+  const regenerateLocalResourceIds = (resources = []) => (
+    Array.isArray(resources)
+      ? resources.map((resource, index) => ({
+          ...resource,
+          id: `${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`
+        }))
+      : []
+  );
+
+  const cloneSectionMedia = (sectionMedia = {}) => {
+    if (!sectionMedia || typeof sectionMedia !== 'object') return {};
+    return Object.fromEntries(
+      Object.entries(sectionMedia).map(([sectionKey, resources]) => [
+        sectionKey,
+        regenerateLocalResourceIds(resources)
+      ])
+    );
+  };
+
+  const updateMediaLibraryUsageForDuplicate = async (newSongId, songTitle, copiedSectionMedia = {}) => {
+    const updates = [];
+    Object.entries(copiedSectionMedia || {}).forEach(([sectionKey, resources]) => {
+      if (!Array.isArray(resources)) return;
+      resources.forEach(resource => {
+        if (!resource?.mediaId) return;
+        updates.push({
+          mediaId: resource.mediaId,
+          usage: {
+            songId: newSongId,
+            songTitle,
+            location: 'section',
+            sectionKey,
+            sectionTitle: resource.sectionTitle || sectionKey,
+            resourceId: resource.id
+          }
+        });
+      });
+    });
+
+    await Promise.all(updates.map(async ({ mediaId, usage }) => {
+      try {
+        const mediaRef = doc(db, MEDIA_LIBRARY_COLLECTION, mediaId);
+        const mediaSnap = await getDoc(mediaRef);
+        if (!mediaSnap.exists()) return;
+        const mediaData = mediaSnap.data();
+        const usageFields = calculateMediaUsageFields(mediaData.usedBy, usage, 'add');
+        usageFields.firstUsedAt = mediaData.firstUsedAt || usageFields.firstUsedAt;
+        await updateDoc(mediaRef, usageFields);
+      } catch (error) {
+        console.warn('No se pudo actualizar uso de mediaLibrary al duplicar:', mediaId, error);
+      }
+    }));
+  };
+
+  const handleDuplicateSong = async (song) => {
+    if (!song || duplicatingSongId) return;
+    setDuplicatingSongId(song.id);
+    try {
+      const songSnap = await getDoc(doc(db, 'canciones', song.id));
+      if (!songSnap.exists()) {
+        showToast('La cancion original ya no existe.', 'error');
+        return;
+      }
+
+      const original = songSnap.data();
+      const now = new Date().toISOString();
+      const copiedSectionMedia = cloneSectionMedia(original.sectionMedia);
+      const copiedRecursos = regenerateLocalResourceIds(original.recursos);
+      const copiedMultitracks = regenerateLocalResourceIds(original.multitracks);
+
+      const copyData = {
+        ...original,
+        titulo: `${original.titulo || 'Canción'} (Copia)`,
+        recursos: copiedRecursos,
+        multitracks: copiedMultitracks,
+        sectionMedia: copiedSectionMedia,
+        fechaCreacion: now,
+        fechaActualizacion: now,
+        duplicadaDe: song.id,
+        duplicadaPor: user?.uid || null
+      };
+
+      delete copyData.id;
+      delete copyData.createdAt;
+      delete copyData.updatedAt;
+
+      const newDoc = await addDoc(collection(db, 'canciones'), copyData);
+      await updateMediaLibraryUsageForDuplicate(newDoc.id, copyData.titulo, copiedSectionMedia);
+      showToast('Canción duplicada correctamente.', 'success');
+      navigate(`/editar/${newDoc.id}`, { state: { returnTo: '/canciones' } });
+    } catch (error) {
+      console.error('Error duplicando cancion:', error);
+      showToast('No se pudo duplicar la cancion.', 'error');
+    } finally {
+      setDuplicatingSongId(null);
     }
   };
 
@@ -148,7 +289,7 @@ const SongList = ({ user }) => {
           : medleyKey;
         const offset = calcularOffset(originalKey, targetKey);
         
-        // Filtrar solo las secciones que el usuario dejó marcadas
+        // Filtrar solo las secciones que el usuario dej? marcadas
         const seccionesIncluidas = song.secciones ? song.secciones.filter(s => s.incluir).map(s => s.contenido).join('\n') : song.letraRaw;
         
         // Magia: Transponer todos los acordes de la letra original al tono del Medley
@@ -180,7 +321,7 @@ const SongList = ({ user }) => {
       });
       showToast("Medley generado exitosamente", "success");
       setShowMedleyModal(false); setMedleySongs([]); setTransposeMode('UNIFIED'); setMedleyKey('C'); setMedleyBpm('');
-      navigate(`/editar/${newDoc.id}`); // Llevamos al usuario directo al editor para que lo afine
+      navigate(`/editar/${newDoc.id}`, { state: { returnTo: '/canciones' } }); // Llevamos al usuario directo al editor para que lo afine
     } catch(e) { showToast("Error al generar el Medley."); }
     setIsSavingMedley(false);
   };
@@ -206,14 +347,64 @@ const SongList = ({ user }) => {
     }
   };
 
+  const isArchivedSong = (song) => song?.estado === 'archived' || song?.status === 'archived' || song?.archived === true;
+  const activeSongs = canciones.filter(song => !isArchivedSong(song));
+  const archivedSongs = canciones.filter(isArchivedSong);
+
+  const handleArchiveSong = async (song) => {
+    if (!song?.id) return;
+    const shouldArchive = await askConfirm({
+      title: 'Archivar cancion',
+      message: `¿Archivar "${song.titulo || 'esta cancion'}"? No aparecerá en el repertorio normal, pero seguirá disponible en eventos históricos.`,
+      confirmLabel: 'Archivar',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!shouldArchive) return;
+
+    try {
+      await updateDoc(doc(db, 'canciones', song.id), {
+        estado: 'archived',
+        archived: true,
+        archivedAt: new Date().toISOString(),
+        archivedBy: user?.uid || null,
+        fechaActualizacion: new Date().toISOString()
+      });
+      showToast('Canción archivada. Puedes restaurarla desde el filtro Archivadas.', 'success');
+    } catch (error) {
+      console.error('Error archivando cancion:', error);
+      showToast('No se pudo archivar la cancion.', 'error');
+    }
+  };
+
+  const handleRestoreSong = async (song) => {
+    if (!song?.id) return;
+
+    try {
+      await updateDoc(doc(db, 'canciones', song.id), {
+        estado: 'active',
+        archived: false,
+        archivedAt: null,
+        archivedBy: null,
+        restoredAt: new Date().toISOString(),
+        fechaActualizacion: new Date().toISOString()
+      });
+      showToast('Canción restaurada al repertorio.', 'success');
+    } catch (error) {
+      console.error('Error restaurando cancion:', error);
+      showToast('No se pudo restaurar la cancion.', 'error');
+    }
+  };
+
   const cancionesFiltradas = canciones.filter(c => {
+    const matchArchive = mostrarArchivadas ? isArchivedSong(c) : !isArchivedSong(c);
     const matchTexto = getSongSearchMatch(c, filtro).matches;
     const matchEtiqueta = filtroEtiqueta ? c.etiquetas?.includes(filtroEtiqueta) : true;
     const matchFavorito = mostrarSoloFavoritos ? misFavoritos.includes(c.id) : true;
-    return matchTexto && matchEtiqueta && matchFavorito;
+    return matchArchive && matchTexto && matchEtiqueta && matchFavorito;
   });
   const medleySearchResults = medleySearch.trim()
-    ? canciones
+    ? activeSongs
       .map(song => ({ song, searchMatch: getSongSearchMatch(song, medleySearch) }))
       .filter(result => result.searchMatch.matches)
       .slice(0, 30)
@@ -238,7 +429,9 @@ const SongList = ({ user }) => {
           </div>
           <div>
             <h1 className="text-3xl font-black text-white tracking-tight">Repertorio</h1>
-            <p className="text-zinc-400 mt-1 text-sm font-medium">{canciones.length} canciones disponibles en la nube.</p>
+            <p className="text-zinc-400 mt-1 text-sm font-medium">
+              {activeSongs.length} canciones activas{archivedSongs.length > 0 ? ` ? ${archivedSongs.length} archivadas` : ''}.
+            </p>
           </div>
         </div>
         
@@ -267,14 +460,19 @@ const SongList = ({ user }) => {
 
       {/* Filtros de Etiquetas */}
       <div className="flex overflow-x-auto gap-2 mb-6 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <button onClick={() => { setFiltroEtiqueta(''); setMostrarSoloFavoritos(false); }} className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border ${filtroEtiqueta === '' && !mostrarSoloFavoritos ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-zinc-900 dark:border-zinc-100' : 'bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
+        <button onClick={() => { setFiltroEtiqueta(''); setMostrarSoloFavoritos(false); setMostrarArchivadas(false); }} className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border ${filtroEtiqueta === '' && !mostrarSoloFavoritos && !mostrarArchivadas ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-zinc-900 dark:border-zinc-100' : 'bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
           Todas
         </button>
-        <button onClick={() => { setFiltroEtiqueta(''); setMostrarSoloFavoritos(true); }} className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border flex items-center gap-1.5 ${mostrarSoloFavoritos ? 'bg-rose-100 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-300 dark:border-rose-500/20' : 'bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
+        <button onClick={() => { setFiltroEtiqueta(''); setMostrarSoloFavoritos(true); setMostrarArchivadas(false); }} className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border flex items-center gap-1.5 ${mostrarSoloFavoritos ? 'bg-rose-100 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-300 dark:border-rose-500/20' : 'bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
           <Heart size={14} className={mostrarSoloFavoritos ? "fill-rose-700 text-rose-700 dark:fill-rose-500 dark:text-rose-500" : ""} /> Mis Favoritas
         </button>
+        {user?.rol !== 'musico' && (
+          <button onClick={() => { setFiltroEtiqueta(''); setMostrarSoloFavoritos(false); setMostrarArchivadas(true); }} className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border flex items-center gap-1.5 ${mostrarArchivadas ? 'bg-amber-100 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-500/20' : 'bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
+            <Archive size={14} /> Archivadas ({archivedSongs.length})
+          </button>
+        )}
         {ETIQUETAS_DISPONIBLES.map(tag => (
-          <button key={tag} onClick={() => { setFiltroEtiqueta(tag); setMostrarSoloFavoritos(false); }} className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border ${filtroEtiqueta === tag && !mostrarSoloFavoritos ? 'bg-violet-100 dark:bg-violet-500/10 text-violet-700 dark:text-violet-400 border-violet-300 dark:border-violet-500/20' : 'bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
+          <button key={tag} onClick={() => { setFiltroEtiqueta(tag); setMostrarSoloFavoritos(false); setMostrarArchivadas(false); }} className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border ${filtroEtiqueta === tag && !mostrarSoloFavoritos && !mostrarArchivadas ? 'bg-violet-100 dark:bg-violet-500/10 text-violet-700 dark:text-violet-400 border-violet-300 dark:border-violet-500/20' : 'bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}>
             {tag}
           </button>
         ))}
@@ -286,12 +484,19 @@ const SongList = ({ user }) => {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {cancionesFiltradas.map(cancion => {
             const searchMatch = getSongSearchMatch(cancion, filtro);
+            const qualityBadges = getSongQualityBadges(cancion);
+            const archived = isArchivedSong(cancion);
             return (
             <div key={cancion.id} className="kp-card p-5 rounded-2xl hover:border-blue-400/40 transition-colors group flex flex-col">
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-bold text-lg text-zinc-900 dark:text-zinc-100 leading-tight">{cancion.titulo}</h3>
                   <p className="text-sm text-zinc-500 font-medium flex items-center gap-1 mt-1"><Mic2 size={14}/> {cancion.artista}</p>
+                  {archived && (
+                    <span className="mt-2 inline-flex rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-500 dark:text-amber-300">
+                      Archivada
+                    </span>
+                  )}
                   {searchMatch.field === 'lyrics' && searchMatch.snippet && (
                     <p className="mt-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] font-bold leading-snug text-emerald-200">
                       Coincide en letra: "{searchMatch.snippet}"
@@ -303,7 +508,23 @@ const SongList = ({ user }) => {
                       {cancion.etiquetas.map(t => <span key={t} className="text-[9px] font-black uppercase tracking-widest bg-violet-50 dark:bg-violet-500/10 text-violet-600 dark:text-violet-400 px-1.5 py-0.5 rounded border border-violet-100 dark:border-violet-500/20">{t}</span>)}
                     </div>
                   )}
-                  <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 mt-2 bg-amber-50 dark:bg-amber-500/10 inline-block px-2 py-0.5 rounded-md border border-amber-100 dark:border-amber-500/20">🗓️ {formatTiempo(lastPlayedMap[cancion.id])}</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {qualityBadges.map(badge => (
+                      <span
+                        key={`${cancion.id}-${badge.label}`}
+                        className={`rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-widest ${
+                          badge.tone === 'success'
+                            ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+                            : badge.tone === 'warning'
+                              ? 'border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300'
+                              : 'border-zinc-500/20 bg-zinc-500/10 text-zinc-500 dark:text-zinc-400'
+                        }`}
+                      >
+                        {badge.label}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 mt-2 bg-amber-50 dark:bg-amber-500/10 inline-block px-2 py-0.5 rounded-md border border-amber-100 dark:border-amber-500/20">{formatTiempo(lastPlayedMap[cancion.id])}</p>
                 </div>
                 <div className="flex flex-col items-end gap-3">
                   <button onClick={(e) => toggleFavorito(cancion.id, e)} className="text-zinc-300 hover:text-rose-500 transition-colors" title="Añadir a Favoritos">
@@ -316,16 +537,29 @@ const SongList = ({ user }) => {
               <div className="mt-auto pt-4 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
                 <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">{cancion.bpm} BPM</span>
                 <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => navigate(`/live/${cancion.id}`)} className="p-1.5 text-zinc-400 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-500/10 rounded-lg transition-colors" title="Abrir Teleprompter (En Vivo)">
-                    <Play size={16} />
-                  </button>
+                  {!archived && (
+                    <button onClick={() => navigate(`/live/${cancion.id}`)} className="p-1.5 text-zinc-400 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-500/10 rounded-lg transition-colors" title="Abrir Teleprompter (En Vivo)">
+                      <Play size={16} />
+                    </button>
+                  )}
                   
                   {user?.rol !== 'musico' && (
                     <>
-                      <button onClick={() => navigate(`/editar/${cancion.id}`)} className="p-1.5 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors" title="Editar">
+                      <button onClick={() => navigate(`/editar/${cancion.id}`, { state: { returnTo: '/canciones' } })} className="p-1.5 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors" title="Editar">
                         <Edit size={16} />
                       </button>
-                      <button onClick={() => handleDelete(cancion.id, cancion.titulo)} className="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors" title="Eliminar"><Trash2 size={16} /></button>
+                      <button onClick={() => handleDuplicateSong(cancion)} disabled={duplicatingSongId === cancion.id} className="p-1.5 text-zinc-400 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-500/10 rounded-lg transition-colors disabled:opacity-50" title="Duplicar cancion">
+                        <Copy size={16} />
+                      </button>
+                      {archived ? (
+                        <button onClick={() => handleRestoreSong(cancion)} className="p-1.5 text-zinc-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-lg transition-colors" title="Restaurar al repertorio">
+                          <RotateCcw size={16} />
+                        </button>
+                      ) : (
+                        <button onClick={() => handleArchiveSong(cancion)} className="p-1.5 text-zinc-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-500/10 rounded-lg transition-colors" title="Archivar cancion">
+                          <Archive size={16} />
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
@@ -346,11 +580,30 @@ const SongList = ({ user }) => {
       {songToDelete && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in">
           <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full mx-4 animate-in zoom-in-95">
-            <h3 className="text-lg font-black text-zinc-900 mb-2">¿Eliminar canción?</h3>
-            <p className="text-zinc-500 text-sm mb-6">¿Estás seguro de que quieres eliminar <b>"{songToDelete.titulo}"</b>? Esta acción no se puede deshacer.</p>
+            <h3 className="text-lg font-black text-zinc-900 mb-2">¿Eliminar cancion?</h3>
+            <p className="text-zinc-500 text-sm mb-6">?Estás seguro de que quieres eliminar <b>"{songToDelete.titulo}"</b>? Esta acción no se puede deshacer.</p>
+            {deleteUsage.length > 0 && (
+              <div className="mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                <p className="text-xs font-black uppercase tracking-widest text-amber-700 dark:text-amber-300">Canción en uso</p>
+                <p className="mt-1 text-sm font-bold text-zinc-700 dark:text-zinc-200">Primero quitala de estos eventos:</p>
+                <div className="mt-3 space-y-2">
+                  {deleteUsage.map(evento => (
+                    <button
+                      key={evento.id}
+                      type="button"
+                      onClick={() => navigate(`/setlist/${evento.id}`)}
+                      className="w-full rounded-xl border border-white/10 bg-white/60 px-3 py-2 text-left text-xs font-bold text-zinc-700 hover:bg-white dark:bg-zinc-950/40 dark:text-zinc-200"
+                    >
+                      <span className="block truncate">{evento.titulo}</span>
+                      {evento.fecha && <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">{evento.fecha}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="flex gap-3 justify-end">
               <button onClick={() => setSongToDelete(null)} className="px-4 py-2.5 text-sm font-bold text-zinc-600 hover:bg-zinc-100 rounded-xl transition-colors">Cancelar</button>
-              <button onClick={confirmarEliminacion} className="px-4 py-2.5 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm shadow-red-200">Sí, eliminar</button>
+              <button onClick={confirmarEliminacion} disabled={isDeletingSong || deleteUsage.length > 0} className="px-4 py-2.5 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm shadow-red-200 disabled:cursor-not-allowed disabled:opacity-50">{isDeletingSong ? 'Verificando...' : 'S?, eliminar'}</button>
             </div>
           </div>
         </div>
@@ -378,7 +631,7 @@ const SongList = ({ user }) => {
                           <span className="min-w-0">
                             <span className="block font-bold text-zinc-800 dark:text-zinc-200 truncate">{c.titulo}</span>
                             <span className="block text-[10px] font-bold text-zinc-500 dark:text-zinc-400 truncate">
-                              {c.artista || 'Sin artista'} · Coincidencia: {searchMatch.field === 'title' ? 'titulo' : searchMatch.field === 'artist' ? 'artista' : searchMatch.field === 'tags' ? 'etiqueta' : 'letra'}
+                              {c.artista || 'Sin artista'} ? Coincidencia: {searchMatch.field === 'title' ? 'titulo' : searchMatch.field === 'artist' ? 'artista' : searchMatch.field === 'tags' ? 'etiqueta' : 'letra'}
                             </span>
                             {searchMatch.field === 'lyrics' && searchMatch.snippet && (
                               <span className="mt-0.5 block line-clamp-2 text-[10px] font-bold leading-snug text-emerald-600 dark:text-emerald-300">
@@ -490,13 +743,9 @@ const SongList = ({ user }) => {
         </div>
       )}
 
-      {/* Toast Notification */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 p-4 rounded-xl shadow-xl text-sm font-bold animate-in slide-in-from-bottom-5 z-50 ${toast.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
-          {toast.message}
-        </div>
-      )}
+      {/* Toast Notification */}
     </div>
   );
 };
 export default SongList;
+

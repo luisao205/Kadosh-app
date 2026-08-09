@@ -131,8 +131,8 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
   const nextDisplaySuffix = nextTextLines.length > nextDisplayLines.length ? '...' : '';
   const prepareSongLabel = nextSong
     ? nextSong
-        .replace(/^ðŸŽµ\s*/i, '')
-        .replace(/^ðŸ“Œ\s*/i, 'Nota: ')
+        .replace(/^🎵\s*/i, '')
+        .replace(/^📌\s*/i, 'Nota: ')
         .replace(/^[^\wÀ-ÿ]+/u, '')
         .trim()
     : 'Final del setlist';

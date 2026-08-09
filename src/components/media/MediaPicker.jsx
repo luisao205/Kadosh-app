@@ -189,10 +189,14 @@ const MediaPicker = ({
                         }`}
                       >
                         <div className="relative aspect-video bg-black">
-                          {media.type === MEDIA_TYPES.VIDEO ? (
-                            <video src={media.url} muted playsInline className="h-full w-full object-cover opacity-70" />
+                          {media.type === MEDIA_TYPES.VIDEO && media.thumbnailUrl ? (
+                            <img src={media.thumbnailUrl} alt={media.title || 'Video multimedia'} loading="lazy" decoding="async" className="h-full w-full object-cover opacity-70" />
+                          ) : media.type === MEDIA_TYPES.VIDEO ? (
+                            <div className="flex h-full items-center justify-center bg-zinc-950 text-zinc-500">
+                              <Icon size={34} />
+                            </div>
                           ) : media.type === MEDIA_TYPES.IMAGE ? (
-                            <img src={media.thumbnailUrl || media.url} alt={media.title} className="h-full w-full object-cover opacity-80" />
+                            <img src={media.thumbnailUrl || media.url} alt={media.title} loading="lazy" decoding="async" className="h-full w-full object-cover opacity-80" />
                           ) : (
                             <div className="flex h-full items-center justify-center text-zinc-500">
                               <Icon size={34} />

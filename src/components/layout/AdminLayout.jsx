@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell, Monitor, Images, Camera } from 'lucide-react';
+import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell, Monitor, Images, Camera, BookOpen } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, signOut } from 'firebase/auth';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { canAccessMediaLibrary } from '../../utils/mediaLibraryPermissions';
+import { canAccessMultimediaTools, canAccessPreachings, canManageTeam } from '../../utils/rolePermissions';
+import { cancelTeamPinExitInvalidation, clearTeamPinAccessState, scheduleTeamPinExitInvalidation } from '../../utils/teamPinAccess';
 
 const AdminLayout = ({ children, user }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -17,18 +19,50 @@ const AdminLayout = ({ children, user }) => {
   const navigate = useNavigate();
   const shouldShowProfilePhotoReminder = !user?.fotoPerfil && !hideProfilePhotoReminder;
 
-  const navItems = [
-    { name: 'Dashboard', path: '/', icon: <Home size={20} /> },
-    { name: 'Repertorio', path: '/canciones', icon: <Music size={20} /> },
-    { name: 'Eventos', path: '/eventos', icon: <Calendar size={20} /> },
-    canAccessMediaLibrary(user) ? { name: 'Biblioteca Multimedia', path: '/biblioteca-multimedia', icon: <Images size={20} className="text-violet-400" /> } : null,
-    { name: 'Controlador Multimedia', path: '/multimedia-hub', icon: <Monitor size={20} className="text-violet-500" /> },
-    { name: 'Mi Perfil', path: '/perfil', icon: <User size={20} /> },
-  ].filter(Boolean);
+  const navGroups = [
+    {
+      label: 'Administracion',
+      items: [
+        { name: 'Inicio', path: '/', section: 'dashboard', icon: <Home size={20} /> },
+        { name: 'Eventos y Setlists', path: '/eventos', section: 'events', icon: <Calendar size={20} /> },
+        canAccessPreachings(user) ? { name: 'Prédicas', path: '/predicas', section: 'preachings', icon: <BookOpen size={20} className="text-amber-400" /> } : null,
+        { name: 'Canciones / Repertorio', path: '/canciones', section: 'songs', icon: <Music size={20} /> },
+        canAccessMediaLibrary(user) ? { name: 'Biblioteca Multimedia', path: '/biblioteca-multimedia', section: 'media-library', icon: <Images size={20} className="text-violet-400" /> } : null,
+      ].filter(Boolean)
+    },
+    {
+      label: 'En vivo',
+      items: [
+        canAccessMultimediaTools(user) ? { name: 'Central Multimedia', path: '/multimedia-hub', section: 'live-control', icon: <Monitor size={20} className="text-violet-500" /> } : null,
+      ].filter(Boolean)
+    },
+    {
+      label: 'Cuenta',
+      items: [
+        canManageTeam(user) ? { name: 'Equipo', path: '/equipo', section: 'team', icon: <Settings size={20} /> } : null,
+        { name: 'Mi Perfil', path: '/perfil', section: 'profile', icon: <User size={20} /> },
+      ].filter(Boolean)
+    }
+  ].filter(group => group.items.length > 0);
+
+  const resolveActiveSection = (pathname) => {
+    if (pathname === '/') return 'dashboard';
+    if (pathname === '/eventos' || pathname.startsWith('/setlist/')) return 'events';
+    if (pathname === '/predicas') return 'preachings';
+    if (pathname === '/canciones' || pathname === '/añadir' || pathname.startsWith('/editar/')) return 'songs';
+    if (pathname === '/biblioteca-multimedia') return 'media-library';
+    if (pathname === '/equipo') return 'team';
+    if (pathname === '/multimedia-hub' || pathname.startsWith('/control-proyector/')) return 'live-control';
+    if (pathname === '/perfil') return 'profile';
+    return '';
+  };
+
+  const activeSection = resolveActiveSection(location.pathname);
 
   const handleLogout = async () => {
     try {
       const auth = getAuth();
+      clearTeamPinAccessState();
       await signOut(auth);
     } catch (error) {
       console.error("Error al cerrar sesión:", error);
@@ -38,6 +72,21 @@ const AdminLayout = ({ children, user }) => {
   useEffect(() => {
     setHideProfilePhotoReminder(false);
   }, [user?.uid, user?.fotoPerfil]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      cancelTeamPinExitInvalidation();
+      return undefined;
+    }
+
+    if (location.pathname === '/equipo') {
+      cancelTeamPinExitInvalidation();
+      return undefined;
+    }
+
+    scheduleTeamPinExitInvalidation();
+    return undefined;
+  }, [location.pathname, user?.uid]);
 
   // Escuchador de Notificaciones en Tiempo Real
   useEffect(() => {
@@ -226,21 +275,26 @@ const AdminLayout = ({ children, user }) => {
             </button>
           </div>
         </div>
-        <nav className="p-4 space-y-2 flex-1 min-h-0 overflow-y-auto">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <Link
-                key={item.name}
-                to={item.path}
-                onClick={() => setIsOpen(false)}
-                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium ${isActive ? 'border border-violet-400/30 bg-violet-500/15 text-violet-100 shadow-[0_12px_35px_rgba(124,58,237,0.16)]' : 'text-zinc-400 hover:bg-white/[0.07] hover:text-zinc-100'}`}
-              >
-                {item.icon}
-                {item.name}
-              </Link>
-            );
-          })}
+        <nav className="p-4 space-y-5 flex-1 min-h-0 overflow-y-auto">
+          {navGroups.map((group) => (
+            <div key={group.label} className="space-y-2">
+              <p className="px-4 text-[10px] font-black uppercase tracking-[0.22em] text-zinc-600">{group.label}</p>
+              {group.items.map((item) => {
+                const isActive = activeSection === item.section;
+                return (
+                  <Link
+                    key={item.name}
+                    to={item.path}
+                    onClick={() => setIsOpen(false)}
+                    className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium ${isActive ? 'border border-violet-400/30 bg-violet-500/15 text-violet-100 shadow-[0_12px_35px_rgba(124,58,237,0.16)]' : 'text-zinc-400 hover:bg-white/[0.07] hover:text-zinc-100'}`}
+                  >
+                    {item.icon}
+                    {item.name}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
         <div className="p-4 border-t border-white/10 shrink-0">
           <button 

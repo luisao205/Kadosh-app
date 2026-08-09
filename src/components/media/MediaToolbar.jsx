@@ -1,11 +1,11 @@
 import React from 'react';
 import { Plus, Search } from 'lucide-react';
 
-const MediaToolbar = ({ total = 0, query, onQueryChange, onAdd }) => (
+const MediaToolbar = ({ total = 0, query, onQueryChange, onAdd, sortBy = 'recent', onSortChange }) => (
   <div className="flex flex-col gap-4 border-b border-white/10 bg-zinc-950/70 p-4 sm:p-5 xl:flex-row xl:items-center xl:justify-between">
     <div className="min-w-0">
       <h1 className="text-2xl font-black tracking-tight text-white">Biblioteca Multimedia</h1>
-      <p className="mt-1 text-sm font-medium text-zinc-400">{total} recursos disponibles para Kadosh</p>
+      <p className="mt-1 text-sm font-medium text-zinc-400">{total} recursos visibles para Kadosh</p>
     </div>
 
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -18,6 +18,16 @@ const MediaToolbar = ({ total = 0, query, onQueryChange, onAdd }) => (
           className="min-w-0 flex-1 bg-transparent text-sm font-bold text-white outline-none placeholder:text-zinc-600"
         />
       </div>
+      <select
+        value={sortBy}
+        onChange={event => onSortChange?.(event.target.value)}
+        className="rounded-2xl border border-white/10 bg-black/35 px-3 py-3 text-xs font-black uppercase tracking-wide text-white outline-none"
+      >
+        <option value="recent">Mas recientes</option>
+        <option value="used">Mas usados</option>
+        <option value="favorites">Favoritos primero</option>
+        <option value="name">Nombre</option>
+      </select>
       <button
         type="button"
         onClick={onAdd}
@@ -33,4 +43,3 @@ const MediaToolbar = ({ total = 0, query, onQueryChange, onAdd }) => (
 );
 
 export default MediaToolbar;
-

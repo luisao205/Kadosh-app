@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { traducirAcorde } from '../../utils/musicCore';
 import { formatEventDate, formatEventTime, parseAppDate } from '../../utils/dateUtils';
 import { getSongSearchMatch } from '../../utils/songSearch';
+import { useFeedback } from '../ui/FeedbackProvider';
 
 const PLANTILLA_NOTAS = `👗 Vestimenta: 
 ⏰ Llegada: 
@@ -15,10 +16,14 @@ const PLANTILLA_NOTAS = `👗 Vestimenta:
 📌 Detalles adicionales:
 - `;
 
+const AREAS_RESPONSABLES = ['Responsable general', 'Alabanza', 'Multimedia', 'Sonido', 'Predicacion', 'Direccion'];
+const DEFAULT_EVENT_DURATION_HOURS = 3;
+
 const EventManagement = ({ user }) => {
   const navigate = useNavigate();
+  const { notify } = useFeedback();
   const [eventos, setEventos] = useState([]);
-  const [canciones, setCanciones] = useState([]);
+  const [canciones, setCanciónes] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -31,8 +36,13 @@ const EventManagement = ({ user }) => {
   const [setlist, setSetlist] = useState([]); // Estructura: [{ idLocal, type: 'song'|'note', value }]
   const [textoNota, setTextoNota] = useState('');
   const [equipoSeleccionado, setEquipoSeleccionado] = useState([]);
-  const [cantantesPorCancion, setCantantesPorCancion] = useState({});
-  const [corosPorCancion, setCorosPorCancion] = useState({});
+  const [cantantesPorCanción, setCantantesPorCanción] = useState({});
+  const [corosPorCanción, setCorosPorCanción] = useState({});
+  const [responsables, setResponsables] = useState({});
+  const [predicadorId, setPredicadorId] = useState('');
+  const [ensayoChecklist, setEnsayoChecklist] = useState({});
+  const [conflictosHorario, setConflictosHorario] = useState([]);
+  const [conflictosConfirmados, setConflictosConfirmados] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showMobileForm, setShowMobileForm] = useState(false);
   
@@ -40,8 +50,7 @@ const EventManagement = ({ user }) => {
   const [editingEventId, setEditingEventId] = useState(null);
   const [estadoAsistenciaActual, setEstadoAsistenciaActual] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [toast, setToast] = useState(null);
+  const [showDropdown, setShowDropdown] = useState(false);
   const [eventToDelete, setEventToDelete] = useState(null);
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
   const [lastPlayedMap, setLastPlayedMap] = useState({});
@@ -52,13 +61,9 @@ const EventManagement = ({ user }) => {
   const [showPlantillasMenu, setShowPlantillasMenu] = useState(false);
   const [showSavePlantillaModal, setShowSavePlantillaModal] = useState(false);
   const [nuevaPlantillaName, setNuevaPlantillaName] = useState('');
+  const showToast = (message, type = 'error') => notify(message, { type });
 
-  const showToast = (message, type = 'error') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
-
-  // Cargar datos en tiempo real (Eventos, Canciones y Usuarios)
+  // Cargar datos en tiempo real (Eventos, Canciónes y Usuarios)
   useEffect(() => {
     const unsubEventos = onSnapshot(collection(db, 'eventos'), (snap) => {
       let data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -72,7 +77,7 @@ const EventManagement = ({ user }) => {
       }); // Ordenar por fecha
       setEventos(data);
 
-      // Calcular la última vez que se tocó cada canción (Idea 4: Anti-Repetición)
+      // Calcular la última vez que se tocó cada cancion (Idea 4: Anti-Repetición)
       const map = {};
       const hoy = new Date();
       data.forEach(ev => {
@@ -92,17 +97,17 @@ const EventManagement = ({ user }) => {
       setLoading(false);
     });
 
-    const unsubCanciones = onSnapshot(collection(db, 'canciones'), (snap) => {
+    const unsubCanciónes = onSnapshot(collection(db, 'canciones'), (snap) => {
       let data = snap.docs.map(doc => {
         const song = doc.data();
         return { id: doc.id, ...song, tono: song.tonoOriginal || song.tono };
       });
       data.sort((a, b) => a.titulo.localeCompare(b.titulo));
-      setCanciones(data);
+      setCanciónes(data);
     });
 
     const unsubUsuarios = onSnapshot(collection(db, 'usuarios'), (snap) => {
-      let data = snap.docs.map(doc => ({ id: doc.id, nombre: doc.data().nombre, instrumentos: doc.data().instrumentos }));
+      let data = snap.docs.map(doc => ({ id: doc.id, nombre: doc.data().nombre, instrumentos: doc.data().instrumentos, rol: doc.data().rol }));
       setUsuarios(data);
     });
 
@@ -110,10 +115,11 @@ const EventManagement = ({ user }) => {
       setPlantillas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    return () => { unsubEventos(); unsubCanciones(); unsubUsuarios(); unsubPlantillas(); };
+    return () => { unsubEventos(); unsubCanciónes(); unsubUsuarios(); unsubPlantillas(); };
   }, []);
 
   const toggleEquipo = (id, rol) => {
+    setConflictosConfirmados(false);
     setEquipoSeleccionado(prev => {
       const isSelected = prev.some(item => 
         (typeof item === 'string' && item === id) || 
@@ -136,7 +142,36 @@ const EventManagement = ({ user }) => {
   };
 
   const removeFromSetlist = (idLocal) => {
+    setEnsayoChecklist(prev => {
+      const next = { ...prev };
+      delete next[idLocal];
+      return next;
+    });
     setSetlist(prev => prev.filter(item => item.idLocal !== idLocal));
+  };
+
+  const getSetlistItemKey = (item) => item?.idLocal || item?.setlistItemId || item?.value;
+
+  const getChecklistForItem = (item, checklist = ensayoChecklist) => {
+    const itemKey = getSetlistItemKey(item);
+    return checklist?.[itemKey] || checklist?.[item?.value] || {};
+  };
+
+  const getSongItemsFromSetlist = (items = setlist) => (items || [])
+    .filter(item => item?.type === 'song')
+    .map((item, index) => ({
+      ...item,
+      idLocal: item.idLocal || `${item.value}_${index}`
+    }));
+
+  const cleanChecklistForSetlist = (checklist = ensayoChecklist, items = setlist) => {
+    const next = {};
+    getSongItemsFromSetlist(items).forEach(item => {
+      const key = getSetlistItemKey(item);
+      const value = getChecklistForItem(item, checklist);
+      if (value && Object.keys(value).length > 0) next[key] = value;
+    });
+    return next;
   };
 
   // Lógica Drag & Drop
@@ -152,7 +187,7 @@ const EventManagement = ({ user }) => {
   };
 
   const handleAsignarCantante = (songId, nombreCantante) => {
-    setCantantesPorCancion(prev => {
+    setCantantesPorCanción(prev => {
       const newCantantes = { ...prev, [songId]: nombreCantante };
       const prevCantante = prev[songId];
 
@@ -186,6 +221,93 @@ const EventManagement = ({ user }) => {
     });
   };
 
+  const getEventWindow = (eventDateValue) => {
+    if (typeof eventDateValue === 'string' && !eventDateValue.includes('T')) return null;
+    const start = parseAppDate(eventDateValue);
+    if (!start) return null;
+    const end = new Date(start.getTime() + DEFAULT_EVENT_DURATION_HOURS * 60 * 60 * 1000);
+    return { start, end };
+  };
+
+  const getAssignedUserIds = (items = []) => [
+    ...new Set((Array.isArray(items) ? items : [])
+      .map(item => typeof item === 'string' ? item : item?.id)
+      .filter(Boolean))
+  ];
+
+  const findScheduleConflicts = () => {
+    const targetWindow = getEventWindow(fecha);
+    if (!targetWindow) return [];
+
+    const assignedIds = getAssignedUserIds(equipoSeleccionado);
+    if (assignedIds.length === 0) return [];
+
+    return eventos
+      .filter(ev => ev.id !== editingEventId && !ev.completado && ev.estado !== 'cancelado')
+      .map(ev => ({ ev, window: getEventWindow(ev.fecha) }))
+      .filter(({ window }) => window && targetWindow.start < window.end && targetWindow.end > window.start)
+      .flatMap(({ ev }) => {
+        const eventAssignedIds = getAssignedUserIds(ev.equipo);
+        return assignedIds
+          .filter(uid => eventAssignedIds.includes(uid))
+          .map(uid => ({
+            uid,
+            usuario: usuarios.find(u => u.id === uid)?.nombre || 'Integrante',
+            eventoId: ev.id,
+            eventoTítulo: ev.titulo || 'Evento sin titulo',
+            fecha: ev.fecha
+          }));
+      });
+  };
+
+  const updateEnsayoChecklist = (songId, patch) => {
+    setEnsayoChecklist(prev => ({
+      ...prev,
+      [songId]: {
+        ...(prev[songId] || {}),
+        ...patch
+      }
+    }));
+  };
+
+  const getEnsayoSummary = (event = { ensayoChecklist, setlist, canciones: [] }) => {
+    const items = event.setlist || (event.canciones || []).map(id => ({ type: 'song', value: id }));
+    const songItems = getSongItemsFromSetlist(items);
+    const checklist = event.ensayoChecklist || {};
+    const readyCount = songItems.filter(item => {
+      const check = getChecklistForItem(item, checklist);
+      return check.repasada && check.tonoConfirmado && check.entradaDefinida && check.finalDefinido;
+    }).length;
+    return { readyCount, total: songItems.length };
+  };
+
+  const getResponsibleNames = (eventResponsables = {}) => (
+    Object.values(groupResponsiblesByPerson(eventResponsables))
+      .map(item => `${item.nombre}: ${item.areas.join(' · ')}`)
+  );
+
+  const resolvePreacherId = (evento = {}) => {
+    if (evento.predicadorId) return evento.predicadorId;
+    if (evento.responsables?.Predicacion) return evento.responsables.Predicacion;
+    if (evento.predicadorAsignado) return evento.predicadorAsignado;
+    if (typeof evento.predicador === 'string') {
+      const byName = usuarios.find(u => u.nombre === evento.predicador);
+      if (byName) return byName.id;
+    }
+    return '';
+  };
+
+  const groupResponsiblesByPerson = (eventResponsables = {}) => {
+    return Object.entries(eventResponsables || {}).reduce((acc, [area, uid]) => {
+      if (!uid) return acc;
+      const responsible = usuarios.find(u => u.id === uid);
+      if (!responsible) return acc;
+      if (!acc[uid]) acc[uid] = { uid, nombre: responsible.nombre, areas: [] };
+      acc[uid].areas.push(area);
+      return acc;
+    }, {});
+  };
+
   const handleCrearEvento = async (e) => {
     e.preventDefault();
     if (!titulo || !fecha) {
@@ -195,6 +317,14 @@ const EventManagement = ({ user }) => {
 
     setIsSaving(true);
     try {
+      const conflicts = findScheduleConflicts();
+      if (conflicts.length > 0 && !conflictosConfirmados) {
+        setConflictosHorario(conflicts);
+        showToast(`Hay ${conflicts.length} conflicto(s) de horario. Revisa y vuelve a guardar si deseas continuar.`, 'error');
+        setIsSaving(false);
+        return;
+      }
+
       const estadoAsistencia = { ...estadoAsistenciaActual };
       
       // Mantenemos la respuesta de los que ya estaban, los nuevos inician pendientes
@@ -202,6 +332,12 @@ const EventManagement = ({ user }) => {
         const uid = typeof item === 'string' ? item : item.id;
         if (!estadoAsistencia[uid]) estadoAsistencia[uid] = 'pendiente';
       });
+
+      const syncedResponsables = {
+        ...responsables,
+        Predicacion: predicadorId || ''
+      };
+      const cleanEnsayoChecklist = cleanChecklistForSetlist(ensayoChecklist, setlist);
 
       const eventData = {
         titulo,
@@ -213,8 +349,11 @@ const EventManagement = ({ user }) => {
         canciones: setlist.filter(i => i.type === 'song').map(i => i.value),
         equipo: equipoSeleccionado,
         estadoAsistencia,
-        cantantesPorCancion,
-        corosPorCancion,
+        cantantesPorCanción,
+        corosPorCanción,
+        responsables: syncedResponsables,
+        predicadorId: predicadorId || '',
+        ensayoChecklist: cleanEnsayoChecklist,
       };
 
       let eventIdParaNotif = editingEventId;
@@ -223,6 +362,8 @@ const EventManagement = ({ user }) => {
         eventData.fechaActualizacion = new Date().toISOString();
         await updateDoc(doc(db, 'eventos', editingEventId), eventData);
       } else {
+        eventData.estado = 'programado';
+        eventData.completado = false;
         eventData.creadoPor = user.nombre;
         eventData.fechaCreacion = new Date().toISOString();
         const newDoc = await addDoc(collection(db, 'eventos'), eventData);
@@ -251,6 +392,8 @@ const EventManagement = ({ user }) => {
       }
 
       showToast(editingEventId ? "¡Evento actualizado exitosamente!" : "¡Evento programado exitosamente!", "success");
+      setConflictosHorario([]);
+      setConflictosConfirmados(false);
       cancelEdit();
       setShowMobileForm(false);
     } catch (error) {
@@ -268,7 +411,12 @@ const EventManagement = ({ user }) => {
   const confirmarEliminacion = async () => {
     if (!eventToDelete) return;
     try {
-      await deleteDoc(doc(db, 'eventos', eventToDelete.id));
+      await updateDoc(doc(db, 'eventos', eventToDelete.id), {
+        estado: 'cancelado',
+        completado: false,
+        canceladoAt: new Date().toISOString(),
+        canceladoPor: user?.uid || null
+      });
       await addDoc(collection(db, 'notificaciones'), {
         titulo: '🚨 Evento Cancelado',
         mensaje: `El evento "${eventToDelete.tituloEvento}" ha sido cancelado por el administrador.`,
@@ -317,8 +465,8 @@ const EventManagement = ({ user }) => {
       } else {
         const cancion = canciones.find(c => c.id === item.value);
         if (cancion) {
-          const cantante = evento.cantantesPorCancion?.[cancion.id];
-          const coros = evento.corosPorCancion?.[cancion.id];
+          const cantante = evento.cantantesPorCanción?.[cancion.id];
+          const coros = evento.corosPorCanción?.[cancion.id];
           let linea = `${songCount}. ${cancion.titulo} (${traducirAcorde(cancion.tonoOriginal || 'C', formatoAcordes, notacion)})`;
           if (cantante) linea += ` - Voz: ${cantante.split(' ')[0]}`;
           if (coros && coros.length > 0) linea += ` - Coros: ${coros.map(c => c.split(' ')[0]).join(', ')}`;
@@ -388,16 +536,21 @@ const EventManagement = ({ user }) => {
     setTipoEvento(evento.tipoEvento || 'Servicio Dominical');
     setNotasGenerales(evento.notas || '');
     setSetlist(evento.setlist || (evento.canciones || []).map(id => ({ idLocal: Date.now().toString() + Math.random(), type: 'song', value: id })));
-    setCantantesPorCancion(evento.cantantesPorCancion || {});
-    setCorosPorCancion(evento.corosPorCancion || {});
+    setCantantesPorCanción(evento.cantantesPorCanción || {});
+    setCorosPorCanción(evento.corosPorCanción || {});
+    setResponsables(evento.responsables || {});
+    setPredicadorId(resolvePreacherId(evento));
+    setEnsayoChecklist(cleanChecklistForSetlist(evento.ensayoChecklist || {}, evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }))));
     setEquipoSeleccionado(evento.equipo || []);
     setEstadoAsistenciaActual(evento.estadoAsistencia || {});
+    setConflictosHorario([]);
+    setConflictosConfirmados(false);
     setShowMobileForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const cancelEdit = () => {
-    setEditingEventId(null); setTitulo(''); setFecha(''); setFechaEnsayo(''); setSetlist([]); setNotasGenerales(PLANTILLA_NOTAS); setEquipoSeleccionado([]); setCantantesPorCancion({}); setCorosPorCancion({}); setEstadoAsistenciaActual({});
+    setEditingEventId(null); setTitulo(''); setFecha(''); setFechaEnsayo(''); setSetlist([]); setNotasGenerales(PLANTILLA_NOTAS); setEquipoSeleccionado([]); setCantantesPorCanción({}); setCorosPorCanción({}); setResponsables({}); setPredicadorId(''); setEnsayoChecklist({}); setEstadoAsistenciaActual({}); setConflictosHorario([]); setConflictosConfirmados(false);
     setShowMobileForm(false);
   };
 
@@ -408,9 +561,16 @@ const EventManagement = ({ user }) => {
     setNotasGenerales(evento.notas || '');
     const oldSetlist = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
     setSetlist(oldSetlist.map(item => ({ ...item, idLocal: Date.now().toString() + Math.random() })));
-    setCantantesPorCancion(evento.cantantesPorCancion || {});
-    setCorosPorCancion(evento.corosPorCancion || {});
+    setCantantesPorCanción(evento.cantantesPorCanción || {});
+    setCorosPorCanción(evento.corosPorCanción || {});
+    setResponsables(evento.responsables || {});
+    setPredicadorId(resolvePreacherId(evento));
+    setEnsayoChecklist({});
     setEquipoSeleccionado(evento.equipo || []);
+    setEstadoAsistenciaActual({});
+    setConflictosHorario([]);
+    setConflictosConfirmados(false);
+    setEditingEventId(null);
     setFecha(''); setFechaEnsayo('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     showToast("Setlist copiado. Ajusta la fecha y guarda.", "success");
@@ -428,6 +588,7 @@ const EventManagement = ({ user }) => {
 
   // Extraer las canciones únicas del setlist para asignar cantantes
   const uniqueSongsInSetlist = [...new Set(setlist.filter(i => i.type === 'song').map(i => i.value))];
+  const setlistSongItems = getSongItemsFromSetlist(setlist);
   const setlistSearchResults = searchTerm.trim()
     ? canciones
       .map(song => ({ song, searchMatch: getSongSearchMatch(song, searchTerm) }))
@@ -437,8 +598,9 @@ const EventManagement = ({ user }) => {
 
   const esAdmin = ['admin', 'dueño'].includes(user?.rol);
 
-  const eventosPendientes = eventos.filter(e => !e.completado);
+  const eventosPendientes = eventos.filter(e => !e.completado && e.estado !== 'cancelado');
   const eventosCompletados = eventos.filter(e => e.completado).reverse(); // Los más recientes completados arriba
+  const eventosCancelados = eventos.filter(e => e.estado === 'cancelado').reverse();
 
   // Componente interno para evitar código duplicado de la tarjeta
   const renderEventoCard = (evento) => {
@@ -446,18 +608,23 @@ const EventManagement = ({ user }) => {
     const horaTexto = formatEventTime(evento.fecha);
     const eventDate = parseAppDate(evento.fecha);
     const now = new Date();
-    const isLiveCandidate = eventDate && !evento.completado && Math.abs(now - eventDate) < 6 * 60 * 60 * 1000;
-    const statusLabel = evento.completado ? 'Finalizado' : !eventDate ? 'Sin fecha' : isLiveCandidate ? 'En vivo' : 'Próximo';
-    const statusClass = evento.completado
-      ? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+    const isCanceled = evento.estado === 'cancelado';
+    const isLiveCandidate = eventDate && !evento.completado && !isCanceled && Math.abs(now - eventDate) < 6 * 60 * 60 * 1000;
+    const statusLabel = isCanceled ? 'Cancelado' : evento.completado ? 'Finalizado' : !eventDate ? 'Sin fecha' : isLiveCandidate ? 'En vivo' : 'Proximo';
+    const statusClass = isCanceled
+      ? 'bg-red-500/10 text-red-300 border-red-500/20'
+      : evento.completado
+        ? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
       : !eventDate
         ? 'bg-amber-500/10 text-amber-300 border-amber-500/25'
         : isLiveCandidate
           ? 'kp-live-badge'
           : 'bg-blue-500/10 text-blue-300 border-blue-500/25';
+    const ensayoSummary = getEnsayoSummary(evento);
+    const responsibleNames = getResponsibleNames(evento.responsables);
 
     return (
-    <div key={evento.id} className={`kp-card p-5 md:p-6 rounded-3xl transition-all flex flex-col md:flex-row gap-4 justify-between items-start md:items-center group hover:border-rose-400/35 ${evento.completado ? 'opacity-70 saturate-50 hover:saturate-100 hover:opacity-100' : ''}`}>
+    <div key={evento.id} className={`kp-card p-5 md:p-6 rounded-3xl transition-all flex flex-col md:flex-row gap-4 justify-between items-start md:items-center group hover:border-rose-400/35 ${evento.completado || isCanceled ? 'opacity-70 saturate-50 hover:saturate-100 hover:opacity-100' : ''}`}>
       <div>
         <div className="flex items-center gap-2 mb-1">
           <span className={`${statusClass} border text-xs font-black uppercase px-2.5 py-1 rounded-lg tracking-wider`}>
@@ -475,18 +642,30 @@ const EventManagement = ({ user }) => {
           </span>
         )}
         <div className="flex gap-4 mt-2 text-sm font-medium text-zinc-500">
-          <span className="flex items-center gap-1"><Music size={14}/> {evento.setlist ? evento.setlist.filter(i => i.type === 'song').length : (evento.canciones?.length || 0)} Canciones</span>
+          <span className="flex items-center gap-1"><Music size={14}/> {evento.setlist ? evento.setlist.filter(i => i.type === 'song').length : (evento.canciones?.length || 0)} Canciónes</span>
           <span className="flex items-center gap-1"><Users size={14}/> {evento.equipo?.length || 0} Convocados</span>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {ensayoSummary.total > 0 && (
+            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-300">
+              Ensayo {ensayoSummary.readyCount}/{ensayoSummary.total}
+            </span>
+          )}
+          {responsibleNames.slice(0, 3).map(item => (
+            <span key={item} className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-violet-300">
+              {item}
+            </span>
+          ))}
         </div>
       </div>
       <div className="flex items-center gap-2 w-full md:w-auto mt-4 md:mt-0 flex-wrap justify-end">
-        <button onClick={() => navigate(`/setlist/${evento.id}`)} className="kp-button-primary flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95">
+        <button onClick={() => navigate(`/setlist/${evento.id}`, { state: { returnTo: '/eventos' } })} className="kp-button-primary flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95">
           <CheckSquare size={16} /> Abrir
         </button>
-        <button onClick={() => navigate(`/control-proyector/${evento.id}`)} className="kp-button-secondary flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95">
+        {!isCanceled && <button onClick={() => navigate(`/control-proyector/${evento.id}`, { state: { returnTo: '/eventos' } })} className="kp-button-secondary flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95">
           <Clock size={16} /> Controlador
-        </button>
-        {!evento.completado && <button onClick={() => handleShareWhatsApp(evento)} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-[#25D366] hover:bg-[#20bd5a] text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95" title="Compartir"><Share2 size={16} /></button>}
+        </button>}
+        {!evento.completado && !isCanceled && <button onClick={() => handleShareWhatsApp(evento)} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-[#25D366] hover:bg-[#20bd5a] text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-all active:scale-95" title="Compartir"><Share2 size={16} /></button>}
         {esAdmin && (
           <>
             <button onClick={() => toggleCompletado(evento)} className={`p-2.5 rounded-xl transition-colors ${evento.completado ? 'text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-500/10 hover:bg-amber-200 dark:hover:bg-amber-500/20' : 'text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 hover:bg-emerald-200 dark:hover:bg-emerald-500/20'}`} title={evento.completado ? 'Reabrir Evento' : 'Marcar como Completado'}>
@@ -494,7 +673,7 @@ const EventManagement = ({ user }) => {
             </button>
             <button onClick={() => handleEditEvent(evento)} className="p-2.5 text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-xl transition-colors" title="Editar Evento"><Edit3 size={18} /></button>
             <button onClick={() => handleDuplicarEvento(evento)} className="p-2.5 text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-xl transition-colors" title="Duplicar Setlist"><Copy size={18} /></button>
-            <button onClick={() => handleDeleteClick(evento.id, evento.titulo)} className="p-2.5 text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-colors" title="Eliminar"><Trash2 size={18} /></button>
+            {!isCanceled && <button onClick={() => handleDeleteClick(evento.id, evento.titulo)} className="p-2.5 text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-colors" title="Cancelar evento"><Trash2 size={18} /></button>}
           </>
         )}
       </div>
@@ -571,13 +750,52 @@ const EventManagement = ({ user }) => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                 <div className="col-span-2 sm:col-span-1">
                   <label className="block text-xs font-black uppercase tracking-wide text-zinc-400 mb-2">Fecha del Evento</label>
-                  <input type="datetime-local" value={fecha} onChange={(e) => setFecha(e.target.value)} className="kp-input w-full p-3 rounded-2xl text-sm" required />
+                  <input type="datetime-local" value={fecha} onChange={(e) => { setFecha(e.target.value); setConflictosConfirmados(false); setConflictosHorario([]); }} className="kp-input w-full p-3 rounded-2xl text-sm" required />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
                   <label className="block text-xs font-black uppercase tracking-wide text-zinc-400 mb-2">Fecha de Ensayo</label>
                   <input type="datetime-local" value={fechaEnsayo} onChange={(e) => setFechaEnsayo(e.target.value)} className="kp-input w-full p-3 rounded-2xl text-sm" />
                 </div>
               </div>
+              <div className="mt-5">
+                <h4 className="mb-3 text-xs font-black uppercase tracking-widest text-zinc-400">Responsables por area</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {AREAS_RESPONSABLES.map(area => (
+                    <label key={area} className="block">
+                      <span className="mb-1 block text-[10px] font-black uppercase tracking-widest text-zinc-500">{area}</span>
+                      <select
+                        value={area === 'Predicacion' ? predicadorId : (responsables[area] || '')}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          if (area === 'Predicacion') setPredicadorId(value);
+                          setResponsables(prev => ({ ...prev, [area]: value }));
+                        }}
+                        className="kp-input w-full p-2.5 rounded-xl text-xs font-bold"
+                      >
+                        <option value="">Sin responsable</option>
+                        {usuarios.map(u => <option key={`${area}-${u.id}`} value={u.id}>{u.nombre}</option>)}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              {conflictosHorario.length > 0 && (
+                <div className="mt-5 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                  <p className="text-xs font-black uppercase tracking-widest text-amber-300">Conflictos de horario detectados</p>
+                  <div className="mt-3 space-y-2">
+                    {conflictosHorario.map((conflict, idx) => (
+                      <div key={`${conflict.uid}-${conflict.eventoId}-${idx}`} className="rounded-xl border border-white/10 bg-black/20 p-3 text-xs font-bold text-zinc-200">
+                        {conflict.usuario} tambien esta asignado en {conflict.eventoTítulo}
+                        <span className="block text-[10px] font-black uppercase tracking-widest text-zinc-500">{formatEventDate(conflict.fecha)} {formatEventTime(conflict.fecha)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <label className="mt-3 flex items-center gap-2 text-xs font-bold text-amber-100">
+                    <input type="checkbox" checked={conflictosConfirmados} onChange={(e) => setConflictosConfirmados(e.target.checked)} className="rounded border-amber-400 bg-zinc-950 text-amber-500 focus:ring-amber-500" />
+                    Entiendo los conflictos y deseo guardar de todas formas
+                  </label>
+                </div>
+              )}
               </section>
               <section className="kp-panel rounded-3xl p-4 md:p-5">
                 <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -706,9 +924,9 @@ const EventManagement = ({ user }) => {
                     }
                     
                     const cantantesDisponibles = usuarios.filter(u => u.instrumentos?.includes('Voz Principal') || u.instrumentos?.includes('Coros'));
-                    const selectedSinger = cantantesPorCancion[songId] || '';
+                    const selectedSinger = cantantesPorCanción[songId] || '';
                     const isSelected = selectedSinger !== '';
-                    const corosAsignados = corosPorCancion[songId] || [];
+                    const corosAsignados = corosPorCanción[songId] || [];
                     const hasTono = isSelected && tonosGuardados[selectedSinger] !== undefined;
                     const tonoFinal = hasTono ? (tonosGuardados[selectedSinger] || c.tono) : null;
                       
@@ -728,7 +946,7 @@ const EventManagement = ({ user }) => {
                         
                         {isSelected && !hasTono && (
                           <p className="text-[10px] text-amber-600 dark:text-amber-400 font-bold bg-amber-50 dark:bg-amber-500/10 p-1.5 rounded border border-amber-100 dark:border-amber-500/20 flex items-center gap-1 mt-1">
-                            <AlertCircle size={12} /> {selectedSinger} no tiene tono registrado en esta canción.
+                            <AlertCircle size={12} /> {selectedSinger} no tiene tono registrado en esta cancion.
                           </p>
                           )}
                           {isSelected && hasTono && (
@@ -738,7 +956,7 @@ const EventManagement = ({ user }) => {
                         )}
                         
                         <div className="mt-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
-                          <p className="text-[10px] font-bold text-zinc-500 mb-1.5 flex items-center gap-1">🎤 Asignar Coros a esta canción:</p>
+                          <p className="text-[10px] font-bold text-zinc-500 mb-1.5 flex items-center gap-1">🎤 Asignar Coros a esta cancion:</p>
                           <div className="flex flex-wrap gap-1.5">
                             {cantantesDisponibles.map(cor => {
                               const isCoroSelected = corosAsignados.includes(cor.nombre);
@@ -747,7 +965,7 @@ const EventManagement = ({ user }) => {
                                   key={`${songId}-${cor.id}-coro`}
                                   type="button"
                                   onClick={() => {
-                                    setCorosPorCancion(prev => {
+                                    setCorosPorCanción(prev => {
                                       const corosActuales = prev[songId] || [];
                                       const nuevosCoros = corosActuales.includes(cor.nombre) ? corosActuales.filter(n => n !== cor.nombre) : [...corosActuales, cor.nombre];
                                       // Convocatoria automática al equipo
@@ -777,6 +995,59 @@ const EventManagement = ({ user }) => {
                     })}
                   </div>
                 </div>
+              )}
+
+              {setlistSongItems.length > 0 && (
+                <section className="kp-panel rounded-3xl p-4 md:p-5">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-black uppercase tracking-wider text-zinc-100">Checklist de ensayo</h3>
+                      <p className="text-xs font-medium text-zinc-500">El estado pertenece solo a este evento.</p>
+                    </div>
+                    {(() => {
+                      const summary = getEnsayoSummary({ setlist, ensayoChecklist });
+                      return <span className="kp-badge rounded-full px-3 py-1 text-[10px] font-black uppercase">{summary.readyCount} de {summary.total} listas</span>;
+                    })()}
+                  </div>
+                  <div className="space-y-3">
+                    {setlistSongItems.map((item, itemIndex) => {
+                      const songId = item.value;
+                      const itemKey = getSetlistItemKey(item);
+                      const song = canciones.find(c => c.id === songId);
+                      const check = getChecklistForItem(item);
+                      return (
+                        <div key={`ensayo-${itemKey}`} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                          <p className="mb-3 text-sm font-black text-zinc-100">{itemIndex + 1}. {song?.titulo || 'Canción'}</p>
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                            {[
+                              ['repasada', 'Repasada'],
+                              ['tonoConfirmado', 'Tono confirmado'],
+                              ['entradaDefinida', 'Entrada definida'],
+                              ['finalDefinido', 'Final definido']
+                            ].map(([key, label]) => (
+                              <label key={`${songId}-${key}`} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px] font-bold ${check[key] ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/5 text-zinc-400'}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(check[key])}
+                                  onChange={(e) => updateEnsayoChecklist(itemKey, { [key]: e.target.checked })}
+                                  className="rounded border-zinc-600 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
+                                />
+                                {label}
+                              </label>
+                            ))}
+                          </div>
+                          <input
+                            type="text"
+                            value={check.observaciones || ''}
+                            onChange={(e) => updateEnsayoChecklist(itemKey, { observaciones: e.target.value })}
+                            placeholder="Observaciones de ensayo..."
+                            className="kp-input mt-3 w-full rounded-xl p-2.5 text-xs"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               )}
 
               {/* Selector de Equipo */}
@@ -876,6 +1147,20 @@ const EventManagement = ({ user }) => {
                   {showCompletados && (
                     <div className="mt-4 space-y-4 animate-in slide-in-from-top-2">
                       {eventosCompletados.map(evento => renderEventoCard(evento))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {eventosCancelados.length > 0 && (
+                <div className="mt-8 pt-6 border-t border-zinc-200 dark:border-zinc-800">
+                  <button onClick={() => setShowCompletados(!showCompletados)} className="kp-panel flex items-center justify-between w-full p-4 rounded-2xl transition-colors text-zinc-300 font-bold active:scale-[0.99]">
+                    <span className="flex items-center gap-2"><X size={20} className="text-red-500"/> Historial: Eventos Cancelados ({eventosCancelados.length})</span>
+                    {showCompletados ? <ChevronUp size={20}/> : <ChevronDown size={20}/>}
+                  </button>
+                  {showCompletados && (
+                    <div className="mt-4 space-y-4 animate-in slide-in-from-top-2">
+                      {eventosCancelados.map(evento => renderEventoCard(evento))}
                     </div>
                   )}
                 </div>

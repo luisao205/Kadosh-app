@@ -5,7 +5,9 @@ export const uploadToCloudinary = async (file, folder = 'kadosh/backgrounds') =>
   if (!file) throw new Error('No file provided');
 
   const isVideo = file.type?.startsWith('video/');
-  const resourceType = isVideo ? 'video' : 'image';
+  const isAudio = file.type?.startsWith('audio/');
+  const isRaw = file.type === 'application/pdf';
+  const resourceType = isVideo || isAudio ? 'video' : isRaw ? 'raw' : 'image';
   const formData = new FormData();
   formData.append('file', file);
   formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
@@ -24,6 +26,12 @@ export const uploadToCloudinary = async (file, folder = 'kadosh/backgrounds') =>
   return {
     url: data.secure_url,
     type: data.resource_type || resourceType,
-    publicId: data.public_id || null
+    publicId: data.public_id || null,
+    thumbnailUrl: data.thumbnail_url || (resourceType === 'image' ? data.secure_url : ''),
+    bytes: data.bytes || null,
+    width: data.width || null,
+    height: data.height || null,
+    duration: data.duration || null,
+    format: data.format || null
   };
 };

@@ -1,16 +1,19 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, onSnapshot, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
-import { Save, ArrowLeft, Edit3, AlertCircle, Play, Pause, Volume2, Volume1, VolumeX, X, Library, Video, Link as LinkIcon, FileText as FileIcon, Upload, Trash2, SlidersHorizontal, Headphones, Monitor, Image as ImageIcon, RefreshCw } from 'lucide-react';
-import { detectarTonoDesdeAcordes, traducirAcorde } from '../../utils/musicCore';
+import { Save, ArrowLeft, Edit3, AlertCircle, X } from 'lucide-react';
+import { detectarTonoDesdeAcordes } from '../../utils/musicCore';
 import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
-import { isVideoMediaUrl } from '../../utils/mediaUtils';
 import { parsearCancion } from '../../utils/songParser';
-import MediaPicker from '../media/MediaPicker';
-import { MEDIA_LIBRARY_COLLECTION, createMediaReference } from '../../utils/mediaLibrary';
-import { getMediaTypeLabel } from '../media/mediaDisplay';
+import { MEDIA_LIBRARY_COLLECTION, MEDIA_PROVIDERS, createMediaReference, detectMediaProvider, detectMediaTypeFromUrl } from '../../utils/mediaLibrary';
+import { calculateMediaUsageFields, createOrReuseMediaLibraryResource } from '../../utils/mediaLibraryFirestoreSync';
+import { getSongQualityBadges } from '../../utils/songQuality';
+import SectionMediaManager from './SectionMediaManager';
+import SongMetadataForm from './SongMetadataForm';
+import SongResourcesPanel from './SongResourcesPanel';
+import { useFeedback } from '../ui/FeedbackProvider';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const INSTRUMENTOS_RECURSOS = ['General', 'Voz Principal', 'Coros', 'Batería', 'Piano', 'Bajo', 'Guitarra Acústica', 'Guitarra Eléctrica', 'Percusión'];
@@ -24,18 +27,53 @@ const normalizeKey = (value, fallback = 'C') => {
 };
 
 const getSectionKey = (section, index) => {
-  const title = String(section?.titulo || 'seccion')
+  const title = String(section?.titulo || 'sección')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'seccion';
+    .replace(/^-+|-+$/g, '') || 'sección';
   return `${index}_${title}`;
 };
+
+const sortObjectKeys = (value) => {
+  if (Array.isArray(value)) return value.map(sortObjectKeys);
+  if (!value || typeof value !== 'object') return value;
+  return Object.keys(value).sort().reduce((acc, key) => {
+    acc[key] = sortObjectKeys(value[key]);
+    return acc;
+  }, {});
+};
+
+const normalizeEditableSongState = (state = {}) => ({
+  titulo: String(state.titulo || '').trim(),
+  artista: String(state.artista || '').trim(),
+  bpm: Number(state.bpm) || 0,
+  tonoOriginal: normalizeKey(state.tonoOriginal || state.tono || ''),
+  etiquetas: Array.isArray(state.etiquetas) ? [...state.etiquetas] : [],
+  recursos: sortObjectKeys(Array.isArray(state.recursos) ? state.recursos : []),
+  multitracks: sortObjectKeys(Array.isArray(state.multitracks) ? state.multitracks : []),
+  sectionMedia: sortObjectKeys(state.sectionMedia && typeof state.sectionMedia === 'object' ? state.sectionMedia : {}),
+  tonosCantantes: sortObjectKeys(state.tonosCantantes && typeof state.tonosCantantes === 'object' ? state.tonosCantantes : {}),
+  letraRaw: String(state.letraRaw || ''),
+  audioUrl: String(state.audioUrl || ''),
+  audioFile: state.audioFile ? {
+    name: state.audioFile.name || '',
+    size: state.audioFile.size || 0,
+    type: state.audioFile.type || ''
+  } : null,
+  youtubeUrl: String(state.youtubeUrl || ''),
+  fondoUrl: String(state.fondoUrl || '')
+});
+
+const stringifySongState = (state) => JSON.stringify(normalizeEditableSongState(state));
 
 const EditSong = ({ user }) => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = location.state?.returnTo || '/canciones';
+  const { notify } = useFeedback();
 
   const [titulo, setTitulo] = useState('');
   const [artista, setArtista] = useState('');
@@ -62,13 +100,11 @@ const EditSong = ({ user }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [showExample, setShowExample] = useState(false);
   const [showSingerModal, setShowSingerModal] = useState(false);
-  const [showSectionMediaModal, setShowSectionMediaModal] = useState(false);
-  const [showSectionMediaPicker, setShowSectionMediaPicker] = useState(false);
-  const [selectedSectionMediaIndex, setSelectedSectionMediaIndex] = useState(0);
-  const [sectionMediaPickerTarget, setSectionMediaPickerTarget] = useState(null);
-  const [toast, setToast] = useState(null);
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
+  const [isSavingAndExiting, setIsSavingAndExiting] = useState(false);
 
   const audioRef = useRef(null);
+  const initialSongStateRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -79,11 +115,25 @@ const EditSong = ({ user }) => {
   const notacion = user?.preferencias?.notacion || 'sharps';
   const detectedKey = useMemo(() => detectarTonoDesdeAcordes(letraRaw), [letraRaw]);
   const parsedSections = useMemo(() => parsearCancion(letraRaw), [letraRaw]);
-
-  const showToast = (message, type = 'error') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
+  const currentEditableState = useMemo(() => ({
+    titulo,
+    artista,
+    bpm,
+    tonoOriginal: tono,
+    etiquetas,
+    recursos,
+    multitracks,
+    sectionMedia,
+    tonosCantantes,
+    letraRaw,
+    audioUrl,
+    audioFile,
+    youtubeUrl,
+    fondoUrl
+  }), [titulo, artista, bpm, tono, etiquetas, recursos, multitracks, sectionMedia, tonosCantantes, letraRaw, audioUrl, audioFile, youtubeUrl, fondoUrl]);
+  const currentEditableSnapshot = useMemo(() => stringifySongState(currentEditableState), [currentEditableState]);
+  const isDirty = Boolean(initialSongStateRef.current && initialSongStateRef.current !== currentEditableSnapshot);
+  const showToast = (message, type = 'error') => notify(message, { type });
 
   // Cargar cantantes desde el equipo
   useEffect(() => {
@@ -95,7 +145,7 @@ const EditSong = ({ user }) => {
     return () => unsub();
   }, []);
 
-  // Cargar los datos de la canción al abrir la pantalla
+  // Cargar los datos de la cancion al abrir la pantalla
   useEffect(() => {
     const fetchSong = async () => {
       try {
@@ -123,19 +173,62 @@ const EditSong = ({ user }) => {
               if (name) parsed[name.trim()] = (key || '').trim();
             });
             setTonosCantantes(parsed);
+            initialSongStateRef.current = stringifySongState({
+              titulo: data.titulo || '',
+              artista: data.artista || '',
+              bpm: data.bpm || '',
+              tonoOriginal: data.tonoOriginal || '',
+              etiquetas: data.etiquetas || [],
+              multitracks: data.multitracks || [],
+              recursos: data.recursos || [],
+              sectionMedia: data.sectionMedia || {},
+              tonosCantantes: parsed,
+              letraRaw: data.letraRaw || '',
+              audioUrl: data.audioUrl || '',
+              audioFile: null,
+              youtubeUrl: data.youtubeUrl || '',
+              fondoUrl: data.fondoUrl || ''
+            });
+          } else {
+            initialSongStateRef.current = stringifySongState({
+              titulo: data.titulo || '',
+              artista: data.artista || '',
+              bpm: data.bpm || '',
+              tonoOriginal: data.tonoOriginal || '',
+              etiquetas: data.etiquetas || [],
+              multitracks: data.multitracks || [],
+              recursos: data.recursos || [],
+              sectionMedia: data.sectionMedia || {},
+              tonosCantantes: {},
+              letraRaw: data.letraRaw || '',
+              audioUrl: data.audioUrl || '',
+              audioFile: null,
+              youtubeUrl: data.youtubeUrl || '',
+              fondoUrl: data.fondoUrl || ''
+            });
           }
         } else {
-          showToast("La canción no existe");
-          setTimeout(() => navigate('/canciones'), 1500);
+          showToast("La cancion no existe");
+          setTimeout(() => navigate(returnTo), 1500);
         }
       } catch (error) {
-        console.error("Error al cargar la canción:", error);
+        console.error("Error al cargar la cancion:", error);
       } finally {
         setIsLoading(false);
       }
     };
     fetchSong();
   }, [id, navigate]);
+
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isDirty]);
 
   const toggleAudio = () => {
     if (audioRef.current) {
@@ -196,7 +289,7 @@ const EditSong = ({ user }) => {
     // Notificación por Instrumento
     addDoc(collection(db, 'notificaciones'), {
       titulo: `Recurso de ${nuevoRecurso.instrumento || 'General'}`,
-      mensaje: `Se añadió un nuevo recurso en la canción "${titulo}".`,
+      mensaje: `Se añadió un nuevo recurso en la cancion "${titulo}".`,
       destinatarios: nuevoRecurso.instrumento === 'General' ? ['all'] : [nuevoRecurso.instrumento],
       emisorId: user?.uid,
       fechaCreacion: new Date().toISOString()
@@ -218,17 +311,11 @@ const EditSong = ({ user }) => {
 
   const buildSectionMediaUsage = (sectionKey, sectionTitle) => ({
     songId: id,
-    songTitle: titulo || 'Cancion sin titulo',
+    songTitle: titulo || 'Canción sin titulo',
     location: 'section',
     sectionKey,
     sectionTitle: sectionTitle || sectionKey
   });
-
-  const sameMediaUsage = (usageA = {}, usageB = {}) => (
-    usageA.songId === usageB.songId
-    && usageA.location === usageB.location
-    && (usageA.sectionKey || '') === (usageB.sectionKey || '')
-  );
 
   const updateMediaLibraryUsage = async (mediaResource, usage, action = 'add') => {
     const mediaId = mediaResource?.mediaId || mediaResource?.id;
@@ -240,19 +327,11 @@ const EditSong = ({ user }) => {
       if (!mediaSnap.exists()) return;
 
       const data = mediaSnap.data() || {};
-      const currentUsedBy = Array.isArray(data.usedBy) ? data.usedBy : [];
-      const nextUsedBy = action === 'remove'
-        ? currentUsedBy.filter(item => !sameMediaUsage(item, usage))
-        : [
-            ...currentUsedBy.filter(item => !sameMediaUsage(item, usage)),
-            usage
-          ];
+      const usageFields = calculateMediaUsageFields(data.usedBy, usage, action);
 
       await updateDoc(mediaRef, {
-        usedBy: nextUsedBy,
-        usageCount: nextUsedBy.length,
-        lastUsedAt: action === 'remove' ? (nextUsedBy.length ? Date.now() : null) : Date.now(),
-        updatedAt: Date.now()
+        ...usageFields,
+        firstUsedAt: data.firstUsedAt || usageFields.firstUsedAt
       });
     } catch (error) {
       console.error('Error actualizando uso de mediaLibrary:', error);
@@ -271,15 +350,9 @@ const EditSong = ({ user }) => {
     createdAt: new Date().toISOString()
   });
 
-  const openSectionMediaPicker = (sectionKey, sectionTitle, replaceResourceId = null) => {
-    setSectionMediaPickerTarget({ sectionKey, sectionTitle, replaceResourceId });
-    setShowSectionMediaPicker(true);
-  };
+  const handleSelectLibrarySectionMedia = async ({ sectionKey, sectionTitle, replaceResourceId = null, media }) => {
+    if (!sectionKey || !media) return;
 
-  const handleSelectLibrarySectionMedia = async (media) => {
-    if (!sectionMediaPickerTarget || !media) return;
-
-    const { sectionKey, sectionTitle, replaceResourceId } = sectionMediaPickerTarget;
     const usage = buildSectionMediaUsage(sectionKey, sectionTitle);
     const nextResource = createSectionMediaReference(media, 1);
     const previousResource = replaceResourceId
@@ -298,35 +371,63 @@ const EditSong = ({ user }) => {
     }
     await updateMediaLibraryUsage({ ...nextResource, id: nextResource.mediaId }, usage, 'add');
 
-    setShowSectionMediaPicker(false);
-    setSectionMediaPickerTarget(null);
-    showToast('Recurso de Biblioteca asignado a la seccion.', 'success');
+    showToast('Recurso de Biblioteca asignado a la sección.', 'success');
   };
 
-  const addSectionMediaResource = (sectionKey) => {
+  const addSectionMediaResource = async (sectionKey, sectionTitle = sectionKey) => {
     const draft = getSectionDraft(sectionKey);
     if (!draft.title || !draft.url) {
-      showToast("Titulo y URL son obligatorios para el recurso de seccion.");
+      showToast("Título y URL son obligatorios para el recurso de sección.");
       return;
     }
 
-    const resource = {
-      id: Date.now().toString(),
-      title: draft.title.trim(),
-      type: draft.type || 'link',
-      url: draft.url.trim(),
-      source: 'url',
-      createdAt: new Date().toISOString()
-    };
+    showToast("Agregando URL a Biblioteca...", "info");
+    setIsSaving(true);
+    try {
+      const url = draft.url.trim();
+      const usage = buildSectionMediaUsage(sectionKey, sectionTitle);
+      const now = Date.now();
+      const mediaType = draft.type && draft.type !== 'link' ? draft.type : detectMediaTypeFromUrl(url);
+      const { media } = await createOrReuseMediaLibraryResource({
+        title: draft.title.trim(),
+        type: mediaType,
+        url,
+        thumbnailUrl: '',
+        provider: detectMediaProvider(url),
+        source: 'url',
+        category: 'Secciones',
+        metadata: {
+          mimeType: null,
+          thumbnail: null
+        }
+      }, {
+        firestore: db,
+        now,
+        userId: user?.uid || null,
+        usage
+      });
 
-    setSectionMedia(prev => ({
-      ...prev,
-      [sectionKey]: [...(prev[sectionKey] || []), resource]
-    }));
-    setSectionMediaDrafts(prev => ({ ...prev, [sectionKey]: { title: '', type: 'link', url: '' } }));
+      const resource = createSectionMediaReference({
+        ...media,
+        id: media.id,
+        mediaId: media.mediaId || media.id
+      });
+
+      setSectionMedia(prev => ({
+        ...prev,
+        [sectionKey]: [...(prev[sectionKey] || []), resource]
+      }));
+      setSectionMediaDrafts(prev => ({ ...prev, [sectionKey]: { title: '', type: 'link', url: '' } }));
+      showToast("URL agregada a Biblioteca y asignada a la sección.", "success");
+    } catch (error) {
+      console.error("Error agregando URL a mediaLibrary:", error);
+      showToast("Error al agregar la URL a Biblioteca Multimedia.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const uploadSectionMediaResource = async (sectionKey, file) => {
+  const uploadSectionMediaResource = async (sectionKey, file, sectionTitle = sectionKey) => {
     if (!file) return;
     const draft = getSectionDraft(sectionKey);
     const fileType = file.type?.startsWith('video/')
@@ -339,38 +440,54 @@ const EditSong = ({ user }) => {
             ? 'image'
             : 'link';
 
-    showToast("Subiendo recurso de seccion...", "info");
+    showToast("Subiendo recurso de sección...", "info");
     setIsSaving(true);
     try {
-      let url = '';
-      if (fileType === 'image' || fileType === 'video') {
-        const uploaded = await uploadToCloudinary(file, 'kadosh/section-media');
-        url = uploaded.url;
-      } else {
-        const storage = getStorage();
-        const mediaRef = ref(storage, `section-media/${Date.now()}_${file.name}`);
-        await uploadBytes(mediaRef, file);
-        url = await getDownloadURL(mediaRef);
-      }
-
-      const resource = {
-        id: Date.now().toString(),
-        title: (draft.title || file.name).trim(),
+      const uploaded = await uploadToCloudinary(file, 'kadosh/section-media');
+      const usage = buildSectionMediaUsage(sectionKey, sectionTitle);
+      const now = Date.now();
+      const mediaTitle = (draft.title || file.name).trim();
+      const { media } = await createOrReuseMediaLibraryResource({
+        title: mediaTitle,
         type: fileType,
-        url,
+        url: uploaded.url,
+        thumbnailUrl: uploaded.thumbnailUrl || '',
+        provider: MEDIA_PROVIDERS.CLOUDINARY,
         source: 'upload',
-        createdAt: new Date().toISOString()
-      };
+        folder: 'kadosh/section-media',
+        category: 'Secciones',
+        cloudinaryPublicId: uploaded.publicId,
+        cloudinaryResourceType: uploaded.type,
+        metadata: {
+          size: uploaded.bytes || file.size || null,
+          mimeType: file.type || null,
+          width: uploaded.width || null,
+          height: uploaded.height || null,
+          duration: uploaded.duration || null,
+          thumbnail: uploaded.thumbnailUrl || null
+        }
+      }, {
+        firestore: db,
+        now,
+        userId: user?.uid || null,
+        usage
+      });
+
+      const resource = createSectionMediaReference({
+        ...media,
+        id: media.id,
+        mediaId: media.mediaId || media.id
+      });
 
       setSectionMedia(prev => ({
         ...prev,
         [sectionKey]: [...(prev[sectionKey] || []), resource]
       }));
       setSectionMediaDrafts(prev => ({ ...prev, [sectionKey]: { title: '', type: 'link', url: '' } }));
-      showToast("Recurso de seccion agregado.", "success");
+      showToast("Recurso subido a Biblioteca y asignado a la sección.", "success");
     } catch (err) {
-      console.error("Error subiendo recurso de seccion:", err);
-      showToast("Error al subir el recurso de seccion.");
+      console.error("Error subiendo recurso de sección:", err);
+      showToast("Error al subir el recurso de sección.");
     } finally {
       setIsSaving(false);
     }
@@ -411,7 +528,7 @@ const EditSong = ({ user }) => {
       showToast("¡PDF adjuntado exitosamente!", "success");
       addDoc(collection(db, 'notificaciones'), {
         titulo: `Partitura PDF Añadida`,
-        mensaje: `Se subió un PDF para la canción "${titulo}".`,
+        mensaje: `Se subió un PDF para la cancion "${titulo}".`,
         destinatarios: ['all'],
         emisorId: user?.uid,
         fechaCreacion: new Date().toISOString()
@@ -475,7 +592,15 @@ const EditSong = ({ user }) => {
     }
   };
 
-  const handleSave = async () => {
+  const requestExit = () => {
+    if (isDirty) {
+      setShowUnsavedModal(true);
+      return;
+    }
+    navigate(returnTo);
+  };
+
+  const handleSave = async ({ navigateOnSuccess = true } = {}) => {
     if (!titulo || !letraRaw) {
       showToast("El título y la letra son obligatorios.");
       return;
@@ -499,7 +624,7 @@ const EditSong = ({ user }) => {
         .join(', ');
 
       const docRef = doc(db, 'canciones', id);
-      await updateDoc(docRef, {
+      const savedData = {
         titulo,
         artista,
         tonoOriginal: tonoNormalizado,
@@ -514,25 +639,49 @@ const EditSong = ({ user }) => {
         youtubeUrl,
         fondoUrl,
         fechaActualizacion: new Date().toISOString()
-      });
+      };
+      await updateDoc(docRef, savedData);
 
       if (stemsNuevosCount > 0) {
         await addDoc(collection(db, 'notificaciones'), {
           titulo: `🎶 Pistas Actualizadas: ${titulo}`,
-          mensaje: `Se han añadido ${stemsNuevosCount} pistas/secuencias nuevas a esta canción.`,
+          mensaje: `Se han añadido ${stemsNuevosCount} pistas/secuencias nuevas a esta cancion.`,
           destinatarios: ['all'],
           emisorId: user?.uid,
           fechaCreacion: new Date().toISOString()
         });
       }
 
+      setAudioUrl(newAudioUrl);
+      setAudioFile(null);
+      setStemsNuevosCount(0);
+      initialSongStateRef.current = stringifySongState({
+        ...savedData,
+        tonosCantantes,
+        audioFile: null
+      });
+
       showToast("¡Canción actualizada exitosamente!", "success");
-      setTimeout(() => navigate('/canciones'), 1500); // Volver al repertorio tras leer el mensaje
+      if (navigateOnSuccess) {
+        setTimeout(() => navigate(returnTo), 1500); // Volver al origen tras leer el mensaje
+      }
+      return true;
     } catch (error) {
       console.error("Error al actualizar en Firebase:", error);
-      showToast("Error al actualizar la canción.");
+      showToast("Error al actualizar la cancion.");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleSaveAndExit = async () => {
+    if (isSaving || isSavingAndExiting) return;
+    setIsSavingAndExiting(true);
+    try {
+      const saved = await handleSave({ navigateOnSuccess: true });
+      if (saved === true) setShowUnsavedModal(false);
+    } finally {
+      setIsSavingAndExiting(false);
     }
   };
 
@@ -546,7 +695,7 @@ const EditSong = ({ user }) => {
   };
 
   if (isLoading) {
-    return <div className="flex justify-center items-center h-64 text-zinc-500 font-bold animate-pulse">Cargando canción...</div>;
+    return <div className="flex justify-center items-center h-64 text-zinc-500 font-bold animate-pulse">Cargando cancion...</div>;
   }
 
   if (user?.rol === 'musico') {
@@ -561,6 +710,14 @@ const EditSong = ({ user }) => {
 
   // Juntamos los cantantes activos con los que ya estaban guardados por si alguno se eliminó del equipo
   const allSingers = Array.from(new Set([...cantantesDisponibles, ...Object.keys(tonosCantantes)]));
+  const qualityBadges = getSongQualityBadges({
+    titulo,
+    tonoOriginal: tono,
+    letraRaw,
+    recursos,
+    sectionMedia,
+    fondoUrl
+  });
 
   return (
     <div className="max-w-5xl mx-auto animate-in fade-in duration-500">
@@ -574,250 +731,131 @@ const EditSong = ({ user }) => {
           <p className="text-zinc-400 mt-1 text-sm font-medium">Gestiona contenido, tonos, pistas de audio y recursos de ensayo.</p>
           </div>
         </div>
-        <button onClick={() => navigate('/canciones')} className="kp-button-secondary flex w-full md:w-auto justify-center items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors active:scale-95">
+        <button onClick={requestExit} className="kp-button-secondary flex w-full md:w-auto justify-center items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors active:scale-95">
           <ArrowLeft size={16} />
-          Volver al Repertorio
+          Volver
         </button>
       </header>
+
+      <div className={`mb-5 flex flex-wrap items-center justify-between gap-3 rounded-3xl border p-4 ${
+        isDirty
+          ? 'border-amber-500/25 bg-amber-500/10 text-amber-100'
+          : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-100'
+      }`}>
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.2em]">
+            {isDirty ? 'Cambios sin guardar' : 'Todos los cambios guardados'}
+          </p>
+          <p className="mt-1 text-xs font-semibold opacity-80">
+            {isDirty
+              ? 'Guarda antes de salir para no perder los cambios de esta cancion.'
+              : 'El contenido actual coincide con la ultima version guardada.'}
+          </p>
+        </div>
+        {isDirty && (
+          <button
+            type="button"
+            onClick={() => handleSave({ navigateOnSuccess: false })}
+            disabled={isSaving}
+            className="rounded-2xl bg-amber-500 px-4 py-2.5 text-xs font-black uppercase tracking-wide text-zinc-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? 'Guardando...' : 'Guardar ahora'}
+          </button>
+        )}
+      </div>
+
+      <div className="mb-8 flex flex-wrap items-center gap-2 rounded-3xl border border-white/10 bg-zinc-950/35 p-4">
+        <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Estado de calidad</span>
+        {qualityBadges.map(badge => (
+          <span
+            key={badge.label}
+            className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
+              badge.tone === 'success'
+                ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+                : badge.tone === 'warning'
+                  ? 'border-amber-500/20 bg-amber-500/10 text-amber-300'
+                  : 'border-zinc-500/20 bg-zinc-500/10 text-zinc-400'
+            }`}
+          >
+            {badge.label}
+          </span>
+        ))}
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Metadatos */}
         <div className="kp-card p-6 rounded-3xl h-fit grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Título de la Canción</label>
-              <input type="text" value={titulo} onChange={(e)=>setTitulo(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Artista / Banda</label>
-              <input type="text" value={artista} onChange={(e)=>setArtista(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" />
-            </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Tono Original</label>
-              <select value={TONOS_DISPONIBLES.includes(tono) ? tono : ''} onChange={(e)=>setTono(e.target.value || tono)} className="kp-input w-full p-2.5 rounded-xl text-sm font-bold">
-                {!TONOS_DISPONIBLES.includes(tono) && <option value="">{tono || 'Seleccionar'}</option>}
-                {TONOS_DISPONIBLES.map(key => <option key={key} value={key}>{key}</option>)}
-              </select>
-              {detectedKey && detectedKey.tono !== normalizeKey(tono) && (
-                <div className="mt-2 rounded-xl border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 p-2 text-xs text-emerald-800 dark:text-emerald-200">
-                  <p className="font-bold">
-                    Tono detectado: <span className="font-black">{traducirAcorde(detectedKey.tono, formatoAcordes, notacion)}</span>
-                    {detectedKey.ambiguo ? ' (probable)' : ''}
-                  </p>
-                  <button type="button" onClick={() => setTono(detectedKey.tono)} className="mt-1 text-[11px] font-black uppercase text-emerald-700 dark:text-emerald-300 underline underline-offset-2">
-                    Usar como tono original
-                  </button>
-                </div>
-              )}
-            </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1 flex justify-between items-end">
-                <span>Tonos por Cantante</span>
-                <button type="button" onClick={() => setShowSingerModal(true)} className="text-blue-600 dark:text-blue-400 hover:text-blue-700 font-bold text-[10px] bg-blue-50 dark:bg-blue-500/10 px-2 py-0.5 rounded border border-blue-100 dark:border-blue-500/20 transition-colors">Administrar</button>
-              </label>
-              <div className="border border-zinc-200 dark:border-zinc-800 p-2 rounded-lg bg-zinc-50 dark:bg-zinc-950 min-h-[2.75rem]">
-                {Object.keys(tonosCantantes).length === 0 ? (
-                  <p className="text-[10px] text-zinc-400 italic">Ningún cantante asignado.</p>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {Object.entries(tonosCantantes).map(([cantante, key]) => (
-                      <span key={cantante} className="text-[10px] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 px-2 py-1 rounded-md font-bold flex items-center gap-1 shadow-sm">
-                        {cantante} <span className="text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-1 rounded">{traducirAcorde(key || tono || '?', formatoAcordes)}</span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">BPM</label>
-              <input type="number" value={bpm} onChange={(e)=>setBpm(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Etiquetas (Filtros de Repertorio)</label>
-              <div className="flex flex-wrap gap-2">
-                {ETIQUETAS_DISPONIBLES.map(tag => (
-                  <button key={tag} type="button" onClick={() => setEtiquetas(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
-                    className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border transition-colors ${etiquetas.includes(tag) ? 'bg-violet-100 dark:bg-violet-500/20 border-violet-300 dark:border-violet-500/30 text-violet-700 dark:text-violet-400' : 'bg-zinc-50 dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'}`}
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <SongMetadataForm
+              titulo={titulo}
+              onTítuloChange={setTitulo}
+              artista={artista}
+              onArtistaChange={setArtista}
+              tono={tono}
+              onTonoChange={setTono}
+              bpm={bpm}
+              onBpmChange={setBpm}
+              etiquetas={etiquetas}
+              onToggleEtiqueta={(tag) => setEtiquetas(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
+              tonosCantantes={tonosCantantes}
+              onOpenSingerModal={() => setShowSingerModal(true)}
+              tonosDisponibles={TONOS_DISPONIBLES}
+              etiquetasDisponibles={ETIQUETAS_DISPONIBLES}
+              detectedKey={detectedKey}
+              normalizeKey={normalizeKey}
+              formatoAcordes={formatoAcordes}
+              notacion={notacion}
+            />
 
-            <div className="col-span-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
-              <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Pista o Secuencia de Audio (MP3)</label>
-              {audioUrl && (
-                <div className="mb-4 flex items-center gap-3 bg-zinc-900 dark:bg-zinc-950 border border-zinc-800 py-2 px-3 rounded-2xl w-full shadow-inner">
-                  <button type="button" onClick={toggleAudio} className="w-10 h-10 flex items-center justify-center bg-white hover:bg-zinc-200 text-zinc-900 rounded-xl shadow-md transition-all active:scale-95 shrink-0">
-                    {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
-                  </button>
-                  <div className="flex-1 flex items-center gap-3 px-1">
-                    <span className="text-xs font-mono text-zinc-400 w-10 text-right">{formatTime(currentTime)}</span>
-                    <input type="range" min="0" max={duration || 100} value={currentTime} onChange={handleSeek} className="flex-1 h-1.5 bg-zinc-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:bg-zinc-200 [&::-webkit-slider-thumb]:transition-colors" />
-                    <span className="text-xs font-mono text-zinc-500 w-10">{formatTime(duration)}</span>
-                  </div>
-                  
-                  {/* Control de Volumen */}
-                  <div className="flex items-center gap-2 border-l border-zinc-800 pl-3">
-                    <button type="button" onClick={toggleMute} className="text-zinc-400 hover:text-white transition-colors" title={isMuted ? "Quitar silencio" : "Silenciar"}>
-                      {isMuted || volume === 0 ? <VolumeX size={18} /> : volume < 0.5 ? <Volume1 size={18} /> : <Volume2 size={18} />}
-                    </button>
-                    <input type="range" min="0" max="1" step="0.01" value={isMuted ? 0 : volume} onChange={handleVolumeChange} className="hidden sm:block w-16 h-1.5 bg-zinc-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:bg-zinc-200 [&::-webkit-slider-thumb]:transition-colors" title="Volumen" />
-                  </div>
+            <SongResourcesPanel
+              audioUrl={audioUrl}
+              audioRef={audioRef}
+              isPlaying={isPlaying}
+              currentTime={currentTime}
+              duration={duration}
+              volume={volume}
+              isMuted={isMuted}
+              onToggleAudio={toggleAudio}
+              onSeek={handleSeek}
+              onVolumeChange={handleVolumeChange}
+              onToggleMute={toggleMute}
+              onAudioFileChange={(e) => setAudioFile(e.target.files[0])}
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedMetadata={(e) => setDuration(e.target.duration)}
+              onAudioEnded={() => setIsPlaying(false)}
+              multitracks={multitracks}
+              nombreStem={nombreStem}
+              onNombreStemChange={setNombreStem}
+              customStemName={customStemName}
+              onCustomStemNameChange={setCustomStemName}
+              onUploadStem={handleUploadStem}
+              onRemoveStem={removeStem}
+              fondoUrl={fondoUrl}
+              onFondoUrlChange={setFondoUrl}
+              onUploadFondo={handleUploadFondo}
+              recursos={recursos}
+              nuevoRecurso={nuevoRecurso}
+              onNuevoRecursoChange={setNuevoRecurso}
+              onAddRecurso={handleAddRecurso}
+              onUploadPDF={handleUploadPDF}
+              onRemoveRecurso={removeRecurso}
+              instrumentosRecursos={INSTRUMENTOS_RECURSOS}
+              isSaving={isSaving}
+              formatTime={formatTime}
+            />
 
-                  <audio ref={audioRef} src={audioUrl} onTimeUpdate={handleTimeUpdate} onLoadedMetadata={(e) => setDuration(e.target.duration)} onEnded={() => setIsPlaying(false)} onCanPlay={(e) => { e.target.volume = volume; e.target.muted = isMuted; }} className="hidden" />
-                </div>
-              )}
-              <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files[0])} className="kp-input w-full p-2 rounded-xl text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-amber-500/10 file:text-amber-300 hover:file:bg-amber-500/20 transition-all cursor-pointer" />
-            </div>
-            
-            {/* NUEVO PANEL: MULTITRACKS / STEMS */}
-            <div className="col-span-2 pt-4 mt-2 border-t border-zinc-100 dark:border-zinc-800">
-              <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
-                <SlidersHorizontal size={18} className="text-indigo-500"/> Pistas Multitrack (In-Ears / Secuencias)
-              </label>
-              
-              <div className="space-y-2 mb-4">
-                {multitracks.length === 0 && <p className="text-xs text-zinc-400 italic bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-100 dark:border-zinc-800 text-center">No hay pistas separadas agregadas.</p>}
-                {multitracks.map(m => (
-                  <div key={m.id} className="flex items-center justify-between p-2.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm">
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 text-indigo-500 dark:text-indigo-400"><Headphones size={16}/></div>
-                      <div className="truncate">
-                        <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">{m.nombre}</p>
-                        <p className="text-[10px] font-bold text-zinc-500 truncate">{m.fileName}</p>
-                      </div>
-                    </div>
-                    <button type="button" onClick={() => removeStem(m.id)} className="p-2 text-zinc-400 hover:text-red-500 transition-colors"><Trash2 size={16}/></button>
-                  </div>
-                ))}
-              </div>
-
-              <div className="bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row gap-2 items-center">
-                <select value={nombreStem} onChange={e => { setNombreStem(e.target.value); setCustomStemName(''); }} className="w-full sm:w-1/3 text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-zinc-900 dark:text-white font-bold text-zinc-700 dark:text-zinc-300">
-                  <option value="Click" className="bg-white dark:bg-zinc-900">🥁 Click (Metrónomo)</option>
-                  <option value="Guía" className="bg-white dark:bg-zinc-900">🗣️ Guía (Voz Directora)</option>
-                  <option value="Batería" className="bg-white dark:bg-zinc-900">🥁 Batería</option>
-                  <option value="Bajo" className="bg-white dark:bg-zinc-900">🎸 Bajo</option>
-                  <option value="Secuencia" className="bg-white dark:bg-zinc-900">🎹 Secuencia / Synths</option>
-                  <option value="Coros" className="bg-white dark:bg-zinc-900">🎤 Coros</option>
-                  <option value="Otro" className="bg-white dark:bg-zinc-900">📝 Otro (Escribir nombre)</option>
-                </select>
-                {nombreStem === 'Otro' && (
-                  <input
-                    type="text"
-                    value={customStemName}
-                    onChange={e => setCustomStemName(e.target.value)}
-                    placeholder="Nombre de la pista (ej. Trombón 2)"
-                    className="w-full sm:flex-1 text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-zinc-900 dark:text-white font-bold text-zinc-700 dark:text-zinc-300"
-                  />
-                )}
-                <label className="w-full sm:flex-1 text-xs font-bold bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-400 py-2.5 rounded-lg hover:bg-indigo-200 dark:hover:bg-indigo-500/30 transition-colors flex justify-center items-center gap-2 cursor-pointer shadow-sm">
-                  <Upload size={14} /> Subir Pista (MP3/WAV)
-                  <input type="file" accept="audio/*" className="hidden" onChange={handleUploadStem} disabled={isSaving} />
-                </label>
-              </div>
-            </div>
-
-            {/* NUEVO PANEL: FONDO DE PROYECCIÓN */}
-            <div className="col-span-2 pt-4 mt-2 border-t border-zinc-100 dark:border-zinc-800">
-              <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
-                <Monitor size={18} className="text-emerald-500"/> Fondo de Proyección Automático
-              </label>
-              <div className="bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 flex flex-col gap-3">
-                {fondoUrl && (
-                  <div className="relative w-full h-36 rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-700">
-                    {isVideoMediaUrl(fondoUrl) ? (
-                      <video src={fondoUrl} autoPlay loop muted playsInline className="w-full h-full object-cover" />
-                    ) : (
-                      <img src={fondoUrl} alt="Fondo" className="w-full h-full object-cover" />
-                    )}
-                    <button type="button" onClick={() => setFondoUrl('')} className="absolute top-2 right-2 p-2 bg-red-600/90 hover:bg-red-600 text-white rounded-lg shadow-md transition-colors active:scale-95">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                )}
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <input type="url" value={fondoUrl} onChange={e => setFondoUrl(e.target.value)} placeholder="Pegar URL (ej. Cloudinary/YouTube...)" className="flex-1 text-xs p-2.5 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white dark:bg-zinc-900 dark:text-white" />
-                  <label className="text-xs font-bold bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-4 py-2.5 rounded-lg hover:bg-emerald-200 dark:hover:bg-emerald-500/30 transition-colors flex justify-center items-center gap-2 cursor-pointer shadow-sm shrink-0">
-                    <Upload size={14} /> Subir Archivo
-                    <input type="file" accept="image/*,video/*" className="hidden" onChange={handleUploadFondo} disabled={isSaving} />
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            {/* NUEVO PANEL: RECURSOS DE ENSAYO */}
-            <div className="col-span-2 pt-4 mt-2 border-t border-zinc-100 dark:border-zinc-800">
-              <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2"><Library size={18} className="text-blue-500"/> Recursos de Ensayo (Videos, Partituras)</label>
-              
-              {/* Lista de Recursos */}
-              <div className="space-y-2 mb-4">
-                {recursos.length === 0 && <p className="text-xs text-zinc-400 italic bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-100 dark:border-zinc-800 text-center">No hay tutoriales ni partituras agregadas.</p>}
-                {recursos.map(r => (
-                  <div key={r.id} className="flex items-center justify-between p-2.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm">
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      <div className={`p-2 rounded-lg ${r.tipo === 'youtube' ? 'bg-red-50 dark:bg-red-500/10 text-red-500 dark:text-red-400' : r.tipo === 'pdf' ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-500 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-500/10 text-blue-500 dark:text-blue-400'}`}>
-                        {r.tipo === 'youtube' ? <Video size={16}/> : r.tipo === 'pdf' ? <FileIcon size={16}/> : <LinkIcon size={16}/>}
-                      </div>
-                      <div className="truncate">
-                        <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">{r.titulo}</p>
-                        <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{r.instrumento}</p>
-                      </div>
-                    </div>
-                    <button type="button" onClick={() => removeRecurso(r.id)} className="p-2 text-zinc-400 hover:text-red-500 transition-colors"><Trash2 size={16}/></button>
-                  </div>
-                ))}
-              </div>
-
-              {/* Añadir Recurso */}
-              <div className="bg-zinc-50 dark:bg-zinc-950 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="text" placeholder="Título (Ej. Intro Guitarra)" value={nuevoRecurso.titulo} onChange={e => setNuevoRecurso({...nuevoRecurso, titulo: e.target.value})} className="col-span-2 text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-zinc-900 dark:text-white" />
-                  <input type="url" placeholder="Link (YouTube, TikTok...)" value={nuevoRecurso.url} onChange={e => setNuevoRecurso({...nuevoRecurso, url: e.target.value})} className="col-span-2 text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-zinc-900 dark:text-white" />
-                  <select value={nuevoRecurso.instrumento} onChange={e => setNuevoRecurso({...nuevoRecurso, instrumento: e.target.value})} className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-zinc-900 dark:text-white">
-                    {INSTRUMENTOS_RECURSOS.map(inst => <option key={inst} value={inst} className="bg-white dark:bg-zinc-900">{inst}</option>)}
-                  </select>
-                  <select value={nuevoRecurso.tipo} onChange={e => setNuevoRecurso({...nuevoRecurso, tipo: e.target.value})} className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-zinc-900 dark:text-white">
-                    <option value="youtube" className="bg-white dark:bg-zinc-900">YouTube Embed</option>
-                    <option value="link" className="bg-white dark:bg-zinc-900">TikTok / Insta / Externo</option>
-                  </select>
-                </div>
-                <div className="flex gap-2">
-                  <button type="button" onClick={handleAddRecurso} className="flex-1 text-xs font-bold bg-zinc-800 dark:bg-zinc-700 text-white py-2 rounded-lg hover:bg-zinc-700 dark:hover:bg-zinc-600 transition-colors">Añadir Enlace</button>
-                  <label className="flex-1 text-xs font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 py-2 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-500/30 transition-colors flex justify-center items-center gap-1 cursor-pointer">
-                    <Upload size={14} /> Subir PDF
-                    <input type="file" accept=".pdf" className="hidden" onChange={handleUploadPDF} />
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className="col-span-2 pt-4 mt-2 border-t border-zinc-100 dark:border-zinc-800">
-              <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
-                <SlidersHorizontal size={18} className="text-violet-500" /> Multimedia por Seccion
-              </label>
-              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950">
-                <p className="mb-4 text-xs font-medium leading-relaxed text-zinc-500 dark:text-zinc-400">
-                  Administra la multimedia asociada a Intro, Versos, Coros, Puentes, Interludios y demas secciones.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedSectionMediaIndex(prev => Math.min(prev, Math.max(parsedSections.length - 1, 0)));
-                    setShowSectionMediaModal(true);
-                  }}
-                  className="w-full rounded-xl bg-violet-600 px-4 py-3 text-xs font-black uppercase tracking-wider text-white shadow-sm transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={parsedSections.length === 0}
-                >
-                  Administrar Multimedia
-                </button>
-                {parsedSections.length === 0 && (
-                  <p className="mt-3 text-center text-[10px] font-bold text-zinc-400">No hay secciones detectadas en la letra.</p>
-                )}
-              </div>
-            </div>
+            <SectionMediaManager
+              sections={parsedSections}
+              sectionMedia={sectionMedia}
+              isSaving={isSaving}
+              getSectionKey={getSectionKey}
+              getSectionDraft={getSectionDraft}
+              updateSectionDraft={updateSectionDraft}
+              onSelectLibraryResource={handleSelectLibrarySectionMedia}
+              onAddUrlResource={addSectionMediaResource}
+              onUploadResource={uploadSectionMediaResource}
+              onUpdateResource={updateSectionMediaResource}
+              onRemoveResource={removeSectionMediaResource}
+            />
 
             <div className="col-span-2 pt-4 mt-2 border-t border-zinc-100 dark:border-zinc-800">
               <button onClick={handleSave} disabled={isSaving} className="kp-button-primary w-full flex items-center justify-center gap-2 py-3 px-6 rounded-xl text-sm font-bold disabled:opacity-50 transition-all active:scale-95">
@@ -877,254 +915,6 @@ const EditSong = ({ user }) => {
         </div>
       </div>
 
-      {showSectionMediaModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm animate-in fade-in">
-          <div className="flex h-[80vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900 md:w-[90vw]">
-            <div className="flex shrink-0 items-center justify-between border-b border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950">
-              <div>
-                <h3 className="flex items-center gap-2 text-lg font-black text-zinc-900 dark:text-white">
-                  <SlidersHorizontal size={20} className="text-violet-500" /> Multimedia por Seccion
-                </h3>
-                <p className="mt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                  Administra los recursos asociados a cada seccion detectada en la letra.
-                </p>
-              </div>
-              <button type="button" onClick={() => setShowSectionMediaModal(false)} className="rounded-2xl p-2 text-zinc-400 transition-colors hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200">
-                <X size={22} />
-              </button>
-            </div>
-
-            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[18rem_1fr]">
-              <aside className="min-h-0 overflow-y-auto border-b border-zinc-100 bg-zinc-50/70 p-3 dark:border-zinc-800 dark:bg-zinc-950/70 md:border-b-0 md:border-r">
-                <div className="space-y-2">
-                  {parsedSections.length === 0 ? (
-                    <p className="rounded-2xl border border-dashed border-zinc-200 bg-white p-4 text-center text-xs font-bold text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900">
-                      No hay secciones detectadas.
-                    </p>
-                  ) : (
-                    parsedSections.map((section, index) => {
-                      const sectionKey = getSectionKey(section, index);
-                      const count = (sectionMedia[sectionKey] || []).length;
-                      const selected = selectedSectionMediaIndex === index;
-
-                      return (
-                        <button
-                          key={sectionKey}
-                          type="button"
-                          onClick={() => setSelectedSectionMediaIndex(index)}
-                          className={`w-full rounded-2xl border p-3 text-left transition-colors ${
-                            selected
-                              ? 'border-violet-300 bg-violet-100 text-violet-900 dark:border-violet-500/40 dark:bg-violet-500/20 dark:text-violet-100'
-                              : 'border-zinc-200 bg-white text-zinc-700 hover:border-violet-200 hover:bg-violet-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-violet-500/30 dark:hover:bg-violet-500/10'
-                          }`}
-                        >
-                          <span className="flex items-center justify-between gap-3">
-                            <span className="min-w-0 truncate text-sm font-black">{section.titulo || `Seccion ${index + 1}`}</span>
-                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-black ${selected ? 'bg-white/70 text-violet-700 dark:bg-violet-950/50 dark:text-violet-200' : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'}`}>
-                              {count > 0 ? `${count} recurso${count === 1 ? '' : 's'}` : 'Sin multimedia'}
-                            </span>
-                          </span>
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </aside>
-
-              <section className="min-h-0 overflow-y-auto p-4">
-                {parsedSections.length > 0 && (() => {
-                  const safeIndex = Math.min(selectedSectionMediaIndex, parsedSections.length - 1);
-                  const section = parsedSections[safeIndex];
-                  const sectionKey = getSectionKey(section, safeIndex);
-                  const draft = getSectionDraft(sectionKey);
-                  const resources = sectionMedia[sectionKey] || [];
-
-                  return (
-                    <div className="space-y-4">
-                      <div className="flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0">
-                          <p className="truncate text-lg font-black text-zinc-900 dark:text-white">{section.titulo || `Seccion ${safeIndex + 1}`}</p>
-                          <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">{resources.length} recursos asociados</p>
-                        </div>
-                        <span className="w-fit rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-300">
-                          {sectionKey}
-                        </span>
-                      </div>
-
-                      <div className="space-y-2">
-                        {resources.length === 0 && (
-                          <p className="rounded-xl border border-dashed border-zinc-200 bg-white p-5 text-center text-xs font-medium text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900">
-                            Sin multimedia asignada a esta seccion.
-                          </p>
-                        )}
-
-                        {resources.map(resource => {
-                          const isLibraryResource = resource.source === 'library' || Boolean(resource.mediaId);
-                          const PreviewIcon = resource.type === 'image' ? ImageIcon : resource.type === 'video' ? Video : resource.type === 'pdf' ? FileIcon : LinkIcon;
-
-                          return (
-                            <div key={resource.id} className="rounded-2xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
-                              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                                <div className="flex h-20 w-full shrink-0 items-center justify-center overflow-hidden rounded-xl border border-zinc-200 bg-zinc-100 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 sm:w-28">
-                                  {resource.type === 'image' && resource.url ? (
-                                    <img src={resource.thumbnailUrl || resource.url} alt={resource.title || 'Recurso'} className="h-full w-full object-cover" />
-                                  ) : resource.type === 'video' && resource.url ? (
-                                    <video src={resource.url} muted playsInline className="h-full w-full object-cover" />
-                                  ) : (
-                                    <PreviewIcon size={28} />
-                                  )}
-                                </div>
-
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate text-sm font-black text-zinc-900 dark:text-white">{resource.title || 'Recurso multimedia'}</p>
-                                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-wider">
-                                    <span className="rounded-full bg-zinc-100 px-2 py-1 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                                      {getMediaTypeLabel(resource.type)}
-                                    </span>
-                                    {isLibraryResource ? (
-                                      <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-emerald-600 dark:text-emerald-300">
-                                        Biblioteca
-                                      </span>
-                                    ) : (
-                                      <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-amber-600 dark:text-amber-300">
-                                        URL directa
-                                      </span>
-                                    )}
-                                    {isLibraryResource && (
-                                      <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-1 text-violet-600 dark:text-violet-300">
-                                        Usado {Number(resource.usageCount || 0)} veces
-                                      </span>
-                                    )}
-                                  </div>
-                                  {resource.url && (
-                                    <p className="mt-2 truncate text-[11px] font-medium text-zinc-400">{resource.url}</p>
-                                  )}
-                                </div>
-
-                                <div className="grid grid-cols-3 gap-2 sm:w-auto sm:grid-cols-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => resource.url && window.open(resource.url, '_blank', 'noopener,noreferrer')}
-                                    className="rounded-xl border border-zinc-200 px-3 py-2 text-[10px] font-black uppercase text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                                  >
-                                    Vista previa
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => openSectionMediaPicker(sectionKey, section.titulo || `Seccion ${safeIndex + 1}`, resource.id)}
-                                    className="rounded-xl border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-[10px] font-black uppercase text-violet-700 hover:bg-violet-500/20 dark:text-violet-300"
-                                  >
-                                    Cambiar
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeSectionMediaResource(sectionKey, resource.id, section.titulo || `Seccion ${safeIndex + 1}`)}
-                                    className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-600 hover:bg-red-500/20 dark:text-red-300"
-                                  >
-                                    Quitar
-                                  </button>
-                                </div>
-                              </div>
-
-                              {!isLibraryResource && (
-                                <div className="mt-3 grid grid-cols-1 gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-800 sm:grid-cols-[1fr_110px_1fr]">
-                                  <input
-                                    type="text"
-                                    value={resource.title || ''}
-                                    onChange={e => updateSectionMediaResource(sectionKey, resource.id, { title: e.target.value })}
-                                    className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
-                                    placeholder="Titulo"
-                                  />
-                                  <select
-                                    value={resource.type || 'link'}
-                                    onChange={e => updateSectionMediaResource(sectionKey, resource.id, { type: e.target.value })}
-                                    className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
-                                  >
-                                    <option value="image" className="bg-white dark:bg-zinc-900">Imagen</option>
-                                    <option value="video" className="bg-white dark:bg-zinc-900">Video</option>
-                                    <option value="audio" className="bg-white dark:bg-zinc-900">Audio</option>
-                                    <option value="pdf" className="bg-white dark:bg-zinc-900">PDF</option>
-                                    <option value="link" className="bg-white dark:bg-zinc-900">Link</option>
-                                  </select>
-                                  <input
-                                    type="url"
-                                    value={resource.url || ''}
-                                    onChange={e => updateSectionMediaResource(sectionKey, resource.id, { url: e.target.value })}
-                                    className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-950 dark:text-white"
-                                    placeholder="URL"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="rounded-2xl border border-violet-500/20 bg-violet-500/10 p-3">
-                        <button
-                          type="button"
-                          onClick={() => openSectionMediaPicker(sectionKey, section.titulo || `Seccion ${safeIndex + 1}`)}
-                          className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black uppercase tracking-wider text-white shadow-sm transition-colors hover:bg-violet-700"
-                        >
-                          <Library size={16} /> Biblioteca Multimedia
-                        </button>
-                        <p className="mt-2 text-center text-[10px] font-bold text-violet-700/80 dark:text-violet-200/80">
-                          Usa recursos existentes sin volver a subir archivos.
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-1 gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950 sm:grid-cols-[1fr_110px_1fr_auto_auto]">
-                        <input
-                          type="text"
-                          value={draft.title}
-                          onChange={e => updateSectionDraft(sectionKey, { title: e.target.value })}
-                          className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-900 dark:text-white"
-                          placeholder="Titulo del recurso"
-                        />
-                        <select
-                          value={draft.type}
-                          onChange={e => updateSectionDraft(sectionKey, { type: e.target.value })}
-                          className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-900 dark:text-white"
-                        >
-                          <option value="image" className="bg-white dark:bg-zinc-900">Imagen</option>
-                          <option value="video" className="bg-white dark:bg-zinc-900">Video</option>
-                          <option value="audio" className="bg-white dark:bg-zinc-900">Audio</option>
-                          <option value="pdf" className="bg-white dark:bg-zinc-900">PDF</option>
-                          <option value="link" className="bg-white dark:bg-zinc-900">Link</option>
-                        </select>
-                        <input
-                          type="url"
-                          value={draft.url}
-                          onChange={e => updateSectionDraft(sectionKey, { url: e.target.value })}
-                          className="text-xs p-2 border border-zinc-200 dark:border-zinc-800 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white dark:bg-zinc-900 dark:text-white"
-                          placeholder="Pegar URL"
-                        />
-                        <button type="button" onClick={() => addSectionMediaResource(sectionKey)} className="text-xs font-bold bg-zinc-800 dark:bg-zinc-700 text-white px-3 py-2 rounded-lg hover:bg-zinc-700 dark:hover:bg-zinc-600 transition-colors">
-                          Agregar
-                        </button>
-                        <label className="text-xs font-bold bg-violet-100 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300 px-3 py-2 rounded-lg hover:bg-violet-200 dark:hover:bg-violet-500/30 transition-colors flex justify-center items-center gap-2 cursor-pointer">
-                          <Upload size={14} /> Subir
-                          <input
-                            type="file"
-                            accept="image/*,video/*,audio/*,application/pdf"
-                            className="hidden"
-                            disabled={isSaving}
-                            onChange={e => {
-                              uploadSectionMediaResource(sectionKey, e.target.files?.[0]);
-                              e.target.value = '';
-                            }}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </section>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Modal de Cantantes */}
       {showSingerModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-in fade-in">
@@ -1160,24 +950,50 @@ const EditSong = ({ user }) => {
         </div>
       )}
 
-      <MediaPicker
-        open={showSectionMediaPicker}
-        onClose={() => {
-          setShowSectionMediaPicker(false);
-          setSectionMediaPickerTarget(null);
-        }}
-        onSelect={handleSelectLibrarySectionMedia}
-        title="Seleccionar desde Biblioteca"
-        context="multimedia-por-seccion"
-        acceptedTypes={['image', 'video', 'audio', 'pdf', 'link']}
-      />
+      {showUnsavedModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-zinc-950 p-6 text-white shadow-2xl">
+            <div className="mb-5 flex items-start gap-3">
+              <div className="rounded-2xl border border-amber-500/25 bg-amber-500/10 p-3 text-amber-200">
+                <AlertCircle size={22} />
+              </div>
+              <div>
+                <h3 className="text-lg font-black">Cambios sin guardar</h3>
+                <p className="mt-1 text-sm font-semibold leading-relaxed text-zinc-400">
+                  Hay cambios en esta cancion que todavia no se han guardado.
+                </p>
+              </div>
+            </div>
 
-      {/* Toast Notification */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 p-4 rounded-xl shadow-xl text-sm font-bold animate-in slide-in-from-bottom-5 z-50 ${toast.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
-          {toast.message}
+            <div className="grid gap-2 sm:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => setShowUnsavedModal(false)}
+                className="rounded-2xl border border-white/10 bg-zinc-900 px-4 py-3 text-xs font-black uppercase text-zinc-300 hover:bg-zinc-800"
+              >
+                Seguir editando
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(returnTo)}
+                className="rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-xs font-black uppercase text-red-100 hover:bg-red-500/20"
+              >
+                Salir sin guardar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAndExit}
+                disabled={isSaving || isSavingAndExiting}
+                className="rounded-2xl bg-emerald-600 px-4 py-3 text-xs font-black uppercase text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSavingAndExiting ? 'Guardando...' : 'Guardar y salir'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
+
+      {/* Toast Notification */}
     </div>
   );
 };

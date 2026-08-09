@@ -1,8 +1,4 @@
-const normalizeRole = (role = '') => String(role)
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase()
-  .trim();
+import { normalizeRole } from './rolePermissions';
 
 export const MEDIA_LIBRARY_ACTIONS = Object.freeze({
   ACCESS: 'access',
@@ -35,4 +31,3 @@ export const canPerformMediaLibraryAction = (user = {}, action) => {
 
   return true;
 };
-

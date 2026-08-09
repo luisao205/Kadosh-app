@@ -4,6 +4,7 @@ import { db } from '../../config/firebase';
 import { crearUsuarioPorAdmin, actualizarUsuarioPorAdmin, crearPerfilSinAcceso, habilitarAccesoWeb } from '../../utils/authUtils';
 import { Users, UserPlus, Shield, Music, Trash2, Edit, AlertCircle, Key, MonitorPlay, Eye, EyeOff, Search } from 'lucide-react';
 import { ACCOUNT_STATUSES, ACCOUNT_STATUS_OPTIONS, SUSPENSION_TYPES, SUSPENSION_TYPE_OPTIONS, getAccountStatusLabel, normalizeAccountStatus } from '../../utils/accountStatus';
+import { useFeedback } from '../ui/FeedbackProvider';
 
 const INSTRUMENTOS_DISPONIBLES = [
   "Voz Principal", "Coros", "Bateria", "Piano",
@@ -31,6 +32,7 @@ const normalizeSearchText = (value = '') => String(value)
   .trim();
 
 const UserManagement = ({ user }) => {
+  const { notify } = useFeedback();
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -44,22 +46,17 @@ const UserManagement = ({ user }) => {
   const [isActivating, setIsActivating] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [accountStatus, setAccountStatus] = useState(ACCOUNT_STATUSES.ACTIVE);
-  const [suspensionReason, setSuspensionReason] = useState('');
-  const [suspensionType, setSuspensionType] = useState(SUSPENSION_TYPES.INDEFINITE);
-  const [suspensionEndDate, setSuspensionEndDate] = useState('');
+  const [suspensiónReason, setSuspensionReason] = useState('');
+  const [suspensiónType, setSuspensionType] = useState(SUSPENSION_TYPES.INDEFINITE);
+  const [suspensiónEndDate, setSuspensionEndDate] = useState('');
   const [notifyAccountStatus, setNotifyAccountStatus] = useState(true);
   
   const [usuarios, setUsuarios] = useState([]);
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [toast, setToast] = useState(null);
   const isOwner = isOwnerRole(user?.rol || user?.role);
-
-  const showToast = (message, type = 'error') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
+  const showToast = (message, type = 'error') => notify(message, { type });
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'usuarios'), (snapshot) => {
@@ -116,7 +113,7 @@ const UserManagement = ({ user }) => {
     // --- MODO EDICION ---
     if (editingUserId && isActivating) {
       if (!email || password.length < 6) {
-        showToast("Se requiere correo y contrasena de al menos 6 caracteres.");
+        showToast("Se requiere correo y contraseña de al menos 6 caracteres.");
         return;
       }
       setIsSaving(true);
@@ -140,12 +137,12 @@ const UserManagement = ({ user }) => {
         showToast("No puedes suspender o desactivar tu propia cuenta.");
         return;
       }
-      if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && !suspensionReason.trim()) {
-        showToast("El motivo de la suspension es obligatorio.");
+      if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && !suspensiónReason.trim()) {
+        showToast("El motivo de la suspensión es obligatorio.");
         return;
       }
-      if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && suspensionType === SUSPENSION_TYPES.UNTIL_DATE && !suspensionEndDate) {
-        showToast("Selecciona la fecha de finalizacion de la suspension.");
+      if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && suspensiónType === SUSPENSION_TYPES.UNTIL_DATE && !suspensiónEndDate) {
+        showToast("Selecciona la fecha de finalización de la suspensión.");
         return;
       }
       setIsSaving(true);
@@ -158,19 +155,19 @@ const UserManagement = ({ user }) => {
         const statusPayload = {
           accountStatus,
           accountStatusUpdatedAt: now,
-          suspension: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? {
-            reason: suspensionReason.trim(),
-            type: suspensionType,
-            startedAt: previousStatus === ACCOUNT_STATUSES.SUSPENDED && previousData.suspension?.startedAt ? previousData.suspension.startedAt : now,
-            endsAt: suspensionType === SUSPENSION_TYPES.UNTIL_DATE ? suspensionEndDate : null,
+          suspensión: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? {
+            reason: suspensiónReason.trim(),
+            type: suspensiónType,
+            startedAt: previousStatus === ACCOUNT_STATUSES.SUSPENDED && previousData.suspensión?.startedAt ? previousData.suspensión.startedAt : now,
+            endsAt: suspensiónType === SUSPENSION_TYPES.UNTIL_DATE ? suspensiónEndDate : null,
             notifyUser: notifyAccountStatus
           } : null,
           accountStatusAudit: arrayUnion({
             previousStatus,
             newStatus: accountStatus,
-            reason: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? suspensionReason.trim() : '',
-            suspensionType: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? suspensionType : null,
-            suspensionEndsAt: accountStatus === ACCOUNT_STATUSES.SUSPENDED && suspensionType === SUSPENSION_TYPES.UNTIL_DATE ? suspensionEndDate : null,
+            reason: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? suspensiónReason.trim() : '',
+            suspensiónType: accountStatus === ACCOUNT_STATUSES.SUSPENDED ? suspensiónType : null,
+            suspensiónEndsAt: accountStatus === ACCOUNT_STATUSES.SUSPENDED && suspensiónType === SUSPENSION_TYPES.UNTIL_DATE ? suspensiónEndDate : null,
             reactivatedAt: previousStatus !== ACCOUNT_STATUSES.ACTIVE && accountStatus === ACCOUNT_STATUSES.ACTIVE ? now : null,
             adminId: user?.uid || null,
             adminName: user?.nombre || user?.email || 'Administrador',
@@ -184,9 +181,9 @@ const UserManagement = ({ user }) => {
           if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && notifyAccountStatus) {
             await addDoc(collection(db, 'notificaciones'), {
               titulo: 'Cuenta Suspendida',
-              mensaje: `Tu cuenta ha sido suspendida. Motivo: ${suspensionReason.trim()}.`,
+              mensaje: `Tu cuenta ha sido suspendida. Motivo: ${suspensiónReason.trim()}.`,
               destinatarios: [editingUserId],
-              accountStatusException: 'suspension',
+              accountStatusException: 'suspensión',
               emisorId: user?.uid,
               fechaCreacion: now
             });
@@ -237,7 +234,7 @@ const UserManagement = ({ user }) => {
     }
 
     if (!nombre || !email || password.length < 6) {
-      showToast("Datos invalidos. La contrasena debe tener al menos 6 caracteres.");
+      showToast("Datos inválidos. La contraseña debe tener al menos 6 caracteres.");
       return;
     }
 
@@ -265,9 +262,9 @@ const UserManagement = ({ user }) => {
     setInstrumentosSeleccionados(user.instrumentos || []);
     const status = normalizeAccountStatus(user.accountStatus);
     setAccountStatus(status);
-    setSuspensionReason(user.suspension?.reason || '');
-    setSuspensionType(user.suspension?.type || SUSPENSION_TYPES.INDEFINITE);
-    setSuspensionEndDate(user.suspension?.endsAt || '');
+    setSuspensionReason(user.suspensión?.reason || '');
+    setSuspensionType(user.suspensión?.type || SUSPENSION_TYPES.INDEFINITE);
+    setSuspensionEndDate(user.suspensión?.endsAt || '');
     setNotifyAccountStatus(true);
     
     // Hacer scroll hacia arriba suavemente para moviles
@@ -345,7 +342,7 @@ const UserManagement = ({ user }) => {
             {editingUserId && !isActivating ? (
               <div className="p-3 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-800 dark:text-indigo-300 text-xs rounded-lg border border-indigo-100 dark:border-indigo-500/20">
                 Editando perfil de: <b>{email || 'Sin correo asignado'}</b><br/>
-                <span className="text-[10px] opacity-80">(Correo y contrasena no modificables por seguridad)</span>
+                <span className="text-[10px] opacity-80">(Correo y contraseña no modificables por seguridad)</span>
                 {sinAcceso && (
                   <button type="button" onClick={() => setIsActivating(true)} className="mt-2 w-full py-2 bg-indigo-600 text-white rounded-md font-bold flex items-center justify-center gap-2 transition-transform active:scale-95">
                     <Key size={14} /> Habilitar Acceso Web
@@ -357,7 +354,7 @@ const UserManagement = ({ user }) => {
                 {!isActivating && (
                   <label className="flex items-center gap-2 mb-4 p-3 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl cursor-pointer">
                     <input type="checkbox" checked={sinAcceso} onChange={(e) => setSinAcceso(e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
-                    <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">Solo crear perfil (Sin correo/contrasena)</span>
+                    <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">Solo crear perfil (Sin correo/contraseña)</span>
                   </label>
                 )}
                 
@@ -386,6 +383,7 @@ const UserManagement = ({ user }) => {
               <select value={rol} onChange={(e) => setRol(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm">
                 <option value="musico" className="bg-white dark:bg-zinc-900">Musico (Solo ve canciones en Modo Vivo)</option>
                 <option value="multimedia" className="bg-white dark:bg-zinc-900">Multimedia (Controlador de Proyector)</option>
+                <option value="pastor" className="bg-white dark:bg-zinc-900">Pastor (Predicas y Modo Predicador)</option>
                 <option value="admin" className="bg-white dark:bg-zinc-900">Administrador (Puede editar Repertorio)</option>
                 <option value="dueño" className="bg-white dark:bg-zinc-900">Admin Principal (Oculto)</option>
               </select>
@@ -408,9 +406,9 @@ const UserManagement = ({ user }) => {
                 {accountStatus === ACCOUNT_STATUSES.SUSPENDED && (
                   <div className="space-y-3 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3">
                     <div>
-                      <label className="block text-xs font-bold text-amber-200 mb-1">Motivo de la suspension</label>
+                      <label className="block text-xs font-bold text-amber-200 mb-1">Motivo de la suspensión</label>
                       <textarea
-                        value={suspensionReason}
+                        value={suspensiónReason}
                         onChange={(e) => setSuspensionReason(e.target.value)}
                         className="kp-input w-full min-h-[86px] p-2.5 rounded-xl text-sm resize-none"
                         placeholder="Explica el motivo de forma clara para el usuario."
@@ -418,17 +416,17 @@ const UserManagement = ({ user }) => {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-amber-200 mb-1">Tipo de suspension</label>
-                      <select value={suspensionType} onChange={(e) => setSuspensionType(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm">
+                      <label className="block text-xs font-bold text-amber-200 mb-1">Tipo de suspensión</label>
+                      <select value={suspensiónType} onChange={(e) => setSuspensionType(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm">
                         {SUSPENSION_TYPE_OPTIONS.map(option => (
                           <option key={option.value} value={option.value} className="bg-white dark:bg-zinc-900">{option.label}</option>
                         ))}
                       </select>
                     </div>
-                    {suspensionType === SUSPENSION_TYPES.UNTIL_DATE && (
+                    {suspensiónType === SUSPENSION_TYPES.UNTIL_DATE && (
                       <div>
-                        <label className="block text-xs font-bold text-amber-200 mb-1">Fecha de finalizacion</label>
-                        <input type="date" value={suspensionEndDate} onChange={(e) => setSuspensionEndDate(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" required />
+                        <label className="block text-xs font-bold text-amber-200 mb-1">Fecha de finalización</label>
+                        <input type="date" value={suspensiónEndDate} onChange={(e) => setSuspensionEndDate(e.target.value)} className="kp-input w-full p-2.5 rounded-xl text-sm" required />
                       </div>
                     )}
                     <label className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-black/20 p-3 text-xs font-bold text-amber-100 cursor-pointer">
@@ -578,13 +576,7 @@ const UserManagement = ({ user }) => {
             </div>
           </div>
         </div>
-      )}
-      
-      {toast && (
-        <div className={`fixed bottom-6 right-6 p-4 rounded-xl shadow-xl text-sm font-bold animate-in slide-in-from-bottom-5 z-50 ${toast.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
-          {toast.message}
-        </div>
-      )}
+      )}
     </div>
   );
 };

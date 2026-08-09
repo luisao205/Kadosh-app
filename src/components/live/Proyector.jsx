@@ -1,10 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react';
+﻿import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { Minimize, RefreshCw } from 'lucide-react';
 import AutoFitText from './AutoFitText';
-import { isVideoMediaUrl } from '../../utils/mediaUtils';
+import ProjectorMediaBackground from './ProjectorMediaBackground';
 
 const Proyector = ({ eventoIdOverride }) => {
   const { eventoId: routeEventoId } = useParams();
@@ -12,21 +12,21 @@ const Proyector = ({ eventoIdOverride }) => {
   const [slide, setSlide] = useState(null);
   const [apagar, setApagar] = useState(false);
   const [fondoUrl, setFondoUrl] = useState(null);
-  const [prevFondoUrl, setPrevFondoUrl] = useState(null); // To hold the URL of the background fading out
-  const [fondoTransitioning, setFondoTransitioning] = useState(false); // To trigger CSS transition
+  const [fondoMedia, setFondoMedia] = useState(null);
   const [transicion, setTransicion] = useState('fade'); // This is for slide transitions, not background
   const [modoTransmision, setModoTransmision] = useState(false);
   const [showLogo, setShowLogo] = useState(false);
   const [ticker, setTicker] = useState(null);
   const [media, setMedia] = useState(null); // { url, type, playing, volume, mode }
   const [countdown, setCountdown] = useState(null); // { endTimestamp, active }
+  const [projectorState, setProjectorState] = useState(null);
   const [showControls, setShowControls] = useState(false);
   const controlsTimerRef = useRef(null);
   const videoRef = useRef(null);
-  const lastFondoRef = useRef(null); // 🔄 Ref para comparar fondos sin cierres obsoletos
+  const lastFondoRef = useRef(null);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
 
-  // Nuevos estados para la transición secuencial (Desvanecer viejo -> Aparecer nuevo)
+  // Nuevos estados para la transici?n secuencial (Desvanecer viejo -> Aparecer nuevo)
   const [displaySlide, setDisplaySlide] = useState(null);
   const [fadeState, setFadeState] = useState('in'); // 'in' | 'out'
 
@@ -35,23 +35,10 @@ const Proyector = ({ eventoIdOverride }) => {
       if (snap.exists()) {
         const data = snap.data();
         
-        // Manejo de la transición de fondo usando el Ref
-        if (data.proyectorFondo !== lastFondoRef.current) {
-          setPrevFondoUrl(lastFondoRef.current); // Guarda el fondo actual como previo
-          setFondoUrl(data.proyectorFondo || null); // Establece el nuevo fondo
-          lastFondoRef.current = data.proyectorFondo || null;
-          setFondoTransitioning(true); // Inicia la transición
-          setTimeout(() => {
-            setFondoTransitioning(false);
-            setPrevFondoUrl(null); // Limpiar fondo previo tras la transición
-          }, 500);
-        } else if (data.proyectorFondo === null && lastFondoRef.current !== null) {
-          // If Firestore says null but local state isn't, force clear
-          setFondoUrl(null);
-          lastFondoRef.current = null;
-          setPrevFondoUrl(null);
-          setFondoTransitioning(false);
-        }
+        const nextFondo = data.proyectorFondo || null;
+        setFondoUrl(nextFondo);
+        setFondoMedia(data.proyectorFondoMedia || null);
+        lastFondoRef.current = nextFondo;
 
         setSlide(data.proyectorSlide || null);
         setMedia(data.proyectorMedia || null);
@@ -61,12 +48,13 @@ const Proyector = ({ eventoIdOverride }) => {
         setShowLogo(data.proyectorLogo || false);
         setTicker(data.proyectorTicker || null);
         setCountdown(data.proyectorCountdown || null);
+        setProjectorState(data.projectorState || null);
       }
     });
     return () => unsub();
   }, [eventoId]);
 
-  // Sincronización de Play/Pause y Comandos de Navegación
+  // Sincronizaci?n de Play/Pause y Comandos de Navegaci?n
   useEffect(() => {
     if (!videoRef.current || !media || media.type !== 'video') return;
 
@@ -82,12 +70,12 @@ const Proyector = ({ eventoIdOverride }) => {
     if (media.playing) videoRef.current.play().catch(e => console.warn(e));
     else videoRef.current.pause();
 
-    // Manejo de comandos de búsqueda (Seek)
+    // Manejo de comandos de b?squeda (Seek)
     // Only seek if the media is playing or if it's a specific seek command (not just play/pause)
     // This prevents seeking to 0 when media is paused and then played again.
     if (media.seekRequest && (media.playing || media.seekRequest.type !== 'play')) {
       const { type, time } = media.seekRequest;
-      // Solo procesamos si es una petición con un timestamp nuevo para evitar bucles
+      // Solo procesamos si es una petici?n con un timestamp nuevo para evitar bucles
       if (videoRef.current._lastSeekTime !== time) {
         videoRef.current._lastSeekTime = time;
         if (type === 'start') videoRef.current.currentTime = 0;
@@ -120,9 +108,9 @@ const Proyector = ({ eventoIdOverride }) => {
       // 1. Iniciar desvanecimiento de la letra vieja
       setFadeState('out');
       
-      // 2. Esperar a que se desvanezca por completo (250ms para más rapidez)
+      // 2. Esperar a que se desvanezca por completo (250ms para m?s rapidez)
       const timeout = setTimeout(() => {
-        // 3. Cambiar la letra silenciosamente mientras está invisible y volver a aparecer (Fade In)
+        // 3. Cambiar la letra silenciosamente mientras est? invisible y volver a aparecer (Fade In)
         setDisplaySlide(slide);
         setFadeState('in');
       }, transicion === 'fade' ? 250 : 150);
@@ -131,7 +119,7 @@ const Proyector = ({ eventoIdOverride }) => {
     }
   }, [slide, transicion, displaySlide]);
 
-  // Lógica de cuenta regresiva (Countdown)
+  // L?gica de cuenta regresiva (Countdown)
   const [timeLeft, setTimeLeft] = useState("");
   useEffect(() => {
     if (!countdown?.active || !countdown?.endTimestamp) {
@@ -153,12 +141,12 @@ const Proyector = ({ eventoIdOverride }) => {
     return () => clearInterval(interval);
   }, [countdown]);
 
-  // Lógica para activar pantalla completa automáticamente al interactuar
+  // L?gica para activar pantalla completa autom?ticamente al interactuar
   useEffect(() => {
     const activarPantallaCompleta = () => {
       if (!document.fullscreenElement) {
         document.documentElement.requestFullscreen().catch((e) => {
-          console.warn("Pantalla completa bloqueada por el navegador hasta que interactúes.");
+          console.warn("Pantalla completa bloqueada por el navegador hasta que interact?es.");
         });
       }
     };
@@ -168,7 +156,7 @@ const Proyector = ({ eventoIdOverride }) => {
     return () => window.removeEventListener('click', activarPantallaCompleta);
   }, []);
 
-  // Lógica para mostrar botones al mover el mouse
+  // L?gica para mostrar botones al mover el mouse
   useEffect(() => {
     const handleMouseMove = () => {
       setShowControls(true);
@@ -198,7 +186,9 @@ const Proyector = ({ eventoIdOverride }) => {
 
   // Si no hay absolutamente nada (ni fondo), mostrar standby. Si hay fondo, dejar que siga al render principal.
     // Solo mostramos Standby si REALMENTE no hay nada activo (ni fondo, ni reloj, ni media, ni letras)
-  if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl) {
+  const isPreachingContent = projectorState?.type === 'preaching';
+
+  if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !isPreachingContent) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="text-zinc-900 font-black text-8xl tracking-tighter select-none opacity-20 text-center px-4">
@@ -208,7 +198,7 @@ const Proyector = ({ eventoIdOverride }) => {
     );
   }
 
-  // Clases dinámicas basadas en el estado de transición (fadeState)
+  // Clases din?micas basadas en el estado de transici?n (fadeState)
   let animationClass = '';
   if (transicion !== 'none') {
     const baseTransition = transicion === 'fade' 
@@ -247,31 +237,9 @@ const Proyector = ({ eventoIdOverride }) => {
         </button>
       </div>
 
-      {/* Capa de Fondo (Imagen o VideoLoop) */}
-      {!modoTransmision && (
-        <div className="absolute inset-0 z-0 pointer-events-none bg-black">
-          {/* Fondo Antiguo (Capa Superior desvaneciéndose) */}
-          {prevFondoUrl && (
-            <div className={`absolute inset-0 z-10 transition-opacity duration-500 ${fondoTransitioning ? 'opacity-0' : 'opacity-0 pointer-events-none'}`}>
-              {isVideoMediaUrl(prevFondoUrl) 
-                ? <video src={prevFondoUrl} autoPlay loop muted playsInline className="w-full h-full object-cover opacity-80" />
-                : <img src={prevFondoUrl} alt="" className="w-full h-full object-cover opacity-80" />
-              }
-            </div>
-          )}
-          {/* Fondo Nuevo (Capa Base siempre visible) */}
-          {fondoUrl && (
-            <div className="absolute inset-0 z-0">
-              {isVideoMediaUrl(fondoUrl) 
-                ? <video src={fondoUrl} key={fondoUrl} autoPlay loop muted playsInline className="w-full h-full object-cover opacity-80" />
-                : <img src={fondoUrl} key={fondoUrl} alt="" className="w-full h-full object-cover opacity-80" />
-              }
-            </div>
-          )}
-        </div>
-      )}
+      <ProjectorMediaBackground url={fondoUrl} media={fondoMedia} disabled={modoTransmision || apagar} />
 
-      {/* 🎬 Capa de Video Principal (Foreground) - Tapa todo lo demás */}
+      {/* Capa de Video Principal (Foreground) - Tapa todo lo dem?s */}
       {media?.url && media.mode === 'foreground' && (
         <div key={media.url} className="absolute inset-0 z-40 bg-black animate-in fade-in duration-500 overflow-hidden block">
           {media.type === 'video' || media.url.includes('video/upload') ? (
@@ -296,7 +264,7 @@ const Proyector = ({ eventoIdOverride }) => {
         </div>
       )}
 
-      {/* ⏲️ Capa de Cuenta Regresiva (z-[100]) */}
+      {/* ?? Capa de Cuenta Regresiva (z-[100]) */}
       {timeLeft && (
         <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center animate-in zoom-in duration-500 pointer-events-none">
           {/* Fondo sutil para legibilidad */}
@@ -314,10 +282,33 @@ const Proyector = ({ eventoIdOverride }) => {
           <img src="/KADOSH_APP.jpg" alt="Logo Kadosh" className="w-48 h-48 md:w-64 md:h-64 lg:w-80 lg:h-80 rounded-full shadow-[0_0_80px_rgba(255,255,255,0.2)] object-cover ring-8 ring-white/10" />
           <h1 className="mt-8 text-5xl md:text-7xl font-black tracking-tighter text-white drop-shadow-2xl">KADOSH</h1>
         </div>
+      ) : isPreachingContent ? (
+        <div className="relative z-20 flex h-full w-full items-center justify-center px-4 py-8 text-center">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.16),transparent_34%),linear-gradient(135deg,rgba(24,24,27,0.88),rgba(0,0,0,0.96))]" />
+          <div className="relative mx-auto flex h-full w-full max-w-6xl flex-col items-center justify-center rounded-[2.5rem] border border-white/10 bg-black/35 px-[5vw] py-[5vh] shadow-[0_40px_120px_rgba(0,0,0,0.55)]">
+            {projectorState.reference && (
+              <p className="mb-6 text-[clamp(1.4rem,4vw,4.6rem)] font-black uppercase tracking-tight text-amber-100 drop-shadow-2xl">
+                {projectorState.reference}
+              </p>
+            )}
+            {projectorState.content ? (
+              <p className="whitespace-pre-wrap text-[clamp(2rem,5.6vw,7rem)] font-black leading-[1.08] text-white drop-shadow-[0_10px_45px_rgba(0,0,0,0.85)]">
+                {projectorState.content}
+              </p>
+            ) : (
+              <p className="text-[clamp(1.6rem,4vw,4rem)] font-black text-zinc-300">Texto no guardado.</p>
+            )}
+            {projectorState.translation && (
+              <p className="mt-8 rounded-full border border-white/10 bg-white/10 px-6 py-2 text-[clamp(1rem,2vw,2rem)] font-black uppercase tracking-[0.18em] text-zinc-100">
+                {projectorState.translation}
+              </p>
+            )}
+          </div>
+        </div>
       ) : displaySlide ? (
         <div className={`relative z-10 w-full max-w-none flex flex-col ${modoTransmision ? 'justify-end items-start pl-8 md:pl-16' : 'justify-center items-center h-full mx-auto text-center'}`}>
           <div 
-            // Eliminamos la prop 'key' para que React no destruya el elemento, sino que aplique las clases de transición de CSS puro
+            // Eliminamos la prop 'key' para que React no destruya el elemento, sino que aplique las clases de transici?n de CSS puro
             className={`font-black tracking-tight whitespace-pre-wrap break-words text-outline ${animationClass} ${modoTransmision ? 'bg-black/80 border-l-[12px] border-violet-600 py-4 md:py-6 pr-8 pl-6 md:pl-8 rounded-r-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] inline-block text-left text-[min(6vw,6vh)] sm:text-[min(5vw,5vh)] md:text-[min(4vw,4vh)] leading-[1.2] max-w-[90vw] lg:max-w-5xl' : 'w-full h-full flex items-center justify-center overflow-hidden drop-shadow-[0_0_60px_rgba(0,0,0,1)]'}`}
           >
             {modoTransmision ? (
@@ -364,3 +355,5 @@ const Proyector = ({ eventoIdOverride }) => {
   );
 };
 export default Proyector;
+
+

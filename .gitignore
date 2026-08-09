@@ -26,3 +26,4 @@ dist-ssr
 *.sln
 *.sw?
 Kadosh App-win32-x64/
+.firebase/
