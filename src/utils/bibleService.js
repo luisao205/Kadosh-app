@@ -1,14 +1,17 @@
-const LOCAL_BASE = '/bibles/rv1909';
 const PREFERENCE_KEY = 'kadosh.bible.translation';
+export const DEFAULT_TRANSLATION_ID = 'local:rvr1960';
 
-export const FUTURE_TRANSLATIONS = [
-  { id: 'future:rvr1960', abbreviation: 'RVR1960', name: 'Reina-Valera 1960', reason: 'Requiere licencia' },
-  { id: 'future:nvi', abbreviation: 'NVI', name: 'Nueva Versión Internacional', reason: 'Requiere licencia' },
-  { id: 'future:pdt', abbreviation: 'PDT', name: 'Palabra de Dios para Todos', reason: 'Requiere licencia' }
+const LOCAL_TRANSLATIONS = [
+  { id: 'rvr1960', translationId: 'local:rvr1960' },
+  { id: 'dhh', translationId: 'local:dhh' },
+  { id: 'ntv', translationId: 'local:ntv' },
+  { id: 'nvi', translationId: 'local:nvi' },
+  { id: 'pdt', translationId: 'local:pdt' },
+  { id: 'tla', translationId: 'local:tla' }
 ];
 
 const localCache = {
-  metadata: null,
+  metadata: new Map(),
   books: new Map()
 };
 
@@ -95,69 +98,78 @@ const fetchJson = async (url) => {
   return response.json();
 };
 
-export async function getLocalBibleMetadata() {
-  if (!localCache.metadata) {
-    localCache.metadata = await fetchJson(`${LOCAL_BASE}/metadata.json`);
+const getLocalBibleId = (translationId = DEFAULT_TRANSLATION_ID) => {
+  const localTranslation = LOCAL_TRANSLATIONS.find(item => item.translationId === translationId);
+  if (!localTranslation) throw new Error('La traduccion seleccionada no esta disponible localmente.');
+  return localTranslation.id;
+};
+
+export async function getLocalBibleMetadata(translationId = DEFAULT_TRANSLATION_ID) {
+  const bibleId = getLocalBibleId(translationId);
+  if (!localCache.metadata.has(bibleId)) {
+    localCache.metadata.set(bibleId, fetchJson(`/bibles/${bibleId}/metadata.json`));
   }
-  return localCache.metadata;
+  return localCache.metadata.get(bibleId);
 }
 
-export async function getLocalBibleBook(bookCode) {
-  if (!localCache.books.has(bookCode)) {
-    localCache.books.set(bookCode, await fetchJson(`${LOCAL_BASE}/${bookCode}.json`));
+export async function getLocalBibleBook(bookCode, translationId = DEFAULT_TRANSLATION_ID) {
+  const bibleId = getLocalBibleId(translationId);
+  const cacheKey = `${bibleId}:${bookCode}`;
+  if (!localCache.books.has(cacheKey)) {
+    localCache.books.set(cacheKey, fetchJson(`/bibles/${bibleId}/${bookCode}.json`));
   }
-  return localCache.books.get(bookCode);
+  return localCache.books.get(cacheKey);
 }
 
 export async function getTranslations() {
-  const metadata = await getLocalBibleMetadata();
-  return {
-    available: [{
+  const available = await Promise.all(LOCAL_TRANSLATIONS.map(async ({ translationId }) => {
+    const metadata = await getLocalBibleMetadata(translationId);
+    return {
       provider: 'local',
       bibleId: metadata.id,
-      translationId: 'local:rv1909',
+      translationId,
       abbreviation: metadata.abbreviation,
       translationName: metadata.name,
       available: true,
       offline: true,
       copyright: metadata.license,
       source: metadata.source
-    }],
-    future: FUTURE_TRANSLATIONS
-  };
+    };
+  }));
+  return { available, future: [] };
 }
 
 export const getPreferredTranslationId = () => {
-  if (typeof window === 'undefined') return 'local:rv1909';
-  return window.localStorage.getItem(PREFERENCE_KEY) || 'local:rv1909';
+  if (typeof window === 'undefined') return DEFAULT_TRANSLATION_ID;
+  const storedTranslationId = window.localStorage.getItem(PREFERENCE_KEY);
+  return LOCAL_TRANSLATIONS.some(item => item.translationId === storedTranslationId)
+    ? storedTranslationId
+    : DEFAULT_TRANSLATION_ID;
 };
 
 export const setPreferredTranslationId = (translationId) => {
   if (typeof window !== 'undefined') window.localStorage.setItem(PREFERENCE_KEY, translationId);
 };
 
-export async function getBooks(translationId = 'local:rv1909') {
-  if (translationId !== 'local:rv1909') return [];
-  const metadata = await getLocalBibleMetadata();
+export async function getBooks(translationId = DEFAULT_TRANSLATION_ID) {
+  const metadata = await getLocalBibleMetadata(translationId);
   return metadata.books || [];
 }
 
-export async function getChapters(bookCode, translationId = 'local:rv1909') {
-  if (translationId !== 'local:rv1909') return [];
-  const book = await getLocalBibleBook(bookCode);
+export async function getChapters(bookCode, translationId = DEFAULT_TRANSLATION_ID) {
+  const book = await getLocalBibleBook(bookCode, translationId);
   return Object.keys(book.chapters || {}).map(Number).sort((a, b) => a - b);
 }
 
-export async function getChapter({ bookCode, chapter, translationId = 'local:rv1909' }) {
-  if (translationId !== 'local:rv1909') throw new Error('Esta traduccion online todavia no esta conectada en el frontend.');
-  const metadata = await getLocalBibleMetadata();
-  const book = await getLocalBibleBook(bookCode);
+export async function getChapter({ bookCode, chapter, translationId = DEFAULT_TRANSLATION_ID }) {
+  const metadata = await getLocalBibleMetadata(translationId);
+  const book = await getLocalBibleBook(bookCode, translationId);
   const chapterData = book.chapters?.[String(chapter)] || {};
-  const verses = Object.entries(chapterData).map(([number, text]) => ({ number, text }));
+  const verses = Object.entries(chapterData).map(([number, value]) => normalizeVerseRecord(value, number));
   return {
     provider: 'local',
     bibleId: metadata.id,
-    translationId: 'local:rv1909',
+    translationId,
     abbreviation: metadata.abbreviation,
     translationName: metadata.name,
     bookCode,
@@ -188,57 +200,118 @@ export function parseReference(input = '') {
   };
 }
 
-const getVerseText = (chapterData, verseNumber) => chapterData?.[String(verseNumber)] || chapterData?.[`${verseNumber}a`] || '';
+const normalizeVerseRecord = (value, fallbackNumber) => {
+  if (typeof value === 'string') {
+    return {
+      number: Number(fallbackNumber),
+      rawText: value,
+      text: value,
+      lineBreaks: [...value].reduce((positions, character, index) => character === '\n' ? [...positions, index] : positions, []),
+      editorial: { headingCandidates: [], verseRangeHint: null },
+      annotations: [],
+      sourceState: { empty: !value.trim(), containsOmittedText: false }
+    };
+  }
 
-export async function getPassage({ reference, translationId = 'local:rv1909' }) {
+  const text = String(value?.text || '');
+  return {
+    number: Number(value?.number ?? fallbackNumber),
+    rawText: String(value?.rawText ?? text),
+    text,
+    lineBreaks: Array.isArray(value?.lineBreaks) ? value.lineBreaks : [],
+    editorial: value?.editorial || { headingCandidates: [], verseRangeHint: null },
+    annotations: Array.isArray(value?.annotations) ? value.annotations : [],
+    sourceState: {
+      empty: Boolean(value?.sourceState?.empty) || !text.trim(),
+      containsOmittedText: Boolean(value?.sourceState?.containsOmittedText)
+    },
+    ...(value?.sourceVerseRange ? { sourceVerseRange: value.sourceVerseRange } : {})
+  };
+};
+
+const getVerseRecord = (chapterData, verseNumber) => normalizeVerseRecord(
+  chapterData?.[String(verseNumber)] ?? chapterData?.[`${verseNumber}a`],
+  verseNumber
+);
+
+const rangeIncludesVerse = (range, verseNumber) => {
+  const match = String(range || '').match(/^(\d+)\s*[-–—]\s*(\d+)$/u);
+  return Boolean(match && Number(match[1]) <= verseNumber && verseNumber <= Number(match[2]));
+};
+
+export async function getPassage({ reference, translationId = DEFAULT_TRANSLATION_ID }) {
   const parsed = typeof reference === 'string' ? parseReference(reference) : reference;
   if (!parsed) throw new Error('No se pudo interpretar la referencia.');
   const chapter = await getChapter({ bookCode: parsed.bookCode, chapter: parsed.chapter, translationId });
-  const book = await getLocalBibleBook(parsed.bookCode);
+  const book = await getLocalBibleBook(parsed.bookCode, translationId);
   const chapterData = book.chapters?.[String(parsed.chapter)] || {};
   const verseNumbers = Object.keys(chapterData).map(v => Number.parseInt(v, 10)).filter(Number.isFinite);
+  if (!verseNumbers.length) throw new Error('No se encontraron versiculos para ese capitulo.');
   const start = parsed.verse || Math.min(...verseNumbers);
   const end = parsed.endVerse || parsed.verse || Math.max(...verseNumbers);
-  const verses = [];
-  for (let number = start; number <= end; number += 1) {
-    const text = getVerseText(chapterData, number);
-    if (text) verses.push({ number, text });
+  const firstVerse = Math.min(...verseNumbers);
+  const lastVerse = Math.max(...verseNumbers);
+  if (start < firstVerse || end > lastVerse || end < start) {
+    throw new Error(`El rango debe estar entre los versiculos ${firstVerse} y ${lastVerse}.`);
   }
-  if (verses.length === 0) throw new Error('No se encontro texto para esa referencia.');
+  const verses = [];
+  const unavailableVerses = [];
+  const groupedRanges = [];
+  for (let number = start; number <= end; number += 1) {
+    const verse = getVerseRecord(chapterData, number);
+    verses.push(verse);
+    if (verse.sourceState.empty) {
+      const groupedSource = Object.entries(chapterData)
+        .map(([sourceNumber, value]) => normalizeVerseRecord(value, sourceNumber))
+        .find(item => rangeIncludesVerse(item.sourceVerseRange, number));
+      unavailableVerses.push({ number, sourceVerseRange: groupedSource?.sourceVerseRange || null });
+    }
+    if (verse.sourceVerseRange) groupedRanges.push({ number, sourceVerseRange: verse.sourceVerseRange });
+  }
+  const projectableVerses = verses.filter(verse => !verse.sourceState.empty && verse.text.trim());
+  const warnings = [];
+  if (groupedRanges.length) warnings.push('La fuente proporciona parte de este pasaje como un rango agrupado.');
+  if (unavailableVerses.length) warnings.push('La fuente no proporciona texto individual verificable para todos los versiculos solicitados.');
+  if (projectableVerses.length === 0) warnings.push('Este versiculo no se puede proyectar individualmente porque la fuente lo incluye dentro de un rango agrupado.');
   const referenceText = `${chapter.bookName} ${parsed.chapter}${parsed.verse ? `:${start}${end > start ? `-${end}` : ''}` : ''}`;
   return {
     ...chapter,
     reference: referenceText,
-    passageId: `rv1909:${parsed.bookCode}.${parsed.chapter}.${start}-${end}`,
+    passageId: `${chapter.bibleId}:${parsed.bookCode}.${parsed.chapter}.${start}-${end}`,
     verses,
-    text: verses.map(item => `${item.number}. ${item.text}`).join('\n')
+    projectableVerses,
+    unavailableVerses,
+    groupedRanges,
+    warning: warnings.join(' '),
+    text: projectableVerses.map(item => `${item.number}. ${item.text}`).join('\n')
   };
 }
 
-export async function searchReference(reference, translationId = 'local:rv1909') {
+export async function searchReference(reference, translationId = DEFAULT_TRANSLATION_ID) {
   return getPassage({ reference, translationId });
 }
 
-export async function searchText({ query, translationId = 'local:rv1909', limit = 20 }) {
-  if (translationId !== 'local:rv1909') return [];
+export async function searchText({ query, translationId = DEFAULT_TRANSLATION_ID, limit = 20 }) {
   const search = normalize(query);
   if (!search) return [];
+  const metadata = await getLocalBibleMetadata(translationId);
   const books = await getBooks(translationId);
   const results = [];
   for (const meta of books) {
-    const book = await getLocalBibleBook(meta.code);
+    const book = await getLocalBibleBook(meta.code, translationId);
     for (const [chapter, verses] of Object.entries(book.chapters || {})) {
-      for (const [number, text] of Object.entries(verses)) {
-        if (normalize(text).includes(search)) {
+      for (const [number, value] of Object.entries(verses)) {
+        const verse = normalizeVerseRecord(value, number);
+        if (verse.text && normalize(verse.text).includes(search)) {
           results.push({
             provider: 'local',
-            bibleId: 'rv1909',
+            bibleId: getLocalBibleId(translationId),
             translationId,
-            abbreviation: 'RV1909',
-            translationName: 'Reina-Valera 1909',
+            abbreviation: metadata.abbreviation,
+            translationName: metadata.name,
             reference: `${book.name} ${chapter}:${number}`,
-            text,
-            passageId: `rv1909:${meta.code}.${chapter}.${number}`,
+            text: verse.text,
+            passageId: `${getLocalBibleId(translationId)}:${meta.code}.${chapter}.${number}`,
             copyright: 'Public Domain',
             available: true,
             offline: true
@@ -251,29 +324,79 @@ export async function searchText({ query, translationId = 'local:rv1909', limit 
   return results;
 }
 
-export const splitPassageIntoSlides = (passage, maxChars = 420) => {
+const splitLongVerse = (text, maxChars) => {
+  const source = String(text || '').trim();
+  if (source.length <= maxChars) return source ? [source] : [];
+
+  const sentences = source.match(/[^.!?;:]+[.!?;:]?\s*/g) || [source];
+  const chunks = [];
+  let buffer = '';
+
+  const pushWords = (value) => {
+    String(value || '').trim().split(/\s+/).filter(Boolean).forEach((word) => {
+      const next = buffer ? `${buffer} ${word}` : word;
+      if (buffer && next.length > maxChars) {
+        chunks.push(buffer);
+        buffer = word;
+      } else {
+        buffer = next;
+      }
+    });
+  };
+
+  sentences.forEach((sentence) => {
+    const next = buffer ? `${buffer} ${sentence.trim()}` : sentence.trim();
+    if (next.length > maxChars) {
+      if (buffer) {
+        chunks.push(buffer);
+        buffer = '';
+      }
+      pushWords(sentence);
+    } else {
+      buffer = next;
+    }
+  });
+  if (buffer) chunks.push(buffer);
+  return chunks.filter(Boolean);
+};
+
+const getStructuredVersePresentation = (verse) => {
+  const textLines = String(verse?.text || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  const heading = textLines[0] || '';
+
+  // Only a standalone, conventional superscription is promoted. Parenthetical
+  // lines and source-specific candidates remain part of the verse text.
+  const isUnambiguousSuperscription = textLines.length > 1
+    && /^(?:Salmo(?:\s+de\s+.+)?|Al\s+m[uú]sico\s+principal(?:\s*[:.]\s*.*)?|Oraci[oó]n(?:\s+de\s+.+)?|C[aá]ntico(?:\s+de\s+.+)?|Masquil(?:\s+de\s+.+)?|Mictam(?:\s+de\s+.+)?|Siga[ií]on(?:\s+de\s+.+)?)\.?$/iu.test(heading);
+
+  return isUnambiguousSuperscription
+    ? { heading, text: textLines.slice(1).join('\n') }
+    : { heading: null, text: String(verse?.text || '') };
+};
+
+export const splitPassageIntoSlides = (passage, maxChars = 360) => {
   const verses = Array.isArray(passage?.verses) ? passage.verses : [];
   if (verses.length === 0) return [];
-  const slides = [];
-  let buffer = [];
-  let bufferLength = 0;
-  verses.forEach((verse) => {
-    const line = `${verse.number}. ${verse.text}`;
-    if (buffer.length && bufferLength + line.length > maxChars) {
-      slides.push(buffer);
-      buffer = [];
-      bufferLength = 0;
-    }
-    buffer.push(line);
-    bufferLength += line.length;
+  const slides = verses.filter(verse => !verse?.sourceState?.empty && String(verse?.text || '').trim()).flatMap((verse) => {
+    const presentation = getStructuredVersePresentation(verse);
+    const parts = splitLongVerse(presentation.text, maxChars);
+    return parts.map((text, partIndex) => ({
+      title: `${passage.bookName} ${passage.chapter}:${verse.number}`,
+      reference: `${passage.bookName} ${passage.chapter}:${verse.number}${parts.length > 1 ? ` · ${partIndex + 1}/${parts.length}` : ''}`,
+      verseNumber: verse.number,
+      partIndex,
+      partCount: parts.length,
+      heading: partIndex === 0 ? presentation.heading : null,
+      text: `${verse.number}. ${text}`
+    }));
   });
-  if (buffer.length) slides.push(buffer);
-  return slides.map((lines, index) => ({
-    title: passage.reference,
-    reference: passage.reference,
+  return slides.map((slide, index) => ({
+    ...slide,
     translation: passage.abbreviation,
     translationName: passage.translationName,
-    text: lines.join('\n'),
     slideIndex: index,
     slideCount: slides.length
   }));

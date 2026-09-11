@@ -84,12 +84,19 @@ const getExistingMediaIndex = async (firestore) => {
   return byIdentityKey;
 };
 
-export const isSameMediaUsage = (usageA = {}, usageB = {}) => (
-  usageA.songId === usageB.songId
-  && usageA.location === usageB.location
-  && (usageA.sectionKey || '') === (usageB.sectionKey || '')
-  && (usageA.resourceId || '') === (usageB.resourceId || '')
-);
+export const isSameMediaUsage = (usageA = {}, usageB = {}) => {
+  const entityA = usageA.entityId || usageA.songId || usageA.predicaId || '';
+  const entityB = usageB.entityId || usageB.songId || usageB.predicaId || '';
+  const typeA = usageA.entityType || (usageA.songId ? 'song' : usageA.predicaId ? 'preaching' : '');
+  const typeB = usageB.entityType || (usageB.songId ? 'song' : usageB.predicaId ? 'preaching' : '');
+
+  return entityA === entityB
+    && typeA === typeB
+    && usageA.location === usageB.location
+    && (usageA.sectionKey || '') === (usageB.sectionKey || '')
+    && (usageA.blockId || '') === (usageB.blockId || '')
+    && (usageA.resourceId || '') === (usageB.resourceId || '');
+};
 
 export const calculateMediaUsageFields = (currentUsedBy = [], usage, action = 'add', now = Date.now()) => {
   const safeCurrentUsedBy = Array.isArray(currentUsedBy) ? currentUsedBy : [];

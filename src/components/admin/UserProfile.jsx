@@ -605,7 +605,7 @@ const UserProfile = ({ user }) => {
             </div>
           </div>
 
-          {/* Sección de Notificaciones Push (Backup) */}
+          {/* Seccion de Notificaciones Push (Backup) */}
           <div className="pt-6 border-t border-zinc-100 dark:border-zinc-800">
             <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
               <BellRing size={18} className="text-violet-600" /> Estado de Notificaciones

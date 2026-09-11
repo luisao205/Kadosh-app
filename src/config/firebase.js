@@ -9,6 +9,7 @@ import {
   persistentMultipleTabManager 
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import { getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_API_KEY,
@@ -29,8 +30,9 @@ const db = initializeFirestore(app, {
 });
 
 const auth = getAuth(app);
+const functions = getFunctions(app);
 
-export { db, auth };
+export { db, auth, functions };
 
 // Añade esta línea al final del archivo
 export const messaging = getMessaging(app);

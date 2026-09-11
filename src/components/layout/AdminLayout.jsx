@@ -7,8 +7,9 @@ import { db } from '../../config/firebase';
 import { canAccessMediaLibrary } from '../../utils/mediaLibraryPermissions';
 import { canAccessMultimediaTools, canAccessPreachings, canManageTeam } from '../../utils/rolePermissions';
 import { cancelTeamPinExitInvalidation, clearTeamPinAccessState, scheduleTeamPinExitInvalidation } from '../../utils/teamPinAccess';
+import { NavigationGuardProvider, useNavigationGuard } from '../../utils/navigationGuard';
 
-const AdminLayout = ({ children, user }) => {
+const AdminLayoutShell = ({ children, user }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [toastNotif, setToastNotif] = useState(null); // { titulo, mensaje }
   const [sysNotifs, setSysNotifs] = useState([]); // Historial de notificaciones
@@ -17,6 +18,7 @@ const AdminLayout = ({ children, user }) => {
   const [hideProfilePhotoReminder, setHideProfilePhotoReminder] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const { confirmNavigation } = useNavigationGuard();
   const shouldShowProfilePhotoReminder = !user?.fotoPerfil && !hideProfilePhotoReminder;
 
   const navGroups = [
@@ -60,6 +62,7 @@ const AdminLayout = ({ children, user }) => {
   const activeSection = resolveActiveSection(location.pathname);
 
   const handleLogout = async () => {
+    if (!(await confirmNavigation())) return;
     try {
       const auth = getAuth();
       clearTeamPinAccessState();
@@ -67,6 +70,22 @@ const AdminLayout = ({ children, user }) => {
     } catch (error) {
       console.error("Error al cerrar sesión:", error);
     }
+  };
+
+  const guardedNavigate = async (path, options) => {
+    if (!path) return;
+    if (location.pathname === path && !options?.state) {
+      setIsOpen(false);
+      return;
+    }
+    if (!(await confirmNavigation())) return;
+    navigate(path, options);
+    setIsOpen(false);
+  };
+
+  const handleGuardedLinkClick = (event, path) => {
+    event.preventDefault();
+    guardedNavigate(path);
   };
 
   useEffect(() => {
@@ -220,7 +239,12 @@ const AdminLayout = ({ children, user }) => {
       {/* Alerta Global Flotante (Toast) */}
       {toastNotif && (
         <div 
-          onClick={() => { if(toastNotif.url) { navigate(toastNotif.url); setToastNotif(null); } }}
+          onClick={async () => {
+            if (!toastNotif.url) return;
+            if (!(await confirmNavigation())) return;
+            navigate(toastNotif.url);
+            setToastNotif(null);
+          }}
           className={`fixed top-6 right-6 z-[100] bg-gradient-to-r from-blue-600 to-violet-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 animate-in slide-in-from-top-5 ${toastNotif.url ? 'cursor-pointer hover:scale-105 transition-transform' : ''}`}
         >
           <div className="p-2 bg-white/20 rounded-full"><BellRing size={24} className="animate-bounce" /></div>
@@ -244,7 +268,12 @@ const AdminLayout = ({ children, user }) => {
             ) : (
               sysNotifs.map(n => (
               <div key={n.id} 
-                onClick={() => { if(n.url) { navigate(n.url); setShowNotifs(false); } }} 
+                onClick={async () => {
+                  if (!n.url) return;
+                  if (!(await confirmNavigation())) return;
+                  navigate(n.url);
+                  setShowNotifs(false);
+                }} 
                 className={`p-4 border-b border-white/5 hover:bg-white/5 transition-colors ${n.url ? 'cursor-pointer' : ''}`}
               >
                   <p className="text-xs font-black text-blue-600 dark:text-blue-400 mb-1">{n.titulo}</p>
@@ -285,7 +314,7 @@ const AdminLayout = ({ children, user }) => {
                   <Link
                     key={item.name}
                     to={item.path}
-                    onClick={() => setIsOpen(false)}
+                    onClick={(event) => handleGuardedLinkClick(event, item.path)}
                     className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium ${isActive ? 'border border-violet-400/30 bg-violet-500/15 text-violet-100 shadow-[0_12px_35px_rgba(124,58,237,0.16)]' : 'text-zinc-400 hover:bg-white/[0.07] hover:text-zinc-100'}`}
                   >
                     {item.icon}
@@ -345,7 +374,7 @@ const AdminLayout = ({ children, user }) => {
                 <div className="flex shrink-0 gap-2">
                   <button
                     type="button"
-                    onClick={() => navigate('/perfil')}
+                    onClick={() => guardedNavigate('/perfil')}
                     className="rounded-2xl bg-violet-600 px-4 py-2.5 text-xs font-black uppercase tracking-wide text-white hover:bg-violet-500 active:scale-95"
                   >
                     Subir foto
@@ -367,5 +396,11 @@ const AdminLayout = ({ children, user }) => {
     </div>
   );
 };
+
+const AdminLayout = ({ children, user }) => (
+  <NavigationGuardProvider>
+    <AdminLayoutShell user={user}>{children}</AdminLayoutShell>
+  </NavigationGuardProvider>
+);
 
 export default AdminLayout;

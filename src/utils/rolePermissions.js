@@ -53,3 +53,10 @@ export const canAccessPreachings = (user = {}) => hasAnyRole(user, [
 export const canManageAnyPreaching = (user = {}) => isOwner(user) || isMultimedia(user);
 
 export const canCreatePreaching = (user = {}) => isOwner(user) || isMultimedia(user) || isPastor(user);
+
+export const canUsePreachingMedia = (user = {}, preaching = {}) => {
+  if (canManageAnyPreaching(user)) return true;
+  return isPastor(user)
+    && preaching?.preacherType === 'user'
+    && preaching?.preacherId === user?.uid;
+};

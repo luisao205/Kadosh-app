@@ -64,7 +64,7 @@ export const habilitarAccesoWeb = async (oldUid, email, password) => {
       ...oldUserSnap.data(), email, sinAcceso: false, fechaActualizacion: new Date().toISOString()
     });
 
-    // 3. Actualizar TODOS los eventos donde este músico estaba convocado
+    // 3. Actualizar TODOS los eventos donde este musico estaba convocado
     const q = query(collection(db, "eventos"), where("equipo", "array-contains", oldUid));
     const querySnapshot = await getDocs(q);
     const batch = writeBatch(db);

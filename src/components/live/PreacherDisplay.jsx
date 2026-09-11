@@ -1,10 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { addDoc, collection, doc, getDoc, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
-import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, Clock3, Lock, MessageSquare, Pause, Play, RotateCcw, Send, ShieldCheck, StickyNote, Video, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, Clock3, Image as ImageIcon, Lock, MessageSquare, Pause, Play, RotateCcw, Send, ShieldCheck, StickyNote, Video, X } from 'lucide-react';
 import { db } from '../../config/firebase';
-import { isAdmin, isMultimedia, isOwner, isPastor, isPreacherLegacy } from '../../utils/rolePermissions';
+import { canUsePreachingMedia, isAdmin, isMultimedia, isOwner, isPastor, isPreacherLegacy } from '../../utils/rolePermissions';
 import { useFeedback } from '../ui/FeedbackProvider';
+import useMediaLibrary from '../../hooks/useMediaLibrary';
+import { MEDIA_TYPES } from '../../utils/mediaLibrary';
+import { getMediaTypeLabel, getMediaStatusClassName, getMediaStatusLabel } from '../media/mediaDisplay';
+import { buildProjectorMediaPayload } from '../../utils/projectorMediaState';
 import {
   PREACHER_QUICK_ALERTS,
   PREACHER_REQUEST_STATUS,
@@ -16,6 +20,7 @@ import {
   createVerseRequestPayload,
   isPreachingStateFromAction
 } from '../../utils/preachingLive';
+import { createInactiveSongLiveState } from '../../utils/liveState';
 
 const LEGACY_PRIVATE_ROLES = ['dueno', 'dueño', 'admin', 'multimedia', 'predicador', 'pastor'];
 
@@ -65,6 +70,60 @@ const getNoteContent = (block, privateNotes = {}) => {
 const sortBlocks = (blocks = []) => (Array.isArray(blocks) ? blocks : [])
   .map((block, index) => ({ ...block, order: Number.isFinite(Number(block.order)) ? Number(block.order) : index }))
   .sort((a, b) => a.order - b.order);
+
+const indexMediaLibraryById = (items = []) => {
+  const index = new Map();
+  items.forEach((item) => {
+    if (item?.mediaId) index.set(item.mediaId, item);
+    if (item?.id) index.set(item.id, item);
+  });
+  return index;
+};
+
+const resolvePreachingMediaInstruction = (item = {}, mediaIndex, canVerifyLibrary, mediaLoading, mediaError) => {
+  const mediaId = item.mediaId || '';
+  const libraryItem = mediaId ? mediaIndex.get(mediaId) : null;
+  const resolved = libraryItem || item;
+  const type = resolved.type || resolved.mediaType || MEDIA_TYPES.LINK;
+  const thumbnailUrl = resolved.thumbnailUrl || resolved.thumbnail || item.thumbnailUrl || '';
+  const title = resolved.title || resolved.name || item.title || 'Recurso multimedia';
+  const status = libraryItem?.status || null;
+
+  let stateLabel = 'Recurso vinculado';
+  let stateClassName = 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200';
+
+  if (!mediaId) {
+    stateLabel = 'Solo instruccion';
+    stateClassName = 'border-zinc-500/25 bg-zinc-500/10 text-zinc-300';
+  } else if (!canVerifyLibrary) {
+    stateLabel = 'Biblioteca no disponible para este rol';
+    stateClassName = 'border-amber-500/25 bg-amber-500/10 text-amber-200';
+  } else if (mediaLoading) {
+    stateLabel = 'Verificando recurso';
+    stateClassName = 'border-cyan-500/25 bg-cyan-500/10 text-cyan-200';
+  } else if (mediaError) {
+    stateLabel = 'No se pudo verificar';
+    stateClassName = 'border-amber-500/25 bg-amber-500/10 text-amber-200';
+  } else if (!libraryItem) {
+    stateLabel = 'Recurso no encontrado';
+    stateClassName = 'border-red-500/25 bg-red-500/10 text-red-200';
+  } else if (status) {
+    stateLabel = getMediaStatusLabel(status);
+    stateClassName = getMediaStatusClassName(status);
+  }
+
+  return {
+    ...item,
+    libraryItem,
+    mediaId,
+    url: resolved.url || item.url || '',
+    title,
+    type,
+    thumbnailUrl,
+    stateLabel,
+    stateClassName
+  };
+};
 
 const buildPreachingSteps = (blocks = [], privateNotes = {}) => {
   const sorted = sortBlocks(blocks);
@@ -342,6 +401,23 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
   }, [timer, timerKey]);
 
   const steps = useMemo(() => buildPreachingSteps(preaching?.blocks || [], privateNotes), [preaching?.blocks, privateNotes]);
+  const preachingMediaIds = useMemo(() => {
+    const ids = new Set();
+    steps.forEach(step => {
+      (step.mediaInstructions || []).forEach(item => {
+        if (item?.mediaId) ids.add(item.mediaId);
+      });
+    });
+    return [...ids];
+  }, [steps]);
+  const canVerifyMediaLibrary = canUsePreachingMedia(user, preaching);
+  const isLimitedPreachingMediaUser = canVerifyMediaLibrary && !canPreviewShared(user);
+  const mediaLibrary = useMediaLibrary({
+    enabled: canVerifyMediaLibrary && preachingMediaIds.length > 0,
+    activeOnly: isLimitedPreachingMediaUser,
+    sharedOnly: isLimitedPreachingMediaUser
+  });
+  const mediaLibraryIndex = useMemo(() => indexMediaLibraryById(mediaLibrary.items), [mediaLibrary.items]);
   const safeIndex = Math.min(Math.max(0, currentIndex), Math.max(0, steps.length - 1));
   const currentStep = steps[safeIndex] || null;
   const previousStep = safeIndex > 0 ? steps[safeIndex - 1] : null;
@@ -501,7 +577,13 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
         proyectorSongId: null,
         proyectorSlideIndex: -1,
         proyectorNextSlide: null,
-        proyectorNextSong: null
+        proyectorNextSong: null,
+        currentSongId: null,
+        liveState: createInactiveSongLiveState({
+          contentType: nextState.contentType === 'bible' ? 'bible' : 'preaching',
+          contentTitle: nextState.title || nextState.reference || 'Predica',
+          updatedBy: user?.nombre || user?.displayName || user?.email || 'Pastor'
+        })
       }, { merge: true });
       notify('Contenido proyectado.', { type: 'success' });
     } catch (error) {
@@ -520,14 +602,119 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
     blockId: currentStep?.id || ''
   });
 
-  const projectVerseNow = (verse) => writePreachingProjection({
-    preachingType: 'verse',
-    title: verse?.reference || 'Versiculo',
-    reference: verse?.reference || '',
-    translation: verse?.translation || '',
-    content: verse?.text || '',
-    blockId: verse?.id || ''
-  });
+  const projectVerseNow = (verse) => {
+    const passage = verse?.biblePassage;
+    const slides = Array.isArray(passage?.slides) ? passage.slides : [];
+    const firstSlide = slides[0];
+
+    if (firstSlide) {
+      return writePreachingProjection({
+        preachingType: 'verse',
+        title: firstSlide.reference || verse?.reference || 'Versiculo',
+        reference: firstSlide.reference || verse?.reference || '',
+        translation: firstSlide.translation || verse?.translation || '',
+        translationName: firstSlide.translationName || verse?.translationName || '',
+        content: firstSlide.text || verse?.text || '',
+        contentType: 'bible',
+        provider: verse?.provider || 'local',
+        bibleId: verse?.bibleId || '',
+        passageId: verse?.passageId || passage?.passageId || '',
+        copyright: verse?.copyright || '',
+        bibleSlideIndex: 0,
+        bibleSlideCount: slides.length,
+        bible: {
+          passageId: verse?.passageId || passage?.passageId || '',
+          translation: firstSlide.translation || verse?.translation || '',
+          translationName: firstSlide.translationName || verse?.translationName || '',
+          slides,
+          slideIndex: 0,
+          slideCount: slides.length
+        },
+        blockId: verse?.id || ''
+      });
+    }
+
+    return writePreachingProjection({
+      preachingType: 'verse',
+      title: verse?.reference || 'Versiculo',
+      reference: verse?.reference || '',
+      translation: verse?.translation || '',
+      content: verse?.text || '',
+      blockId: verse?.id || ''
+    });
+  };
+
+  const projectMediaInstructionNow = async (item = {}) => {
+    if (!canOperateLive || !isLiveSession || !eventData?.id) {
+      notify('Inicia la predica para enviar multimedia a pantalla.', { type: 'warning' });
+      return;
+    }
+    if (isProjectingDirect) return;
+
+    const media = resolvePreachingMediaInstruction(
+      item,
+      mediaLibraryIndex,
+      canVerifyMediaLibrary,
+      mediaLibrary.loading,
+      mediaLibrary.error
+    );
+
+    if (!media.mediaId) {
+      notify('Este bloque no tiene un recurso multimedia asociado.', { type: 'warning' });
+      return;
+    }
+    if (!media.libraryItem || !media.url) {
+      notify('No se pudo resolver el recurso multimedia para proyectarlo.', { type: 'error' });
+      return;
+    }
+
+    const mediaPayload = {
+      mediaId: media.mediaId,
+      url: media.url,
+      type: media.type,
+      thumbnailUrl: media.thumbnailUrl || '',
+      title: media.title,
+      name: media.title,
+      source: 'preaching',
+      predicaId: preachingId,
+      blockId: item.id || ''
+    };
+
+    setIsProjectingDirect(true);
+    try {
+      const eventRef = doc(db, 'eventos', eventData.id);
+      const eventSnap = await getDoc(eventRef);
+      const eventSnapshot = eventSnap.exists() ? eventSnap.data() : {};
+      const updates = buildProjectorMediaPayload({
+        media: mediaPayload,
+        title: media.title,
+        timer: eventSnapshot?.proyectorCountdown || null,
+        background: eventSnapshot?.proyectorFondo || null,
+        liveState: createInactiveSongLiveState({
+          contentType: 'preaching-media',
+          contentTitle: media.title || item.instruction || 'Multimedia de predica',
+          updatedBy: user?.nombre || user?.displayName || user?.email || 'Pastor'
+        })
+      });
+      updates.projectorState = {
+        ...updates.projectorState,
+        preachingType: 'mediaInstruction',
+        predicaId: preachingId,
+        blockId: item.id || '',
+        sourceActor: 'pastor',
+        actorUid: user?.uid || null,
+        actorName: user?.nombre || user?.displayName || user?.email || 'Pastor',
+        previousProjectorState: eventSnapshot?.projectorState || null
+      };
+      await setDoc(eventRef, updates, { merge: true });
+      notify('Multimedia enviada a pantalla.', { type: 'success' });
+    } catch (error) {
+      console.error('Error proyectando multimedia de predica:', error);
+      notify('No se pudo enviar la multimedia a pantalla.', { type: 'error' });
+    } finally {
+      setIsProjectingDirect(false);
+    }
+  };
 
   const clearOwnPreachingProjection = async () => {
     if (!eventData?.id || !projectorState?.actionId) return;
@@ -557,7 +744,13 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
         proyectorSlide: previous?.type === 'lyrics' ? eventData?.proyectorSlide || null : null,
         proyectorMedia: previous?.type === 'media' ? (previous.media || null) : null,
         proyectorApagado: previous?.type === 'blackout',
-        proyectorLogo: previous?.type === 'logo'
+        proyectorLogo: previous?.type === 'logo',
+        currentSongId: null,
+        liveState: createInactiveSongLiveState({
+          contentType: previous?.type || 'none',
+          contentTitle: previous?.title || '',
+          updatedBy: user?.nombre || user?.displayName || user?.email || 'Pastor'
+        })
       }, { merge: true });
       notify(previous ? 'Contenido anterior restaurado.' : 'Contenido de predica quitado.', { type: 'success' });
     } catch (error) {
@@ -906,9 +1099,59 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
                       <div className="rounded-3xl border border-cyan-400/20 bg-cyan-500/10 p-4">
                         <p className="mb-3 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-cyan-200"><Video size={14} /> Multimedia</p>
                         <div className="space-y-2">
-                          {currentStep.mediaInstructions.map((item, index) => (
-                            <p key={item.id || index} className="rounded-2xl bg-black/25 p-3 text-sm font-bold leading-relaxed text-cyan-50 whitespace-pre-wrap">{item.instruction || 'Indicacion multimedia sin detalle'}</p>
-                          ))}
+                          {currentStep.mediaInstructions.map((item, index) => {
+                            const media = resolvePreachingMediaInstruction(
+                              item,
+                              mediaLibraryIndex,
+                              canVerifyMediaLibrary,
+                              mediaLibrary.loading,
+                              mediaLibrary.error
+                            );
+                            const isImage = media.type === MEDIA_TYPES.IMAGE;
+                            return (
+                              <div key={item.id || index} className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                                  <div className="flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl bg-zinc-950 text-cyan-200 sm:w-32">
+                                    {media.thumbnailUrl ? (
+                                      <img src={media.thumbnailUrl} alt={media.title} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                    ) : isImage ? (
+                                      <ImageIcon size={26} />
+                                    ) : (
+                                      <Video size={26} />
+                                    )}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-black text-cyan-50">{media.title}</p>
+                                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                                      <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-cyan-100">
+                                        {getMediaTypeLabel(media.type)}
+                                      </span>
+                                      <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${media.stateClassName}`}>
+                                        {media.stateLabel}
+                                      </span>
+                                    </div>
+                                    {media.mediaId && (
+                                      <p className="mt-2 truncate text-[11px] font-bold text-zinc-500">mediaId: {media.mediaId}</p>
+                                    )}
+                                  </div>
+                                  {canRequestProjection && media.mediaId && (
+                                    <button
+                                      type="button"
+                                      onClick={() => projectMediaInstructionNow(item)}
+                                      disabled={!isLiveSession || isProjectingDirect || !media.libraryItem || !media.url}
+                                      className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-600 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-45"
+                                      title={!media.libraryItem || !media.url ? 'Recurso no disponible para proyectar' : 'Enviar multimedia a pantalla'}
+                                    >
+                                      <Send size={13} /> Enviar a pantalla
+                                    </button>
+                                  )}
+                                </div>
+                                <p className="mt-3 whitespace-pre-wrap text-sm font-bold leading-relaxed text-cyan-50">
+                                  {item.instruction || 'Indicacion multimedia sin detalle'}
+                                </p>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}

@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX, Cake, Edit3 } from 'lucide-react';
 import { calcularOffsetSemitonos, transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
+import { getEventChoirsForSong, getEventSingerForSong, getSingerTone, getSongBaseKey } from '../../utils/songAssignments';
 
 const readMusicianLocal = (key, fallback) => {
   if (typeof window === 'undefined') return fallback;
@@ -32,6 +33,7 @@ const SetlistViewer = ({ user }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const returnTo = location.state?.returnTo || '/eventos';
+  const ensayoQueryRequested = new URLSearchParams(location.search).get('modo') === 'ensayo';
   const [evento, setEvento] = useState(null);
   const [canciones, setCanciones] = useState([]);
   const [equipo, setEquipo] = useState([]);
@@ -145,6 +147,26 @@ const SetlistViewer = ({ user }) => {
     });
     return validSongs;
   }, [evento, canciones]);
+
+  useEffect(() => {
+    if (!ensayoQueryRequested || loading) return;
+
+    const params = new URLSearchParams(location.search);
+    params.delete('modo');
+    const cleanSearch = params.toString();
+    navigate(
+      {
+        pathname: location.pathname,
+        search: cleanSearch ? `?${cleanSearch}` : '',
+      },
+      { replace: true, state: location.state }
+    );
+
+    if (playlist.length > 0) {
+      setCurrentTrackIdx(0);
+      setShowEnsayoPlayer(true);
+    }
+  }, [ensayoQueryRequested, loading, location.pathname, location.search, location.state, navigate, playlist.length]);
 
   const ensayoSummary = useMemo(() => {
     if (!evento) return { readyCount: 0, total: 0 };
@@ -269,13 +291,13 @@ const SetlistViewer = ({ user }) => {
             }
           });
           if (disponibles.length > 0) sugerenciaMsg = `\n💡 Tienes a ${disponibles.join(', ')} disponible(s) en ${miRol}.`;
-          else sugerenciaMsg = `\n⚠️ No hay otros músicos registrados en ${miRol}.`;
+          else sugerenciaMsg = `\n⚠️ No hay otros musicos registrados en ${miRol}.`;
         }
       }
 
       await addDoc(collection(db, 'notificaciones'), {
         titulo: 'Respuesta de Convocatoria',
-        mensaje: `${user.nombre} ha ${respuesta === 'confirmado' ? 'confirmado ✅' : 'rechazado ❌'} su asistencia.${sugerenciaMsg}`,
+        mensaje: `${user.nombre} ha ${respuesta === 'confirmado' ? 'confirmado âœ…' : 'rechazado ❌'} su asistencia.${sugerenciaMsg}`,
         destinatarios: ['admin', 'dueño'],
         emisorId: user.uid,
         url: `/setlist/${id}`,
@@ -350,25 +372,23 @@ const SetlistViewer = ({ user }) => {
     return `${min}:${sec < 10 ? '0' : ''}${sec}`;
   };
 
-  // ----- LÓGICA DEL MODO ENSAYO (Extraída para mayor limpieza) -----
+  // ----- LOGICA DEL MODO ENSAYO (Extraída para mayor limpieza) -----
   const currentEnsayoSong = playlist[currentTrackIdx];
   const isEnsayoMulti = currentEnsayoSong?.multitracks?.length > 0;
   const hasEnsayoAudio = isEnsayoMulti || currentEnsayoSong?.audioUrl;
   
   let ensayoOffset = 0;
-  let ensayoTonoFinal = currentEnsayoSong?.tonoOriginal;
-  const cantanteAsignadoEnsayo = evento?.cantantesPorCancion?.[currentEnsayoSong?.id];
-  if (cantanteAsignadoEnsayo && currentEnsayoSong?.tonosAlternativos) {
-    const opciones = currentEnsayoSong.tonosAlternativos.split(',');
-    const match = opciones.find(opt => opt.trim().toLowerCase().startsWith(cantanteAsignadoEnsayo.toLowerCase() + ':'));
-    if (match) {
-      ensayoTonoFinal = match.split(':')[1].trim();
-      ensayoOffset = calcularOffset(currentEnsayoSong.tonoOriginal, ensayoTonoFinal);
-    }
+  const ensayoBaseKey = getSongBaseKey(currentEnsayoSong);
+  let ensayoTonoFinal = ensayoBaseKey;
+  const cantanteAsignadoEnsayo = getEventSingerForSong(evento, currentEnsayoSong?.id);
+  const tonoAsignadoEnsayo = getSingerTone(currentEnsayoSong, cantanteAsignadoEnsayo);
+  if (tonoAsignadoEnsayo) {
+    ensayoTonoFinal = tonoAsignadoEnsayo;
+    ensayoOffset = calcularOffset(ensayoBaseKey, ensayoTonoFinal);
   }
   const ensayoEffectiveOffset = ensayoOffset + ensayoLocalTranspose;
   const ensayoVistaActual = currentEnsayoSong
-    ? transponerNota(ensayoTonoFinal || currentEnsayoSong.tonoOriginal || 'C', ensayoLocalTranspose)
+    ? transponerNota(ensayoTonoFinal || ensayoBaseKey, ensayoLocalTranspose)
     : '';
   const ensayoSeccionesParsed = currentEnsayoSong ? parsearCancion(currentEnsayoSong.letraRaw) : [];
 
@@ -406,7 +426,7 @@ const SetlistViewer = ({ user }) => {
               <PlayCircle size={16} /> Modo Ensayo
             </button>
           )}
-                      {/* 🎮 MENÚ DE CONTROLADOR: Ahora músicos también tienen acceso limitado */}
+                      {/* 🎮 MENU DE CONTROLADOR: Ahora musicos también tienen acceso limitado */}
             {(user?.rol === 'admin' || user?.rol === 'dueño' || user?.rol === 'multimedia' || user?.rol === 'musico') && (
             <div className="relative w-full sm:w-max">
               <button onClick={() => setShowControladorMenu(!showControladorMenu)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-violet-600 text-white rounded-xl hover:bg-violet-700 font-bold text-sm shadow-sm transition-colors active:scale-95 w-full sm:w-max">
@@ -422,12 +442,12 @@ const SetlistViewer = ({ user }) => {
                           <Monitor size={16} /> Controlador General
                         </button>
                       )}
-                      {/* Los retornos de pantalla son para todos (Músicos y Cantantes) */}
+                      {/* Los retornos de pantalla son para todos (Musicos y Cantantes) */}
                     <button onClick={() => handleOpenScreen(`/retorno/${id}`)} className="w-full text-left px-3 py-2.5 text-sm font-bold text-zinc-700 dark:text-zinc-300 hover:bg-violet-50 dark:hover:bg-violet-500/10 hover:text-violet-700 dark:hover:text-violet-400 rounded-lg flex items-center gap-2 transition-colors mt-1">
                       <Mic2 size={16} /> Retorno Cantantes
                     </button>
                     <button onClick={() => handleOpenScreen(`/retorno-musicos/${id}`)} className="w-full text-left px-3 py-2.5 text-sm font-bold text-zinc-700 dark:text-zinc-300 hover:bg-violet-50 dark:hover:bg-violet-500/10 hover:text-violet-700 dark:hover:text-violet-400 rounded-lg flex items-center gap-2 transition-colors mt-1">
-                      <Music size={16} /> Retorno Músicos
+                      <Music size={16} /> Retorno Musicos
                     </button>
                   </div>
                 </>
@@ -498,7 +518,7 @@ const SetlistViewer = ({ user }) => {
                 
                 return setlistItems.map((item, index) => {
                   if (item.type === 'note') {
-                    const isHeader = item.value.startsWith('🎤') || item.value === item.value.toUpperCase();
+                    const isHeader = item.value.startsWith('Mic') || item.value === item.value.toUpperCase();
                     return (
                       <div key={item.idLocal || index} className={`rounded-xl p-3 flex items-center gap-3 ${isHeader ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800/50 border shadow-sm my-2' : 'bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 border-dashed'}`}>
                         {isHeader ? <Mic2 size={18} className="text-indigo-600 dark:text-indigo-400" /> : <FileText size={16} className="text-zinc-400" />}
@@ -511,13 +531,9 @@ const SetlistViewer = ({ user }) => {
                   if (!cancion) return null;
                   const currCount = songCounter++;
                   
-                  let tonoFinal = cancion.tonoOriginal;
-                  const cantanteAsignado = evento.cantantesPorCancion?.[cancion.id];
-                  if (cantanteAsignado && cancion.tonosAlternativos) {
-                    const opciones = cancion.tonosAlternativos.split(',');
-                    const opcionMatch = opciones.find(opt => opt.trim().toLowerCase().startsWith(cantanteAsignado.toLowerCase() + ':'));
-                    if (opcionMatch) tonoFinal = opcionMatch.split(':')[1].trim();
-                  }
+                  const cantanteAsignado = getEventSingerForSong(evento, cancion.id);
+                  const tonoFinal = getSingerTone(cancion, cantanteAsignado) || getSongBaseKey(cancion);
+                  const corosAsignados = getEventChoirsForSong(evento, cancion.id);
 
                   return (
                     <div key={item.idLocal || index} className="bg-white dark:bg-zinc-900 p-4 rounded-2xl shadow-sm border border-zinc-200 dark:border-zinc-800 flex items-center justify-between group hover:border-blue-300 dark:hover:border-blue-500/50 transition-colors">
@@ -526,8 +542,8 @@ const SetlistViewer = ({ user }) => {
                         <div className="truncate">
                           <h3 className="font-bold text-zinc-900 dark:text-zinc-100 flex flex-wrap items-center gap-2">
                             <span className="truncate">{cancion.titulo}</span>
-                            {evento.cantantesPorCancion?.[cancion.id] && <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 px-2 py-0.5 rounded-full border border-rose-100 dark:border-rose-500/20 tracking-wide uppercase">Voz: {evento.cantantesPorCancion[cancion.id].split(' ')[0]}</span>}
-                            {evento.corosPorCancion?.[cancion.id]?.length > 0 && <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-100 dark:border-indigo-500/20 tracking-wide uppercase">Coros: {evento.corosPorCancion[cancion.id].map(n => n.split(' ')[0]).join(', ')}</span>}
+                            {cantanteAsignado && <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 px-2 py-0.5 rounded-full border border-rose-100 dark:border-rose-500/20 tracking-wide uppercase">Voz: {cantanteAsignado.split(' ')[0]}</span>}
+                            {corosAsignados.length > 0 && <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-100 dark:border-indigo-500/20 tracking-wide uppercase">Coros: {corosAsignados.map(n => n.split(' ')[0]).join(', ')}</span>}
                           </h3>
                           <p className="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1 mt-0.5"><Mic2 size={12}/> <span className="truncate">{cancion.artista}</span></p>
                         </div>
@@ -541,12 +557,12 @@ const SetlistViewer = ({ user }) => {
                           <button
                             onClick={() => navigate(`/editar/${cancion.id}`, { state: { returnTo: `/setlist/${id}` } })}
                             className="p-3 bg-zinc-100 text-zinc-600 hover:bg-blue-600 hover:text-white rounded-xl transition-all shadow-sm active:scale-95"
-                            title="Editar canción"
+                            title="Editar cancion"
                           >
                             <Edit3 size={18} />
                           </button>
                         )}
-                        <button onClick={() => { const cantante = evento.cantantesPorCancion?.[cancion.id] || ''; navigate(`/live/${cancion.id}?evento=${id}&modo=ensayo${cantante ? `&cantante=${encodeURIComponent(cantante)}` : ''}`); }} className="p-3 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-xl transition-all shadow-sm active:scale-95" title="Abrir Teleprompter">
+                        <button onClick={() => { const cantante = getEventSingerForSong(evento, cancion.id); navigate(`/live/${cancion.id}?evento=${id}&modo=ensayo${cantante ? `&cantante=${encodeURIComponent(cantante)}` : ''}`); }} className="p-3 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-xl transition-all shadow-sm active:scale-95" title="Abrir Teleprompter">
                           <Play size={18} className="ml-0.5" />
                         </button>
                       </div>
@@ -643,14 +659,14 @@ const SetlistViewer = ({ user }) => {
       </div>
     </div>
 
-    {/* VISTA DE IMPRESIÓN (Generación Automática del Documento Físico) */}
+    {/* VISTA DE IMPRESION (Generación Automática del Documento Físico) */}
     <div className="hidden print:block bg-white text-black font-sans">
       <div className="break-after-page">
         <div className="text-center mb-8 border-b-4 border-black pb-6">
           <h1 className="text-5xl font-black uppercase tracking-tighter mb-2">{evento.titulo}</h1>
           <p className="text-xl font-bold text-gray-700">
             {new Date(evento.fecha).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-            {evento.tipoEvento && ` • ${evento.tipoEvento}`}
+            {evento.tipoEvento && ` ? ${evento.tipoEvento}`}
           </p>
         </div>
 
@@ -700,7 +716,7 @@ const SetlistViewer = ({ user }) => {
                 let count = 1;
                 return setlistItems.map((item, idx) => {
                   if (item.type === 'note') {
-                    const isHeader = item.value.startsWith('🎤') || item.value === item.value.toUpperCase();
+                    const isHeader = item.value.startsWith('Mic') || item.value === item.value.toUpperCase();
                     return (
                       <div key={idx} className={`p-3 rounded-xl mt-4 ${isHeader ? 'bg-gray-200 border-2 border-gray-400 text-left' : 'border-2 border-dashed border-gray-400 text-center bg-gray-50'}`}>
                         <span className={`${isHeader ? 'font-black uppercase tracking-widest text-gray-800' : 'font-bold italic text-gray-600'}`}>{item.value}</span>
@@ -710,13 +726,9 @@ const SetlistViewer = ({ user }) => {
                     const cancion = canciones.find(c => c.id === item.value);
                     if (!cancion) return null;
                     
-                    let tonoFinal = cancion.tonoOriginal;
-                    const cantanteAsignado = evento.cantantesPorCancion?.[cancion.id];
-                    if (cantanteAsignado && cancion.tonosAlternativos) {
-                      const opciones = cancion.tonosAlternativos.split(',');
-                      const opcionMatch = opciones.find(opt => opt.trim().toLowerCase().startsWith(cantanteAsignado.toLowerCase() + ':'));
-                      if (opcionMatch) tonoFinal = opcionMatch.split(':')[1].trim();
-                    }
+                    const cantanteAsignado = getEventSingerForSong(evento, cancion.id);
+                    const tonoFinal = getSingerTone(cancion, cantanteAsignado) || getSongBaseKey(cancion);
+                    const corosAsignados = getEventChoirsForSong(evento, cancion.id);
 
                     return (
                       <div key={idx} className="flex justify-between items-center p-3 border border-gray-300 rounded-xl shadow-sm">
@@ -725,7 +737,7 @@ const SetlistViewer = ({ user }) => {
                           <div>
                             <p className="font-black text-base leading-tight">{cancion.titulo}</p>
                             {cantanteAsignado && <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-0.5">Voz: {cantanteAsignado.split(' ')[0]}</p>}
-                            {evento.corosPorCancion?.[cancion.id]?.length > 0 && <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-0.5">Coros: {evento.corosPorCancion[cancion.id].map(n => n.split(' ')[0]).join(', ')}</p>}
+                            {corosAsignados.length > 0 && <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-0.5">Coros: {corosAsignados.map(n => n.split(' ')[0]).join(', ')}</p>}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
@@ -751,15 +763,12 @@ const SetlistViewer = ({ user }) => {
             if (!cancion) return null;
 
             let offset = 0;
-            let tonoFinal = cancion.tonoOriginal;
-            const cantanteAsignado = evento.cantantesPorCancion?.[cancion.id];
-            if (cantanteAsignado && cancion.tonosAlternativos) {
-              const opciones = cancion.tonosAlternativos.split(',');
-              const opcionMatch = opciones.find(opt => opt.trim().toLowerCase().startsWith(cantanteAsignado.toLowerCase() + ':'));
-              if (opcionMatch) {
-                tonoFinal = opcionMatch.split(':')[1].trim();
-                offset = calcularOffset(cancion.tonoOriginal, tonoFinal);
-              }
+            const cantanteAsignado = getEventSingerForSong(evento, cancion.id);
+            const tonoBase = getSongBaseKey(cancion);
+            const tonoFinal = getSingerTone(cancion, cantanteAsignado) || tonoBase;
+            const corosAsignados = getEventChoirsForSong(evento, cancion.id);
+            if (tonoFinal && tonoFinal !== tonoBase) {
+              offset = calcularOffset(tonoBase, tonoFinal);
             }
 
             const seccionesParsed = parsearCancion(cancion.letraRaw);
@@ -774,8 +783,8 @@ const SetlistViewer = ({ user }) => {
                   </div>
                   <div className="text-right">
                     <span className="text-3xl font-black border-4 border-black px-3 py-1 rounded-xl inline-block mb-1">{traducirAcorde(tonoFinal || 'C', formatoAcordes)}</span>
-                    <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{cancion.bpm} BPM {cantanteAsignado ? `• Voz: ${cantanteAsignado.split(' ')[0]}` : ''}</p>
-                    {evento.corosPorCancion?.[cancion.id]?.length > 0 && <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-1">Coros: {evento.corosPorCancion[cancion.id].map(n => n.split(' ')[0]).join(', ')}</p>}
+                    <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{cancion.bpm} BPM {cantanteAsignado ? `- Voz: ${cantanteAsignado.split(' ')[0]}` : ''}</p>
+                    {corosAsignados.length > 0 && <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-1">Coros: {corosAsignados.map(n => n.split(' ')[0]).join(', ')}</p>}
                   </div>
                 </div>
                 <div className="columns-2 gap-12 text-sm font-medium">
@@ -842,22 +851,22 @@ const SetlistViewer = ({ user }) => {
 
   {/* ESTUDIO DE ENSAYO (MODAL A PANTALLA COMPLETA - Extraído al nivel raíz) */}
   {showEnsayoPlayer && playlist.length > 0 && currentEnsayoSong && (
-    <div className="fixed inset-0 z-[100] bg-zinc-950 text-white flex flex-col lg:flex-row overflow-hidden animate-in fade-in print:hidden">
+    <div className="fixed inset-0 z-[100] flex flex-col overflow-hidden bg-zinc-50 text-zinc-950 dark:bg-zinc-950 dark:text-white lg:flex-row animate-in fade-in print:hidden">
       
       {/* BARRA LATERAL (Setlist) */}
-      <div className="w-full lg:w-80 bg-zinc-950/95 border-b lg:border-b-0 lg:border-r border-zinc-800 flex flex-col shrink-0 max-h-[34dvh] lg:max-h-none lg:h-full shadow-[20px_0_50px_rgba(0,0,0,0.45)] z-20">
-        <div className="p-3 md:p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
-          <h3 className="font-black text-base md:text-lg flex items-center gap-2 text-emerald-300 tracking-tight"><ListMusic size={20}/> Estudio de Ensayo</h3>
-          <button onClick={() => { stopEnsayoAll(); setShowEnsayoPlayer(false); }} className="p-2 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-full transition-colors active:scale-95"><X size={20}/></button>
+      <div className="z-20 flex w-full max-h-[34dvh] shrink-0 flex-col border-b border-zinc-200 bg-white/95 shadow-[20px_0_50px_rgba(0,0,0,0.16)] dark:border-zinc-800 dark:bg-zinc-950/95 lg:h-full lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r dark:shadow-[20px_0_50px_rgba(0,0,0,0.45)]">
+        <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950 md:p-5">
+          <h3 className="flex items-center gap-2 text-base font-black tracking-tight text-emerald-700 dark:text-emerald-300 md:text-lg"><ListMusic size={20}/> Estudio de Ensayo</h3>
+          <button onClick={() => { stopEnsayoAll(); setShowEnsayoPlayer(false); }} className="rounded-full p-2 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white active:scale-95"><X size={20}/></button>
         </div>
         <div className="flex-1 overflow-y-auto p-3 space-y-2 [&::-webkit-scrollbar]:hidden">
           {playlist.map((song, idx) => (
             <button 
               key={idx}
               onClick={() => setCurrentTrackIdx(idx)}
-              className={`w-full text-left p-3 rounded-2xl transition-all border flex items-center gap-3 ${currentTrackIdx === idx ? 'bg-emerald-500/16 border-emerald-400/50 text-emerald-100 shadow-sm' : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.07] text-zinc-400 hover:text-white'}`}
+              className={`w-full text-left p-3 rounded-2xl transition-all border flex items-center gap-3 ${currentTrackIdx === idx ? 'border-emerald-500/50 bg-emerald-500/12 text-emerald-800 shadow-sm dark:border-emerald-400/50 dark:bg-emerald-500/16 dark:text-emerald-100' : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:border-white/5 dark:bg-white/[0.03] dark:text-zinc-400 dark:hover:bg-white/[0.07] dark:hover:text-white'}`}
             >
-              <span className={`font-black text-xs w-6 text-center rounded-lg py-1 ${currentTrackIdx === idx ? 'bg-emerald-400 text-zinc-950' : 'bg-zinc-800 text-zinc-500'}`}>{idx + 1}</span>
+              <span className={`w-6 rounded-lg py-1 text-center text-xs font-black ${currentTrackIdx === idx ? 'bg-emerald-500 text-white dark:bg-emerald-400 dark:text-zinc-950' : 'bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500'}`}>{idx + 1}</span>
               <div className="flex-1 truncate">
                 <p className="font-black text-sm truncate leading-tight">{song.titulo}</p>
                 <p className="text-[10px] uppercase tracking-wider opacity-70 mt-0.5 truncate">{song.artista}</p>
@@ -869,13 +878,13 @@ const SetlistViewer = ({ user }) => {
       </div>
 
       {/* ÁREA PRINCIPAL DERECHA */}
-      <div className="flex-1 min-h-0 flex flex-col relative bg-[radial-gradient(circle_at_50%_0%,rgba(16,185,129,0.12),transparent_34%),#09090b]">
+      <div className="relative flex min-h-0 flex-1 flex-col bg-[radial-gradient(circle_at_50%_0%,rgba(16,185,129,0.09),transparent_34%),#fafafa] dark:bg-[radial-gradient(circle_at_50%_0%,rgba(16,185,129,0.12),transparent_34%),#09090b]">
         
-        {/* Cabecera de la canción */}
-        <div className="p-3 md:px-8 md:py-5 border-b border-zinc-800/90 bg-zinc-950/72 backdrop-blur-sm flex justify-between items-center gap-4 shrink-0">
+        {/* Cabecera de la cancion */}
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-zinc-200 bg-white/82 p-3 backdrop-blur-sm dark:border-zinc-800/90 dark:bg-zinc-950/72 md:px-8 md:py-5">
            <div className="min-w-0">
-              <h2 className="text-xl md:text-3xl xl:text-4xl font-black text-white tracking-tight truncate">{currentEnsayoSong.titulo}</h2>
-              <p className="text-xs md:text-sm text-zinc-400 mt-1 font-medium">{currentEnsayoSong.artista} • {currentEnsayoSong.bpm} BPM</p>
+              <h2 className="truncate text-xl font-black tracking-tight text-zinc-950 dark:text-white md:text-3xl xl:text-4xl">{currentEnsayoSong.titulo}</h2>
+              <p className="mt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400 md:text-sm">{currentEnsayoSong.artista} ? {currentEnsayoSong.bpm} BPM</p>
            </div>
            <div className="text-right">
               <span className="text-xl md:text-2xl font-black text-yellow-200 bg-yellow-400/10 border border-yellow-300/25 px-4 py-2 rounded-2xl inline-block shadow-sm">
@@ -885,43 +894,43 @@ const SetlistViewer = ({ user }) => {
            </div>
         </div>
 
-        <div className="shrink-0 border-b border-zinc-800/80 bg-zinc-950/88 px-3 py-2 md:px-8">
+        <div className="shrink-0 border-b border-zinc-200 bg-white/90 px-3 py-2 dark:border-zinc-800/80 dark:bg-[#09090b] md:px-8">
           <div className="mx-auto flex max-w-6xl flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-zinc-400">
-                Original: {traducirAcorde(ensayoTonoFinal || currentEnsayoSong.tonoOriginal || 'C', ensayoChordFormat, ensayoAccidentalPreference)}
+              <span className="rounded-full border border-zinc-200 bg-zinc-100 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+                Original: {traducirAcorde(ensayoTonoFinal || ensayoBaseKey, ensayoChordFormat, ensayoAccidentalPreference)}
               </span>
               <span className="rounded-full border border-yellow-300/25 bg-yellow-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-yellow-200">
                 Vista actual: {traducirAcorde(ensayoVistaActual || 'C', ensayoChordFormat, ensayoAccidentalPreference)}
               </span>
-              <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wide ${ensayoLocalTranspose === 0 ? 'border-zinc-800 bg-zinc-900 text-zinc-500' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'}`}>
+              <span className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-wide ${ensayoLocalTranspose === 0 ? 'border-zinc-200 bg-zinc-100 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300'}`}>
                 {ensayoLocalTranspose > 0 ? `+${ensayoLocalTranspose}` : ensayoLocalTranspose}
               </span>
             </div>
 
             <div className="flex gap-2 overflow-x-auto pb-1 xl:pb-0 [&::-webkit-scrollbar]:hidden">
-              <div className="flex shrink-0 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
-                <button type="button" onClick={() => setEnsayoFontScale(prev => Math.max(0.8, Number((prev - 0.08).toFixed(2))))} className="px-3 py-2 text-xs font-black text-zinc-300 hover:bg-zinc-800">A-</button>
-                <button type="button" onClick={() => setEnsayoFontScale(1)} className="border-x border-zinc-800 px-3 py-2 text-xs font-black text-zinc-400 hover:bg-zinc-800">Reset</button>
-                <button type="button" onClick={() => setEnsayoFontScale(prev => Math.min(1.45, Number((prev + 0.08).toFixed(2))))} className="px-3 py-2 text-xs font-black text-zinc-300 hover:bg-zinc-800">A+</button>
+              <div className="flex shrink-0 overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+                <button type="button" onClick={() => setEnsayoFontScale(prev => Math.max(0.8, Number((prev - 0.08).toFixed(2))))} className="px-3 py-2 text-xs font-black text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800">A-</button>
+                <button type="button" onClick={() => setEnsayoFontScale(1)} className="border-x border-zinc-200 px-3 py-2 text-xs font-black text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800">Reset</button>
+                <button type="button" onClick={() => setEnsayoFontScale(prev => Math.min(1.45, Number((prev + 0.08).toFixed(2))))} className="px-3 py-2 text-xs font-black text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800">A+</button>
               </div>
 
-              <button type="button" onClick={() => setEnsayoShowChords(prev => !prev)} className={`shrink-0 rounded-2xl border px-3 py-2 text-xs font-black uppercase ${ensayoShowChords ? 'border-blue-400/35 bg-blue-500/10 text-blue-200' : 'border-zinc-800 bg-zinc-900 text-zinc-500'}`}>
+              <button type="button" onClick={() => setEnsayoShowChords(prev => !prev)} className={`shrink-0 rounded-2xl border px-3 py-2 text-xs font-black uppercase ${ensayoShowChords ? 'border-blue-500/35 bg-blue-500/10 text-blue-700 dark:border-blue-400/35 dark:text-blue-200' : 'border-zinc-200 bg-white text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500'}`}>
                 {ensayoShowChords ? 'Ocultar acordes' : 'Mostrar acordes'}
               </button>
 
-              <button type="button" onClick={() => setEnsayoChordFormat(prev => prev === 'american' ? 'latin' : 'american')} className="shrink-0 rounded-2xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-black uppercase text-zinc-300">
+              <button type="button" onClick={() => setEnsayoChordFormat(prev => prev === 'american' ? 'latin' : 'american')} className="shrink-0 rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-xs font-black uppercase text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
                 {ensayoChordFormat === 'american' ? 'Americano' : 'Latino'}
               </button>
 
-              <button type="button" onClick={() => setEnsayoAccidentalPreference(prev => prev === 'sharps' ? 'flats' : 'sharps')} className="shrink-0 rounded-2xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-black uppercase text-zinc-300">
+              <button type="button" onClick={() => setEnsayoAccidentalPreference(prev => prev === 'sharps' ? 'flats' : 'sharps')} className="shrink-0 rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-xs font-black uppercase text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
                 {ensayoAccidentalPreference === 'sharps' ? '# sostenidos' : 'b bemoles'}
               </button>
 
-              <div className="flex shrink-0 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
-                <button type="button" onClick={() => setEnsayoLocalTranspose(prev => Math.max(-11, prev - 1))} className="px-3 py-2 text-xs font-black text-zinc-300 hover:bg-zinc-800">- tono</button>
-                <button type="button" onClick={() => setEnsayoLocalTranspose(0)} className="border-x border-zinc-800 px-3 py-2 text-xs font-black text-zinc-400 hover:bg-zinc-800">Tono original</button>
-                <button type="button" onClick={() => setEnsayoLocalTranspose(prev => Math.min(11, prev + 1))} className="px-3 py-2 text-xs font-black text-zinc-300 hover:bg-zinc-800">+ tono</button>
+              <div className="flex shrink-0 overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+                <button type="button" onClick={() => setEnsayoLocalTranspose(prev => Math.max(-11, prev - 1))} className="px-3 py-2 text-xs font-black text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800">- tono</button>
+                <button type="button" onClick={() => setEnsayoLocalTranspose(0)} className="border-x border-zinc-200 px-3 py-2 text-xs font-black text-zinc-500 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800">Tono original</button>
+                <button type="button" onClick={() => setEnsayoLocalTranspose(prev => Math.min(11, prev + 1))} className="px-3 py-2 text-xs font-black text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800">+ tono</button>
               </div>
             </div>
           </div>
@@ -931,11 +940,11 @@ const SetlistViewer = ({ user }) => {
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-5 md:px-8 md:py-8 xl:px-12 [&::-webkit-scrollbar]:hidden">
            <div className="max-w-6xl mx-auto pb-10">
               {ensayoSeccionesParsed.length === 0 ? (
-                <p className="text-zinc-600 font-medium text-center py-20 border-2 border-dashed border-zinc-800 rounded-2xl">No hay letra registrada para esta canción.</p>
+                <p className="rounded-2xl border-2 border-dashed border-zinc-300 py-20 text-center font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-600">No hay letra registrada para esta cancion.</p>
               ) : (
                 ensayoSeccionesParsed.map((seccion, sIdx) => (
-                  <div key={sIdx} className="mb-8 md:mb-10 break-inside-avoid rounded-3xl border border-white/5 bg-black/14 px-3 py-4 md:px-6 md:py-6">
-                    <span className="text-[11px] md:text-sm font-black uppercase tracking-widest px-4 py-2 rounded-2xl mb-4 inline-block bg-blue-500/12 text-blue-200 border border-blue-400/25 shadow-sm">
+                  <div key={sIdx} className="mb-8 break-inside-avoid rounded-3xl border border-zinc-200 bg-white/82 px-3 py-4 shadow-sm dark:border-white/5 dark:bg-black/14 md:mb-10 md:px-6 md:py-6">
+                    <span className="mb-4 inline-block rounded-2xl border border-blue-500/25 bg-blue-500/10 px-4 py-2 text-[11px] font-black uppercase tracking-widest text-blue-700 shadow-sm dark:border-blue-400/25 dark:bg-blue-500/12 dark:text-blue-200 md:text-sm">
                       {seccion.titulo}
                     </span>
                     {seccion.lineas.map((linea, lIdx) => (
@@ -946,14 +955,14 @@ const SetlistViewer = ({ user }) => {
                               <div key={silIdx} className="flex flex-col justify-end items-start">
                                 {ensayoShowChords && (
                                   <span
-                                    className="font-black min-h-[1.4rem] md:min-h-[1.85rem] flex items-end mb-1 text-base md:text-xl xl:text-2xl text-yellow-300 leading-none"
+                                    className="mb-1 flex min-h-[1.4rem] items-end text-base font-black leading-none text-amber-600 dark:text-yellow-300 md:min-h-[1.85rem] md:text-xl xl:text-2xl"
                                     style={{ fontSize: `calc(1em * ${ensayoFontScale})` }}
                                   >
                                     {silaba.acorde ? traducirAcorde(transponerNota(silaba.acorde, ensayoEffectiveOffset), ensayoChordFormat, ensayoAccidentalPreference) : ""}
                                   </span>
                                 )}
                                 <span
-                                  className="text-[1.35rem] md:text-[1.8rem] xl:text-[2.15rem] font-black text-zinc-50 leading-[0.96]"
+                                  className="text-[1.35rem] font-black leading-[0.96] text-zinc-950 dark:text-zinc-50 md:text-[1.8rem] xl:text-[2.15rem]"
                                   style={{ fontSize: `calc(1em * ${ensayoFontScale})` }}
                                 >
                                   {silaba.texto}
@@ -971,22 +980,22 @@ const SetlistViewer = ({ user }) => {
         </div>
 
         {/* Reproductor / Mezcladora Inferior */}
-        <div className="bg-zinc-950/96 border-t border-zinc-800 p-2 md:p-4 shrink-0 shadow-[0_-20px_50px_rgba(0,0,0,0.45)] z-10">
+        <div className="z-10 shrink-0 border-t border-zinc-200 bg-white/96 p-2 shadow-[0_-20px_50px_rgba(0,0,0,0.10)] dark:border-zinc-800 dark:bg-zinc-950/96 dark:shadow-[0_-20px_50px_rgba(0,0,0,0.45)] md:p-4">
            {!hasEnsayoAudio ? (
-             <div className="mx-auto flex w-fit items-center justify-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/70 px-4 py-2 text-center text-[11px] font-black uppercase tracking-wide text-zinc-500"><Music size={13} /> Sin pista ni secuencias</div>
+             <div className="mx-auto flex w-fit items-center justify-center gap-2 rounded-full border border-zinc-200 bg-zinc-100 px-4 py-2 text-center text-[11px] font-black uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/70"><Music size={13} /> Sin pista ni secuencias</div>
            ) : (
              <div className="flex flex-col gap-5 max-w-5xl mx-auto">
                 {/* Controles Principales */}
-                <div className="flex items-center gap-4 bg-zinc-950 p-2 pr-4 pl-3 rounded-2xl border border-zinc-800 shadow-inner">
-                   <button onClick={() => currentTrackIdx > 0 && setCurrentTrackIdx(p=>p-1)} disabled={currentTrackIdx === 0} className="text-zinc-400 hover:text-white disabled:opacity-30 transition-colors active:scale-95 shrink-0"><SkipBack size={24} fill="currentColor" /></button>
+                <div className="flex items-center gap-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-2 pl-3 pr-4 shadow-inner dark:border-zinc-800 dark:bg-zinc-950">
+                   <button onClick={() => currentTrackIdx > 0 && setCurrentTrackIdx(p=>p-1)} disabled={currentTrackIdx === 0} className="shrink-0 text-zinc-500 transition-colors hover:text-zinc-950 disabled:opacity-30 dark:text-zinc-400 dark:hover:text-white active:scale-95"><SkipBack size={24} fill="currentColor" /></button>
                    <button onClick={toggleEnsayoPlay} className="w-14 h-14 flex items-center justify-center bg-emerald-500 hover:bg-emerald-400 text-black rounded-full transition-transform active:scale-95 shadow-lg shrink-0">
                      {ensayoIsPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
                    </button>
-                   <button onClick={() => currentTrackIdx < playlist.length - 1 && setCurrentTrackIdx(p=>p+1)} disabled={currentTrackIdx === playlist.length - 1} className="text-zinc-400 hover:text-white disabled:opacity-30 transition-colors active:scale-95 shrink-0"><SkipForward size={24} fill="currentColor" /></button>
+                   <button onClick={() => currentTrackIdx < playlist.length - 1 && setCurrentTrackIdx(p=>p+1)} disabled={currentTrackIdx === playlist.length - 1} className="shrink-0 text-zinc-500 transition-colors hover:text-zinc-950 disabled:opacity-30 dark:text-zinc-400 dark:hover:text-white active:scale-95"><SkipForward size={24} fill="currentColor" /></button>
                    
-                   <div className="flex-1 flex items-center gap-3 ml-2 border-l border-zinc-800 pl-4">
+                   <div className="ml-2 flex flex-1 items-center gap-3 border-l border-zinc-200 pl-4 dark:border-zinc-800">
                      <span className="text-[10px] md:text-xs font-mono font-bold text-emerald-500 w-10 text-right shrink-0">{formatTime(ensayoProgress)}</span>
-                     <input type="range" min="0" max={ensayoDuration || 100} value={ensayoProgress} onChange={handleEnsayoSeek} className="flex-1 h-2 bg-zinc-800 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-emerald-500 [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:bg-emerald-400 transition-all shadow-inner" />
+                     <input type="range" min="0" max={ensayoDuration || 100} value={ensayoProgress} onChange={handleEnsayoSeek} className="flex-1 h-2 cursor-pointer appearance-none rounded-full bg-zinc-200 shadow-inner transition-all dark:bg-zinc-800 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-emerald-500 hover:[&::-webkit-slider-thumb]:bg-emerald-400" />
                      <span className="text-[10px] md:text-xs font-mono font-bold text-zinc-500 w-10 shrink-0">{formatTime(ensayoDuration)}</span>
                    </div>
                 </div>
@@ -995,13 +1004,13 @@ const SetlistViewer = ({ user }) => {
                 {isEnsayoMulti ? (
                    <div className="flex gap-3 overflow-x-auto pb-2 [&::-webkit-scrollbar]:hidden snap-x">
                      {currentEnsayoSong.multitracks.map((track, idx) => (
-                       <div key={track.id} className="bg-zinc-950 border border-zinc-800 p-3 rounded-2xl flex items-center gap-3 min-w-[220px] snap-start shadow-sm">
-                         <button onClick={() => toggleEnsayoMute(track.id)} className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs transition-colors shadow-inner ${ensayoMutes[track.id] ? 'bg-red-500 text-white shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700'}`}>M</button>
+                       <div key={track.id} className="flex min-w-[220px] snap-start items-center gap-3 rounded-2xl border border-zinc-200 bg-zinc-50 p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                         <button onClick={() => toggleEnsayoMute(track.id)} className={`flex h-10 w-10 items-center justify-center rounded-xl text-xs font-black shadow-inner transition-colors ${ensayoMutes[track.id] ? 'bg-red-500 text-white shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-zinc-200 text-zinc-500 hover:bg-zinc-300 hover:text-zinc-950 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-white'}`}>M</button>
                          <div className="flex-1">
-                           <p className="text-[11px] font-bold text-white truncate mb-2">{track.nombre}</p>
+                           <p className="mb-2 truncate text-[11px] font-bold text-zinc-900 dark:text-white">{track.nombre}</p>
                            <div className="flex items-center gap-2">
                              <Volume2 size={12} className="text-zinc-600"/>
-                             <input type="range" min="0" max="1" step="0.01" value={ensayoVolumes[track.id] ?? 1} onChange={(e) => handleEnsayoVolume(track.id, parseFloat(e.target.value))} className="flex-1 h-1.5 bg-zinc-800 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-zinc-300 [&::-webkit-slider-thumb]:rounded-full" />
+                             <input type="range" min="0" max="1" step="0.01" value={ensayoVolumes[track.id] ?? 1} onChange={(e) => handleEnsayoVolume(track.id, parseFloat(e.target.value))} className="flex-1 h-1.5 cursor-pointer appearance-none rounded-full bg-zinc-200 dark:bg-zinc-800 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-zinc-500 dark:[&::-webkit-slider-thumb]:bg-zinc-300" />
                            </div>
                          </div>
                          <audio
@@ -1035,3 +1044,4 @@ const SetlistViewer = ({ user }) => {
   );
 };
 export default SetlistViewer;
+

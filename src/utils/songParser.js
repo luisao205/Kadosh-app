@@ -1,8 +1,18 @@
-export const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|pre[\s-]?(?:coro|chorus)|precoro|coro|chorus|puente|bridge|final|outro|instrumental|espont[aá]neo|espontaneo)(?:\s+\d+|\s*[:.-])?\s*$/i;
+export const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|estrofa|pre[\s-]?(?:coro|chorus)|precoro|prechorus|coro|chorus|refr[aá]n|refrain|puente|bridge|tag|vamp|break(?:down)?|coda|solo|rap|final|outro|interludio|interlude|instrumental|ministraci[oó]n|espont[aá]neo|espontaneo)(?:\s*\d+|\s*[:.-])?\s*$/i;
 
 export const isSongSectionTitle = (value) => SECTION_TITLE_REGEX.test(String(value || '').trim());
 
 export const CUE_REGEX = /^\s*\{cue:\s*(.*?)\s*\}\s*$/i;
+
+export const getSectionKey = (section, index = 0) => {
+  const title = String(section?.titulo || section?.title || 'seccion')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'seccion';
+  return `${index}_${title}`;
+};
 
 /**
  * Convierte un texto plano con acordes en formato [C] a un objeto estructurado.

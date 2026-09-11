@@ -1,63 +1,62 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Check, Loader2, Search, X } from 'lucide-react';
-import {
-  getBooks,
-  getChapter,
-  getChapters,
-  getPassage,
-  getPreferredTranslationId,
-  getTranslations,
-  searchText,
-  setPreferredTranslationId,
-  splitPassageIntoSlides
-} from '../../utils/bibleService';
+import { BookOpen, Check, ChevronLeft, ChevronRight, Loader2, Search, X } from 'lucide-react';
+import { DEFAULT_TRANSLATION_ID, getBooks, getChapter, getChapters, getPassage, getPreferredTranslationId, getTranslations, searchText, setPreferredTranslationId, splitPassageIntoSlides } from '../../utils/bibleService';
 
-const emptyResult = null;
-
-const BiblePicker = ({
-  open = true,
-  onClose,
-  onUse,
-  onProject,
-  title = 'Biblia Kadosh',
-  mode = 'project'
-}) => {
+const BiblePicker = ({ open = true, onClose, onUse, onProject, onPrimaryAction, primaryActionLabel = 'Proyectar Biblia', onPreviewChange, onProjectedSlideChange, preparedPreview, projectedPassageId, projectedSlideIndex, title = 'Biblia Kadosh', embedded = false }) => {
   const [translations, setTranslations] = useState({ available: [], future: [] });
   const [translationId, setTranslationId] = useState(getPreferredTranslationId());
   const [books, setBooks] = useState([]);
   const [bookCode, setBookCode] = useState('JHN');
   const [chapters, setChapters] = useState([]);
   const [chapter, setChapter] = useState(3);
-  const [verse, setVerse] = useState(16);
+  const [chapterData, setChapterData] = useState(null);
+  const [rangeStart, setRangeStart] = useState(16);
+  const [rangeEnd, setRangeEnd] = useState(16);
   const [referenceQuery, setReferenceQuery] = useState('Juan 3:16');
   const [textQuery, setTextQuery] = useState('');
   const [textResults, setTextResults] = useState([]);
-  const [result, setResult] = useState(emptyResult);
+  const [result, setResult] = useState(null);
+  const [selectedSlideIndex, setSelectedSlideIndex] = useState(0);
+  const [showBookPicker, setShowBookPicker] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const selectedTranslation = useMemo(
-    () => translations.available.find(item => item.translationId === translationId) || translations.available[0] || null,
-    [translationId, translations.available]
-  );
+  const selectedTranslation = useMemo(() => translations.available.find(item => item.translationId === translationId) || translations.available[0] || null, [translationId, translations.available]);
+  const selectedBook = useMemo(() => books.find(item => item.code === bookCode) || null, [books, bookCode]);
+  const slides = useMemo(() => result ? splitPassageIntoSlides(result) : [], [result]);
+  const selectedSlide = slides[selectedSlideIndex] || slides[0] || null;
+  const isPreparedDeckProjected = Boolean(onProjectedSlideChange && result?.passageId && result.passageId === projectedPassageId);
+  const displayedSlideIndex = isPreparedDeckProjected
+    ? Math.max(0, Math.min(Number(projectedSlideIndex) || 0, Math.max(slides.length - 1, 0)))
+    : selectedSlideIndex;
+  const verses = chapterData?.verses || [];
+  const oldTestament = books.filter(book => Number(book.order) <= 39);
+  const newTestament = books.filter(book => Number(book.order) >= 40);
+
+  const publishPreview = (passage, nextIndex = 0) => {
+    const nextSlides = splitPassageIntoSlides(passage);
+    const safeIndex = Math.max(0, Math.min(nextIndex, Math.max(nextSlides.length - 1, 0)));
+    setResult(passage);
+    setSelectedSlideIndex(safeIndex);
+    onPreviewChange?.({ passage, slides: nextSlides, selectedIndex: safeIndex });
+  };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
     let active = true;
-    getTranslations().then(data => {
+    getTranslations().then((data) => {
       if (!active) return;
       setTranslations(data);
       const preferred = getPreferredTranslationId();
-      const exists = data.available.some(item => item.translationId === preferred);
-      setTranslationId(exists ? preferred : 'local:rv1909');
+      setTranslationId(data.available.some(item => item.translationId === preferred) ? preferred : DEFAULT_TRANSLATION_ID);
     }).catch(() => setError('No se pudieron cargar las traducciones.'));
     return () => { active = false; };
   }, [open]);
 
   useEffect(() => {
-    if (!open || !translationId) return;
+    if (!open || !translationId) return undefined;
     let active = true;
-    getBooks(translationId).then(items => {
+    getBooks(translationId).then((items) => {
       if (!active) return;
       setBooks(items);
       if (items.length && !items.some(item => item.code === bookCode)) setBookCode(items[0].code);
@@ -67,9 +66,9 @@ const BiblePicker = ({
   }, [bookCode, open, translationId]);
 
   useEffect(() => {
-    if (!open || !bookCode || !translationId) return;
+    if (!open || !bookCode || !translationId) return undefined;
     let active = true;
-    getChapters(bookCode, translationId).then(items => {
+    getChapters(bookCode, translationId).then((items) => {
       if (!active) return;
       setChapters(items);
       if (items.length && !items.includes(Number(chapter))) setChapter(items[0]);
@@ -77,207 +76,95 @@ const BiblePicker = ({
     return () => { active = false; };
   }, [bookCode, chapter, open, translationId]);
 
-  const runReferenceSearch = async (value = referenceQuery) => {
-    setLoading(true);
-    setError('');
-    try {
-      const passage = await getPassage({ reference: value, translationId });
-      setResult(passage);
-      setBookCode(passage.bookCode);
-      setChapter(passage.chapter);
-      setVerse(passage.verses?.[0]?.number || 1);
-    } catch (err) {
-      setResult(null);
-      setError(err.message || 'No se pudo buscar la referencia.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    if (!open || !bookCode || !chapter || !translationId) return undefined;
+    let active = true;
+    getChapter({ bookCode, chapter, translationId }).then((data) => {
+      if (!active) return;
+      setChapterData(data);
+      const first = data.verses?.[0]?.number || 1;
+      setRangeStart(value => data.verses?.some(item => item.number === value) ? value : first);
+      setRangeEnd(value => data.verses?.some(item => item.number === value) ? value : first);
+    }).catch(() => setChapterData(null));
+    return () => { active = false; };
+  }, [bookCode, chapter, open, translationId]);
 
-  const loadSelectedVerse = async () => {
-    setLoading(true);
-    setError('');
+  useEffect(() => {
+    const passage = preparedPreview?.passage;
+    if (!open) return;
+    if (!passage) {
+      setResult(null);
+      setSelectedSlideIndex(0);
+      return;
+    }
+
+    setResult(passage);
+    setSelectedSlideIndex(Math.max(0, Math.min(preparedPreview.selectedIndex || 0, Math.max((preparedPreview.slides?.length || 1) - 1, 0))));
+    setBookCode(passage.bookCode);
+    setChapter(passage.chapter);
+    if (passage.translationId) setTranslationId(passage.translationId);
+    setRangeStart(passage.verses?.[0]?.number || 1);
+    setRangeEnd(passage.verses?.at(-1)?.number || 1);
+    setReferenceQuery(passage.reference || '');
+  }, [open, preparedPreview?.passage?.passageId, preparedPreview?.selectedIndex]);
+
+  const loadPassage = async (reference) => {
+    setLoading(true); setError('');
     try {
-      const book = books.find(item => item.code === bookCode);
-      const passage = await getPassage({ reference: `${book?.name || bookCode} ${chapter}:${verse}`, translationId });
-      setResult(passage);
+      const passage = await getPassage({ reference, translationId });
+      publishPreview(passage);
+      setBookCode(passage.bookCode); setChapter(passage.chapter);
+      setRangeStart(passage.verses?.[0]?.number || 1);
+      setRangeEnd(passage.verses?.at(-1)?.number || 1);
       setReferenceQuery(passage.reference);
-    } catch (err) {
-      setResult(null);
-      setError(err.message || 'No se pudo cargar el versiculo.');
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) { setError(err.message || 'No se pudo cargar el pasaje.'); }
+    finally { setLoading(false); }
   };
-
-  const runTextSearch = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const items = await searchText({ query: textQuery, translationId, limit: 18 });
-      setTextResults(items);
-      if (items.length === 0) setError('No se encontraron coincidencias en RV1909.');
-    } catch (err) {
-      setTextResults([]);
-      setError(err.message || 'No se pudo buscar por palabras.');
-    } finally {
-      setLoading(false);
-    }
+  const clearPreview = () => { setResult(null); setSelectedSlideIndex(0); onPreviewChange?.(null); };
+  const selectBook = (book) => { clearPreview(); setBookCode(book.code); setChapter(book.chapterNumbers?.[0] || 1); setRangeStart(1); setRangeEnd(1); setShowBookPicker(false); };
+  const selectChapter = (nextChapter) => { clearPreview(); setChapter(nextChapter); setRangeStart(1); setRangeEnd(1); };
+  const maxVerseNumber = verses.at(-1)?.number || 1;
+  const normalizeVerse = (value) => Math.max(1, Math.min(Number(value) || 1, maxVerseNumber));
+  const selectVerse = (number) => { setRangeStart(Math.min(rangeStart, number)); setRangeEnd(Math.max(rangeStart, number)); };
+  const previewRange = () => selectedBook && loadPassage(`${selectedBook.name} ${chapter}:${Math.min(rangeStart, rangeEnd)}${rangeStart !== rangeEnd ? `-${Math.max(rangeStart, rangeEnd)}` : ''}`);
+  const chooseSlide = (index) => { setSelectedSlideIndex(index); if (result) onPreviewChange?.({ passage: result, slides, selectedIndex: index }); };
+  const moveSlide = (delta) => {
+    const currentIndex = isPreparedDeckProjected ? displayedSlideIndex : selectedSlideIndex;
+    const nextIndex = Math.max(0, Math.min(currentIndex + delta, slides.length - 1));
+    if (nextIndex === currentIndex) return;
+    chooseSlide(nextIndex);
+    if (isPreparedDeckProjected) onProjectedSlideChange(delta);
   };
-
-  const handleUse = () => {
-    if (!result) return;
-    onUse?.(result);
-  };
-
-  const handleProject = () => {
-    if (!result) return;
-    onProject?.({ passage: result, slides: splitPassageIntoSlides(result) });
-  };
+  const rangeReference = selectedBook ? `${selectedBook.name} ${chapter}:${Math.min(rangeStart, rangeEnd)}${rangeStart !== rangeEnd ? `-${Math.max(rangeStart, rangeEnd)}` : ''}` : '';
 
   if (!open) return null;
-
   const content = (
-    <div className="grid max-h-[86vh] min-h-0 gap-4 overflow-hidden lg:grid-cols-[0.75fr_1.25fr]">
-      <section className="min-h-0 overflow-y-auto rounded-3xl border border-white/10 bg-zinc-950/60 p-4">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-300">Traduccion</p>
-            <h3 className="text-xl font-black text-white">{title}</h3>
-          </div>
-          {onClose && (
-            <button type="button" onClick={onClose} className="rounded-xl border border-white/10 bg-white/5 p-2 text-zinc-300 hover:bg-white/10">
-              <X size={16} />
-            </button>
-          )}
-        </div>
-
-        <div className="space-y-3">
-          <select value={translationId} onChange={e => setTranslationId(e.target.value)} className="kp-input w-full rounded-2xl px-4 py-3 text-sm">
-            {translations.available.map(item => (
-              <option key={item.translationId} value={item.translationId} className="bg-zinc-900">
-                {item.abbreviation} - {item.offline ? 'Offline' : 'Online'}
-              </option>
-            ))}
-          </select>
-
-          <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-            <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Proximamente</p>
-            <div className="grid gap-2">
-              {translations.future.map(item => (
-                <div key={item.id} className="flex items-center justify-between rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 opacity-55">
-                  <span className="text-xs font-black text-zinc-300">{item.abbreviation}</span>
-                  <span className="text-[10px] font-bold uppercase text-zinc-500">{item.reason}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); runReferenceSearch(); }}>
-            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Buscar referencia</p>
-            <div className="flex gap-2">
-              <input value={referenceQuery} onChange={e => setReferenceQuery(e.target.value)} className="kp-input min-w-0 flex-1 rounded-2xl px-4 py-3 text-sm" placeholder="Juan 3:16" />
-              <button type="submit" disabled={loading} className="kp-button-primary rounded-2xl px-4 py-3 text-sm font-black disabled:opacity-50">
-                {loading ? <Loader2 className="animate-spin" size={16} /> : <Search size={16} />}
-              </button>
-            </div>
-          </form>
-
-          <div className="grid gap-2">
-            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Navegacion</p>
-            <select value={bookCode} onChange={e => setBookCode(e.target.value)} className="kp-input rounded-2xl px-4 py-3 text-sm">
-              {books.map(item => <option key={item.code} value={item.code} className="bg-zinc-900">{item.name}</option>)}
-            </select>
-            <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
-              <select value={chapter} onChange={e => setChapter(Number(e.target.value))} className="kp-input rounded-2xl px-3 py-3 text-sm">
-                {chapters.map(item => <option key={item} value={item} className="bg-zinc-900">{item}</option>)}
-              </select>
-              <input type="number" min="1" value={verse} onChange={e => setVerse(Number(e.target.value) || 1)} className="kp-input rounded-2xl px-3 py-3 text-sm" />
-              <button type="button" onClick={loadSelectedVerse} disabled={loading} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs font-black uppercase text-white disabled:opacity-50">Ver</button>
-            </div>
-          </div>
-
-          <div className="grid gap-2">
-            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Buscar por palabras</p>
-            <div className="flex gap-2">
-              <input value={textQuery} onChange={e => setTextQuery(e.target.value)} className="kp-input min-w-0 flex-1 rounded-2xl px-4 py-3 text-sm" placeholder="gracia" />
-              <button type="button" onClick={runTextSearch} disabled={loading || !textQuery.trim()} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs font-black uppercase text-white disabled:opacity-50">Buscar</button>
-            </div>
-            {textResults.length > 0 && (
-              <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
-                {textResults.map(item => (
-                  <button key={item.passageId} type="button" onClick={() => { setReferenceQuery(item.reference); runReferenceSearch(item.reference); }} className="w-full rounded-xl border border-white/10 bg-white/5 p-3 text-left hover:bg-white/10">
-                    <p className="text-xs font-black text-white">{item.reference}</p>
-                    <p className="line-clamp-2 text-[11px] font-semibold text-zinc-400">{item.text}</p>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+    <div className={`grid min-h-0 min-w-0 gap-3 overflow-visible lg:gap-4 lg:overflow-hidden lg:grid-cols-[0.8fr_1.2fr] ${(onClose || embedded) ? 'h-auto lg:h-full' : 'h-auto'}`}>
+        <section className="min-h-0 min-w-0 rounded-3xl border border-white/10 bg-zinc-950/60 p-3 sm:p-4 lg:overflow-y-auto">
+          <div className="mb-4 flex items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-300">Traduccion</p><h3 className="text-xl font-black text-white">{title}</h3></div>{onClose && <button type="button" onClick={onClose} aria-label="Cerrar buscador bíblico" title="Cerrar" className="rounded-xl border border-white/10 bg-white/5 p-2 text-zinc-300"><X size={16} /></button>}</div>
+          <div className="space-y-3 sm:space-y-4">
+          <select value={translationId} onChange={e => { clearPreview(); setTranslationId(e.target.value); }} className="kp-input w-full rounded-2xl px-4 py-3 text-sm">{translations.available.map(item => <option key={item.translationId} value={item.translationId} className="bg-zinc-900">{item.abbreviation} — {item.translationName}</option>)}</select>
+          <form className="space-y-2" onSubmit={event => { event.preventDefault(); loadPassage(referenceQuery); }}><p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Buscar referencia</p><div className="flex gap-2"><input value={referenceQuery} onChange={e => setReferenceQuery(e.target.value)} className="kp-input min-w-0 flex-1 rounded-2xl px-4 py-3 text-sm" placeholder="Juan 3:16-18" /><button type="submit" disabled={loading} className="kp-button-primary rounded-2xl px-4 py-3">{loading ? <Loader2 className="animate-spin" size={16} /> : <Search size={16} />}</button></div></form>
+          <div className="space-y-3 rounded-2xl border border-white/10 bg-black/25 p-3"><button type="button" onClick={() => setShowBookPicker(true)} className="w-full rounded-xl border border-blue-400/25 bg-blue-500/10 px-3 py-3 text-left text-sm font-black text-blue-50">Seleccionar libro <span className="float-right max-w-[55%] truncate text-blue-300">{selectedBook?.name || '...'}</span></button><div><p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Capitulo</p><div className="grid max-h-40 grid-cols-5 gap-1 overflow-y-auto pr-1 sm:grid-cols-6 lg:max-h-32 lg:grid-cols-8">{chapters.map(item => <button key={item} type="button" onClick={() => selectChapter(item)} className={`min-h-10 rounded-lg py-2 text-sm font-black sm:text-xs ${chapter === item ? 'bg-blue-600 text-white' : 'bg-zinc-900 text-zinc-400'}`}>{item}</button>)}</div></div><div><p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Versiculos</p><div className="grid max-h-40 grid-cols-5 gap-1 overflow-y-auto pr-1 sm:grid-cols-6 lg:max-h-32 lg:grid-cols-8">{verses.map(item => <button key={item.number} type="button" onClick={() => selectVerse(item.number)} className={`min-h-10 rounded-lg py-2 text-sm font-black sm:text-xs ${item.number >= Math.min(rangeStart, rangeEnd) && item.number <= Math.max(rangeStart, rangeEnd) ? 'bg-violet-600 text-white' : 'bg-zinc-900 text-zinc-400'}`}>{item.number}</button>)}</div></div><div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2"><label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Desde<input type="number" min="1" max={maxVerseNumber} value={rangeStart} onChange={e => setRangeStart(normalizeVerse(e.target.value))} className="kp-input mt-1 w-full rounded-xl px-3 py-2 text-sm" /></label><span className="pb-2 text-zinc-500">a</span><label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Hasta<input type="number" min="1" max={maxVerseNumber} value={rangeEnd} onChange={e => setRangeEnd(normalizeVerse(e.target.value))} className="kp-input mt-1 w-full rounded-xl px-3 py-2 text-sm" /></label></div><p className="text-center text-xs font-black uppercase tracking-wide text-violet-200">{rangeReference}</p><button type="button" onClick={previewRange} disabled={loading || !verses.length} className="w-full rounded-xl border border-violet-400/25 bg-violet-500/10 py-2.5 text-xs font-black uppercase text-violet-100">Previsualizar rango</button></div>
+          <div className="space-y-2"><p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Buscar por palabras</p><div className="flex gap-2"><input value={textQuery} onChange={e => setTextQuery(e.target.value)} className="kp-input min-w-0 flex-1 rounded-2xl px-4 py-3 text-sm" placeholder="gracia" /><button type="button" onClick={async () => { setLoading(true); setError(''); try { setTextResults(await searchText({ query: textQuery, translationId, limit: 18 })); } catch (err) { setTextResults([]); setError(err.message || 'No se pudo buscar por palabras.'); } finally { setLoading(false); } }} disabled={!textQuery.trim() || loading} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs font-black">Buscar</button></div>{textResults.map(item => <button key={item.passageId} type="button" onClick={() => loadPassage(item.reference)} className="w-full rounded-xl border border-white/10 bg-white/5 p-3 text-left"><p className="text-xs font-black text-white">{item.reference}</p><p className="line-clamp-2 text-[11px] text-zinc-400">{item.text}</p></button>)}</div>
         </div>
       </section>
-
-      <section className="min-h-0 overflow-y-auto rounded-3xl border border-blue-400/20 bg-blue-500/10 p-4">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-200">Preview</p>
-            <h3 className="text-2xl font-black text-white">{result?.reference || 'Busca un pasaje'}</h3>
-            <p className="mt-1 text-xs font-bold text-blue-100/70">
-              {selectedTranslation ? `${selectedTranslation.abbreviation} - ${selectedTranslation.translationName}` : 'RV1909'}
-            </p>
-          </div>
-          <BookOpen className="text-blue-200" size={24} />
-        </div>
-
+      <section className="min-h-0 min-w-0 rounded-3xl border border-blue-400/20 bg-blue-500/10 p-3 sm:p-4 lg:overflow-y-auto">
+        <div className="mb-4 flex items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.28em] text-blue-200">Preview</p><h3 className="text-2xl font-black text-white">{result?.reference || 'Busca un pasaje'}</h3><p className="mt-1 text-xs font-bold text-blue-100/70">{selectedTranslation ? `${selectedTranslation.abbreviation} — ${selectedTranslation.translationName}` : 'RVR1960 — Reina-Valera 1960'}</p></div><BookOpen className="text-blue-200" size={24} /></div>
         {error && <div className="mb-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm font-bold text-amber-100">{error}</div>}
-        {loading && <div className="rounded-2xl border border-white/10 bg-black/25 p-6 text-center text-sm font-bold text-zinc-400">Cargando...</div>}
-
-        {result ? (
-          <div className="space-y-4">
-            <div className="rounded-3xl bg-black/25 p-5">
-              <p className="whitespace-pre-wrap text-xl font-black leading-relaxed text-white">{result.text}</p>
-            </div>
-            <p className="text-xs font-semibold text-blue-100/70">
-              {result.copyright === 'Public Domain' ? 'Dominio publico - eBible.org' : result.copyright}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {onProject && (
-                <button type="button" onClick={handleProject} className="kp-button-primary inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-sm font-black">
-                  <Check size={16} /> Proyectar
-                </button>
-              )}
-              {onUse && (
-                <button type="button" onClick={handleUse} className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-3 text-sm font-black text-emerald-100 hover:bg-emerald-500/20">
-                  Usar este pasaje
-                </button>
-              )}
-            </div>
-            {mode === 'project' && splitPassageIntoSlides(result).length > 1 && (
-              <p className="rounded-2xl border border-white/10 bg-black/20 p-3 text-xs font-bold text-zinc-400">
-                Este rango se dividira en {splitPassageIntoSlides(result).length} slides para mantener lectura clara.
-              </p>
-            )}
-          </div>
-        ) : !loading && (
-          <div className="rounded-3xl border border-dashed border-white/10 bg-black/20 p-8 text-center">
-            <BookOpen className="mx-auto mb-3 text-zinc-600" size={42} />
-            <p className="font-black text-white">RV1909 lista sin conexion.</p>
-            <p className="mt-1 text-sm font-semibold text-zinc-500">Busca por referencia o navega libro, capitulo y versiculo.</p>
-          </div>
-        )}
+        {result?.warning && <div className="mb-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-3 text-sm font-bold text-amber-100">{result.warning}</div>}
+        {selectedSlide ? <div className="space-y-4">
+          <div className="flex min-h-48 flex-col items-center justify-center rounded-3xl bg-black/25 p-4 text-center sm:min-h-56 sm:p-5">{selectedSlide.heading && <p className="mb-3 text-sm font-black uppercase tracking-wide text-blue-100">{selectedSlide.heading}</p>}<p className="whitespace-pre-wrap text-lg font-black leading-relaxed text-white sm:text-xl">{selectedSlide.text}</p></div>
+          <button type="button" onClick={() => (onPrimaryAction || onProject)?.({ passage: result, slides, selectedIndex: selectedSlideIndex })} className="kp-button-primary inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-black"><Check size={16} /> {primaryActionLabel}</button>
+          <div className="flex items-center justify-between gap-3"><button type="button" onClick={() => moveSlide(-1)} disabled={displayedSlideIndex === 0} aria-label="Anterior" className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-white/10 px-3 py-3 text-xs font-black disabled:opacity-30"><ChevronLeft size={18} /> Anterior</button><span className="text-xs font-black text-blue-100">{displayedSlideIndex + 1} / {slides.length}</span><button type="button" onClick={() => moveSlide(1)} disabled={displayedSlideIndex === slides.length - 1} aria-label="Siguiente" className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-white/10 px-3 py-3 text-xs font-black disabled:opacity-30">Siguiente <ChevronRight size={18} /></button></div>
+          <div className="flex gap-2 overflow-x-auto pb-1">{slides.map((slide, index) => <button key={`${slide.reference}-${index}`} type="button" onClick={() => chooseSlide(index)} className={`h-12 w-12 shrink-0 rounded-xl border text-xs font-black ${displayedSlideIndex === index ? 'border-blue-300 bg-blue-600 text-white' : 'border-white/10 bg-black/20 text-zinc-400'}`}>{index + 1}</button>)}</div>
+          {onUse && <button type="button" onClick={() => onUse(result)} className="w-full rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-3 text-sm font-black text-emerald-100">Usar este pasaje</button>}
+        </div> : <div className="rounded-3xl border border-dashed border-white/10 bg-black/20 p-8 text-center"><BookOpen className="mx-auto mb-3 text-zinc-600" size={42} /><p className="font-black text-white">Selecciona un pasaje para previsualizarlo.</p></div>}
       </section>
+      {showBookPicker && <div className="fixed inset-0 z-[90] flex items-start justify-center bg-black/70 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-[max(env(safe-area-inset-top),0.75rem)] backdrop-blur-md sm:items-center"><div className="max-h-full w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-zinc-950 p-4 shadow-2xl sm:p-5"><div className="sticky top-0 z-10 -mx-4 mb-4 flex items-center justify-between border-b border-white/10 bg-zinc-950 px-4 pb-3 sm:-mx-5 sm:px-5"><div><p className="text-[10px] font-black uppercase tracking-[0.24em] text-blue-300">Biblioteca</p><h3 className="text-xl font-black text-white">Seleccionar libro</h3></div><button type="button" onClick={() => setShowBookPicker(false)} aria-label="Cerrar selector de libros" className="rounded-xl border border-white/10 p-2"><X size={18} /></button></div>{[['Antiguo Testamento', oldTestament], ['Nuevo Testamento', newTestament]].map(([heading, items]) => <section key={heading} className="mb-5"><p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">{heading}</p><div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4">{items.map(book => <button key={book.code} type="button" onClick={() => selectBook(book)} className="rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-left text-sm font-black text-zinc-200 hover:border-blue-400/50 hover:bg-blue-500/10">{book.name}</button>)}</div></section>)}</div></div>}
     </div>
   );
-
-  if (!onClose) return content;
-
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-3 backdrop-blur-md">
-      <div className="w-full max-w-6xl rounded-[2rem] border border-white/10 bg-zinc-950 p-3 shadow-2xl">
-        {content}
-      </div>
-    </div>
-  );
+  return onClose ? <div className="fixed inset-0 z-[80] flex items-start justify-center bg-black/70 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-[max(env(safe-area-inset-top),0.75rem)] backdrop-blur-md sm:items-center" onClick={onClose}><div className="max-h-[calc(100dvh-max(env(safe-area-inset-top),0.75rem)-max(env(safe-area-inset-bottom),0.75rem))] w-full max-w-6xl overflow-y-auto overscroll-contain rounded-[2rem] border border-white/10 bg-zinc-950 p-3 shadow-2xl lg:h-[86vh] lg:max-h-[calc(100dvh-1.5rem)] lg:overflow-hidden" onClick={event => event.stopPropagation()}>{content}</div></div> : content;
 };
 
 export default BiblePicker;

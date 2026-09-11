@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { X, Library, Video, Link as LinkIcon, FileText as FileIcon, Upload, Trash2, SlidersHorizontal, Image as ImageIcon } from 'lucide-react';
 import MediaPicker from '../media/MediaPicker';
 import { getMediaTypeLabel } from '../media/mediaDisplay';
@@ -149,7 +149,8 @@ const SectionMediaManager = ({
                         )}
 
                         {resources.map(resource => {
-                          const isLibraryResource = resource.source === 'library' || Boolean(resource.mediaId);
+                          const isPendingLibraryResource = resource.source === 'pending-library';
+                          const isLibraryResource = resource.source === 'library' || Boolean(resource.mediaId) || isPendingLibraryResource;
                           const PreviewIcon = resource.type === 'image' ? ImageIcon : resource.type === 'video' ? Video : resource.type === 'pdf' ? FileIcon : LinkIcon;
 
                           return (
@@ -173,7 +174,7 @@ const SectionMediaManager = ({
                                     </span>
                                     {isLibraryResource ? (
                                       <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-emerald-600 dark:text-emerald-300">
-                                        Biblioteca
+                                        {isPendingLibraryResource ? 'Biblioteca pendiente' : 'Biblioteca'}
                                       </span>
                                     ) : (
                                       <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-amber-600 dark:text-amber-300">
@@ -328,3 +329,5 @@ const SectionMediaManager = ({
 };
 
 export default SectionMediaManager;
+
+

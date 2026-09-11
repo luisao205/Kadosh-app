@@ -14,13 +14,14 @@ const MediaPicker = ({
   multiple = false,
   title = 'Seleccionar multimedia',
   context = 'general',
+  libraryOptions = {},
   loading = false
 }) => {
   const [query, setQuery] = useState('');
   const [activeType, setActiveType] = useState('all');
   const [selectedItems, setSelectedItems] = useState([]);
   const shouldLoadLibrary = open && !Array.isArray(items);
-  const mediaLibrary = useMediaLibrary({ enabled: shouldLoadLibrary });
+  const mediaLibrary = useMediaLibrary({ enabled: shouldLoadLibrary, ...libraryOptions });
 
   const sourceItems = Array.isArray(items) ? items : mediaLibrary.items;
   const isLoading = loading || mediaLibrary.loading;

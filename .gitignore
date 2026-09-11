@@ -27,3 +27,4 @@ dist-ssr
 *.sw?
 Kadosh App-win32-x64/
 .firebase/
+bibles-source/

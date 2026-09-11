@@ -4,6 +4,7 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { Minimize, RefreshCw } from 'lucide-react';
 import AutoFitText from './AutoFitText';
+import BibleAmbientBackground from './BibleAmbientBackground';
 import ProjectorMediaBackground from './ProjectorMediaBackground';
 
 const Proyector = ({ eventoIdOverride }) => {
@@ -187,6 +188,11 @@ const Proyector = ({ eventoIdOverride }) => {
   // Si no hay absolutamente nada (ni fondo), mostrar standby. Si hay fondo, dejar que siga al render principal.
     // Solo mostramos Standby si REALMENTE no hay nada activo (ni fondo, ni reloj, ni media, ni letras)
   const isPreachingContent = projectorState?.type === 'preaching';
+  const isBibleContent = isPreachingContent && projectorState?.contentType === 'bible';
+  const activeBibleSlide = isBibleContent
+    ? projectorState?.bible?.slides?.[Number(projectorState?.bibleSlideIndex || 0)]
+    : null;
+  const bibleHeading = activeBibleSlide?.heading || null;
 
   if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !isPreachingContent) {
     return (
@@ -282,16 +288,60 @@ const Proyector = ({ eventoIdOverride }) => {
           <img src="/KADOSH_APP.jpg" alt="Logo Kadosh" className="w-48 h-48 md:w-64 md:h-64 lg:w-80 lg:h-80 rounded-full shadow-[0_0_80px_rgba(255,255,255,0.2)] object-cover ring-8 ring-white/10" />
           <h1 className="mt-8 text-5xl md:text-7xl font-black tracking-tighter text-white drop-shadow-2xl">KADOSH</h1>
         </div>
+      ) : isBibleContent ? (
+        <div className="absolute inset-0 z-20 flex min-h-0 w-full items-center justify-center px-[5vw] py-[5vh] text-center">
+          <BibleAmbientBackground />
+          <div className="relative flex h-full w-full min-h-0 flex-col items-center">
+            {projectorState.reference && (
+              <p className="mb-2 shrink-0 text-[clamp(1rem,2vw,2.2rem)] font-black uppercase tracking-[0.12em] text-amber-100 drop-shadow-2xl">
+                {projectorState.reference}
+              </p>
+            )}
+            {bibleHeading && (
+              <p className="mb-3 shrink-0 text-[clamp(1rem,2.4vw,2.8rem)] font-bold uppercase tracking-[0.08em] text-amber-50/90 drop-shadow-2xl">
+                {bibleHeading}
+              </p>
+            )}
+            <div className="min-h-0 w-full flex-1">
+              <AutoFitText
+                text={projectorState.content || ''}
+                minFontSize={36}
+                maxFontSize={240}
+                safeMaxWidth="92vw"
+                safeMaxHeight="100%"
+                variant="projector"
+                className="font-black leading-[1.08] text-white drop-shadow-[0_10px_45px_rgba(0,0,0,0.85)]"
+              />
+            </div>
+            {projectorState.translation && (
+              <p className="mt-3 shrink-0 rounded-full border border-white/10 bg-white/10 px-6 py-2 text-[clamp(0.8rem,1.4vw,1.4rem)] font-black uppercase tracking-[0.18em] text-zinc-100">
+                {projectorState.translation}
+              </p>
+            )}
+          </div>
+        </div>
       ) : isPreachingContent ? (
         <div className="relative z-20 flex h-full w-full items-center justify-center px-4 py-8 text-center">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.16),transparent_34%),linear-gradient(135deg,rgba(24,24,27,0.88),rgba(0,0,0,0.96))]" />
           <div className="relative mx-auto flex h-full w-full max-w-6xl flex-col items-center justify-center rounded-[2.5rem] border border-white/10 bg-black/35 px-[5vw] py-[5vh] shadow-[0_40px_120px_rgba(0,0,0,0.55)]">
             {projectorState.reference && (
-              <p className="mb-6 text-[clamp(1.4rem,4vw,4.6rem)] font-black uppercase tracking-tight text-amber-100 drop-shadow-2xl">
+              <p className={`${isBibleContent ? 'mb-3 text-[clamp(1rem,2vw,2.2rem)] tracking-[0.12em]' : 'mb-6 text-[clamp(1.4rem,4vw,4.6rem)] tracking-tight'} shrink-0 font-black uppercase text-amber-100 drop-shadow-2xl`}>
                 {projectorState.reference}
               </p>
             )}
-            {projectorState.content ? (
+            {isBibleContent && projectorState.content ? (
+              <div className="min-h-0 w-full flex-1">
+                <AutoFitText
+                  text={projectorState.content}
+                  minFontSize={36}
+                  maxFontSize={220}
+                  safeMaxWidth="92%"
+                  safeMaxHeight="94%"
+                  variant="projector"
+                  className="font-black leading-[1.08] text-white drop-shadow-[0_10px_45px_rgba(0,0,0,0.85)]"
+                />
+              </div>
+            ) : projectorState.content ? (
               <p className="whitespace-pre-wrap text-[clamp(2rem,5.6vw,7rem)] font-black leading-[1.08] text-white drop-shadow-[0_10px_45px_rgba(0,0,0,0.85)]">
                 {projectorState.content}
               </p>
@@ -299,7 +349,7 @@ const Proyector = ({ eventoIdOverride }) => {
               <p className="text-[clamp(1.6rem,4vw,4rem)] font-black text-zinc-300">Texto no guardado.</p>
             )}
             {projectorState.translation && (
-              <p className="mt-8 rounded-full border border-white/10 bg-white/10 px-6 py-2 text-[clamp(1rem,2vw,2rem)] font-black uppercase tracking-[0.18em] text-zinc-100">
+              <p className={`${isBibleContent ? 'mt-3 text-[clamp(0.8rem,1.4vw,1.4rem)]' : 'mt-8 text-[clamp(1rem,2vw,2rem)]'} shrink-0 rounded-full border border-white/10 bg-white/10 px-6 py-2 font-black uppercase tracking-[0.18em] text-zinc-100`}>
                 {projectorState.translation}
               </p>
             )}

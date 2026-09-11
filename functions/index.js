@@ -1,7 +1,214 @@
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
+const { randomUUID } = require("crypto");
 
 admin.initializeApp();
+
+const LIVE_SETLIST_ROLES = new Set(["due\u00f1o", "dueno", "admin", "multimedia"]);
+
+const isPlainObject = (value) => (
+  value !== null && typeof value === "object" && !Array.isArray(value)
+);
+
+const assertExactPayload = (data, expectedKeys) => {
+  if (!isPlainObject(data)) {
+    throw new functions.https.HttpsError("invalid-argument", "Payload inv\u00e1lido.");
+  }
+
+  const keys = Object.keys(data);
+  if (keys.length !== expectedKeys.length || keys.some((key) => !expectedKeys.includes(key))) {
+    throw new functions.https.HttpsError("invalid-argument", "Payload inv\u00e1lido.");
+  }
+};
+
+const assertNonEmptyString = (value, field) => {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new functions.https.HttpsError("invalid-argument", `${field} es obligatorio.`);
+  }
+  return value.trim();
+};
+
+const assertLiveSetlistAccess = async (uid) => {
+  const userSnap = await admin.firestore().collection("usuarios").doc(uid).get();
+  const role = userSnap.exists ? userSnap.get("rol") : null;
+
+  if (!LIVE_SETLIST_ROLES.has(role)) {
+    throw new functions.https.HttpsError("permission-denied", "No tienes permisos para gestionar el setlist en vivo.");
+  }
+
+  return { uid, role, user: userSnap.data() || {} };
+};
+
+const assertLiveEvent = (eventoId, eventData) => {
+  if (eventoId === "global") {
+    throw new functions.https.HttpsError("failed-precondition", "El evento global no admite cambios de setlist.");
+  }
+  if (eventData.estado === "cancelado") {
+    throw new functions.https.HttpsError("failed-precondition", "El evento est\u00e1 cancelado.");
+  }
+  if (eventData.completado === true) {
+    throw new functions.https.HttpsError("failed-precondition", "El evento ya finaliz\u00f3.");
+  }
+};
+
+const getEventSetlistItems = (eventData = {}) => {
+  if (Array.isArray(eventData.setlist)) {
+    return eventData.setlist
+      .map((item, index) => {
+        const source = isPlainObject(item) ? item : {};
+        const type = source.type || "song";
+        const value = source.value || source.songId || source.id;
+        const idLocal = source.idLocal || source.setlistItemId || `${value || "item"}_${index}`;
+
+        if (!value && type !== "note") return null;
+        return { ...source, idLocal, type, value };
+      })
+      .filter(Boolean);
+  }
+
+  if (Array.isArray(eventData.canciones)) {
+    return eventData.canciones
+      .map((item, index) => {
+        const songId = typeof item === "string" ? item : item?.id || item?.songId || item?.value;
+        return songId ? { idLocal: `legacy_${songId}_${index}`, type: "song", value: songId } : null;
+      })
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
+const getSetlistSongIds = (setlistItems) => (
+  setlistItems
+    .filter((item) => item?.type === "song")
+    .map((item) => item.value || item.songId || item.id)
+    .filter(Boolean)
+);
+
+const buildInactiveSongLiveState = (contentTitle, updatedBy) => ({
+  activeSongId: null,
+  activeSongTitle: "",
+  activeSongIndex: -1,
+  activeSectionIndex: -1,
+  activeSectionTitle: "",
+  activeContentType: "none",
+  activeContentTitle: contentTitle,
+  updatedAt: Date.now(),
+  updatedBy
+});
+
+const isArchivedSong = (song = {}) => (
+  song.estado === "archived" || song.status === "archived" || song.archived === true
+);
+
+const isActiveSong = (eventData, songId) => (
+  eventData.liveState?.activeSongId === songId ||
+  eventData.currentSongId === songId ||
+  eventData.proyectorSongId === songId
+);
+
+const buildSetlistUpdate = (setlistItems) => ({
+  setlist: setlistItems,
+  canciones: getSetlistSongIds(setlistItems)
+});
+
+exports.agregarCancionEnVivo = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesi\u00f3n.");
+  }
+
+  assertExactPayload(data, ["eventoId", "songId"]);
+  const eventoId = assertNonEmptyString(data.eventoId, "eventoId");
+  const songId = assertNonEmptyString(data.songId, "songId");
+  const actor = await assertLiveSetlistAccess(context.auth.uid);
+  const db = admin.firestore();
+  const eventRef = db.collection("eventos").doc(eventoId);
+  const songRef = db.collection("canciones").doc(songId);
+
+  return db.runTransaction(async (transaction) => {
+    const [eventSnap, songSnap] = await Promise.all([
+      transaction.get(eventRef),
+      transaction.get(songRef)
+    ]);
+
+    if (!eventSnap.exists) {
+      throw new functions.https.HttpsError("not-found", "El evento ya no est\u00e1 disponible.");
+    }
+    if (!songSnap.exists || isArchivedSong(songSnap.data())) {
+      throw new functions.https.HttpsError("failed-precondition", "La canci\u00f3n ya no est\u00e1 disponible.");
+    }
+
+    const eventData = eventSnap.data();
+    assertLiveEvent(eventoId, eventData);
+    const setlistItems = getEventSetlistItems(eventData);
+
+    if (setlistItems.some((item) => item.type === "song" && item.value === songId)) {
+      return { ok: false, code: "already-present" };
+    }
+
+    const addedItem = {
+      idLocal: `extra_${randomUUID()}`,
+      type: "song",
+      value: songId
+    };
+    const nextSetlist = [...setlistItems, addedItem];
+    transaction.update(eventRef, buildSetlistUpdate(nextSetlist));
+
+    return { ok: true, item: addedItem, actorRole: actor.role };
+  });
+});
+
+exports.quitarCancionEnVivo = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesi\u00f3n.");
+  }
+
+  assertExactPayload(data, ["eventoId", "idLocal"]);
+  const eventoId = assertNonEmptyString(data.eventoId, "eventoId");
+  const idLocal = assertNonEmptyString(data.idLocal, "idLocal");
+  if (!idLocal.startsWith("extra_")) {
+    throw new functions.https.HttpsError("failed-precondition", "Solo se pueden quitar canciones agregadas en vivo.");
+  }
+
+  const actor = await assertLiveSetlistAccess(context.auth.uid);
+  const db = admin.firestore();
+  const eventRef = db.collection("eventos").doc(eventoId);
+
+  return db.runTransaction(async (transaction) => {
+    const eventSnap = await transaction.get(eventRef);
+    if (!eventSnap.exists) {
+      throw new functions.https.HttpsError("not-found", "El evento ya no est\u00e1 disponible.");
+    }
+
+    const eventData = eventSnap.data();
+    assertLiveEvent(eventoId, eventData);
+    const setlistItems = getEventSetlistItems(eventData);
+    const itemToRemove = setlistItems.find((item) => item.idLocal === idLocal);
+
+    if (!itemToRemove) {
+      throw new functions.https.HttpsError("not-found", "La canci\u00f3n agregada ya no existe.");
+    }
+    if (itemToRemove.type !== "song" || !String(itemToRemove.idLocal).startsWith("extra_")) {
+      throw new functions.https.HttpsError("failed-precondition", "Solo se pueden quitar canciones agregadas en vivo.");
+    }
+
+    const nextSetlist = setlistItems.filter((item) => item.idLocal !== idLocal);
+    const updates = buildSetlistUpdate(nextSetlist);
+
+    if (isActiveSong(eventData, itemToRemove.value)) {
+      updates.currentSongId = null;
+      updates.liveState = buildInactiveSongLiveState("Cancion removida del setlist", actor.user.nombre || actor.user.email || "Multimedia");
+      updates.proyectorSongId = null;
+      updates.proyectorSlide = null;
+      updates.proyectorSlideIndex = -1;
+      updates.proyectorNextSlide = null;
+      updates.proyectorNextSong = null;
+    }
+
+    transaction.update(eventRef, updates);
+    return { ok: true, removedSongId: itemToRemove.value, clearedActiveSong: isActiveSong(eventData, itemToRemove.value), actorRole: actor.role };
+  });
+});
 
 /**
  * Helper to sanitize topic names for FCM.

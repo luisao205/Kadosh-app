@@ -9,7 +9,17 @@ export default defineConfig({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg}'], // Permite trabajar offline
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg}'],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/bibles/') && url.pathname.endsWith('.json'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'kadosh-bibles-v2',
+              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 365 }
+            }
+          }
+        ],
         navigateFallback: '/index.html',
       },
       manifest: {

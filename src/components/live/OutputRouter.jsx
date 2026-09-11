@@ -9,6 +9,8 @@ import PreacherDisplay from './PreacherDisplay';
 import { Loader2 } from 'lucide-react';
 import { OUTPUT_HEARTBEAT_INTERVAL_MS, isOutputScreenTestActive } from '../../utils/outputPresence';
 
+const SUPPORTED_OUTPUT_TYPES = ['proyector', 'retorno', 'musicos', 'preacher'];
+
 const OutputRouter = ({ user }) => {
   const { eventoId, outputId } = useParams();
   const [type, setType] = useState(null);
@@ -32,7 +34,7 @@ const OutputRouter = ({ user }) => {
           return;
         }
         if (config) {
-          setType(config.type);
+          setType(config.type || null);
           setLabel(config.label);
           setScreenTest(isOutputScreenTestActive(config) ? config.screenTest : null);
           // Activar identificación si el timestamp es de hace menos de 4 segundos
@@ -47,7 +49,7 @@ const OutputRouter = ({ user }) => {
   }, [outputId]);
 
   useEffect(() => {
-    if (!type || !outputId) return undefined;
+    if (!type || !SUPPORTED_OUTPUT_TYPES.includes(type) || !outputId) return undefined;
 
     const globalDocRef = doc(db, 'eventos', 'global');
     const writeHeartbeat = async () => {
@@ -93,6 +95,16 @@ const OutputRouter = ({ user }) => {
       <div className="h-screen bg-black text-zinc-700 flex flex-col items-center justify-center text-center p-10 font-black uppercase tracking-tighter">
         <p className="text-4xl opacity-20 mb-4">Offline</p>
         <p className="text-xs">Esta salida no está configurada en la matriz global.</p>
+      </div>
+    );
+  }
+
+  if (!SUPPORTED_OUTPUT_TYPES.includes(type)) {
+    return (
+      <div className="h-screen bg-black text-zinc-500 flex flex-col items-center justify-center text-center p-10 font-black uppercase tracking-tighter">
+        <p className="text-3xl text-red-400/80 mb-4">Tipo de salida no soportado</p>
+        <p className="text-xs text-zinc-500">Salida: {label || outputId}</p>
+        <p className="mt-2 text-xs text-zinc-600">Tipo recibido: {type}</p>
       </div>
     );
   }

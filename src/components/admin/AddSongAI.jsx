@@ -1,21 +1,22 @@
-import React, { useState, useEffect, useMemo } from 'react';
+﻿import React, { useState, useEffect, useMemo } from 'react';
 import { Sparkles, Search, Save, AlertCircle, X, Download, Wand2, Eye, Scissors, Pilcrow, Upload, Trash2, Monitor } from 'lucide-react';
 import { buscarSugerenciasIA, buscarMetadatosIA } from '../../utils/geminiApi';
 import { collection, addDoc, onSnapshot } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
-import { detectarTonoDesdeAcordes, traducirAcorde } from '../../utils/musicCore';
+import { detectarTonoDesdeAcordes, isValidChordToken, traducirAcorde } from '../../utils/musicCore';
 import { isSongSectionTitle, parsearCancion } from '../../utils/songParser';
 import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
 import { isVideoMediaUrl } from '../../utils/mediaUtils';
+import { MEDIA_PROVIDERS } from '../../utils/mediaLibrary';
+import { createOrReuseMediaLibraryResource } from '../../utils/mediaLibraryFirestoreSync';
 import { useFeedback } from '../ui/FeedbackProvider';
 
 const TONOS_DISPONIBLES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const SECTION_NAMES = ['Intro', 'Verso', 'Verse', 'Pre-Coro', 'Pre-Coro 2', 'Pre-Chorus', 'Coro', 'Chorus', 'Puente', 'Bridge', 'Final', 'Outro', 'Instrumental', 'Espontáneo', 'Espontaneo'];
 const CUE_PRESETS = ['Subida', 'Entra batería', 'Solo voces', 'Todos juntos', 'Corte', 'Baja dinámica', 'Repetir coro', 'Final suave'];
-const CHORD_REGEX = /^[A-G][#b]?(?:m|maj|min|dim|aug|sus|add)?(?:\d{0,2})?(?:[#b]?\d{0,2})?(?:\/[A-G][#b]?)?$/;
-const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|pre[\s-]?(?:coro|chorus)|precoro|coro|chorus|puente|bridge|final|outro|instrumental|espont[a?]neo|espontaneo)(?:\s+\d+|\s*[:.-])?\s*$/i;
+const CHORD_REGEX = /^[A-G][#b]?[a-zA-Z0-9#b/().+\-°ø]*$/;
 
 const normalizeKey = (value, fallback = 'C') => {
   const clean = String(value || '').trim();
@@ -23,12 +24,12 @@ const normalizeKey = (value, fallback = 'C') => {
   return match || clean || fallback;
 };
 
-const isSectionTitle = (value) => isSongSectionTitle(value) || SECTION_TITLE_REGEX.test(String(value || '').trim());
+const isSectionTitle = (value) => isSongSectionTitle(value);
 
 const limpiarTextoCancion = (value) => String(value || '')
   .replace(/\r\n?/g, '\n')
   .replace(/[“”]/g, '"')
-  .replace(/[‘’]/g, "'")
+  .replace(/[’]/g, "'")
   .replace(/\u00a0/g, ' ')
   .replace(/[ \t]+$/gm, '')
   .replace(/[ \t]{2,}/g, ' ')
@@ -74,6 +75,7 @@ const AddSongAI = ({ user }) => {
   const [audioFile, setAudioFile] = useState(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [fondoUrl, setFondoUrl] = useState('');
+  const [fondoMediaId, setFondoMediaId] = useState('');
   const [isUploadingFondo, setIsUploadingFondo] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showExample, setShowExample] = useState(false);
@@ -88,7 +90,7 @@ const AddSongAI = ({ user }) => {
     const matches = [...String(letraGenerada || '').matchAll(/\[([^\]]+)\]/g)];
     return matches
       .map(match => match[1].trim())
-      .filter(chord => chord && !isSectionTitle(chord) && !CHORD_REGEX.test(chord))
+      .filter(chord => chord && !isSectionTitle(chord) && !isValidChordToken(chord) && !CHORD_REGEX.test(chord))
       .slice(0, 8);
   }, [letraGenerada]);
   const showToast = (message, type = 'error') => notify(message, { type });
@@ -203,9 +205,34 @@ const AddSongAI = ({ user }) => {
     setIsUploadingFondo(true);
     showToast("Subiendo fondo a Cloudinary...", "info");
     try {
-      const { url } = await uploadToCloudinary(file, 'kadosh/song-backgrounds');
-      setFondoUrl(url);
-      showToast("Fondo de proyección subido.", "success");
+      const uploaded = await uploadToCloudinary(file, 'kadosh/song-backgrounds');
+      const { media } = await createOrReuseMediaLibraryResource({
+        title: file.name || (titulo ? `Fondo - ${titulo}` : 'Fondo de cancion'),
+        type: uploaded.type || (file.type?.startsWith('video/') ? 'video' : 'image'),
+        url: uploaded.url,
+        thumbnailUrl: uploaded.thumbnailUrl || '',
+        provider: MEDIA_PROVIDERS.CLOUDINARY,
+        source: 'song_background',
+        folder: 'kadosh/song-backgrounds',
+        category: 'Fondos',
+        cloudinaryPublicId: uploaded.publicId,
+        cloudinaryResourceType: uploaded.type,
+        metadata: {
+          size: uploaded.bytes || file.size || null,
+          mimeType: file.type || null,
+          width: uploaded.width || null,
+          height: uploaded.height || null,
+          duration: uploaded.duration || null,
+          thumbnail: uploaded.thumbnailUrl || null
+        }
+      }, {
+        firestore: db,
+        now: Date.now(),
+        userId: user?.uid || null
+      });
+      setFondoUrl(uploaded.url);
+      setFondoMediaId(media.mediaId || media.id || '');
+      showToast("Fondo de proyección subido y registrado en Biblioteca.", "success");
     } catch (error) {
       console.error("Error subiendo fondo:", error);
       showToast("No se pudo subir el fondo.");
@@ -213,6 +240,11 @@ const AddSongAI = ({ user }) => {
       setIsUploadingFondo(false);
       e.target.value = '';
     }
+  };
+
+  const handleFondoUrlChange = (value) => {
+    setFondoUrl(value);
+    setFondoMediaId('');
   };
 
   const handleSave = async () => {
@@ -250,19 +282,20 @@ const AddSongAI = ({ user }) => {
         audioUrl,
         youtubeUrl,
         fondoUrl,
+        fondoMediaId: fondoMediaId || null,
         fechaCreacion: new Date().toISOString()
       });
       
       // Notificación Global
       await addDoc(collection(db, 'notificaciones'), {
-        titulo: '🎵 Canción Nueva',
+        titulo: '🎵 Cancion Nueva',
         mensaje: `Se ha añadido "${titulo}" al repertorio general.`,
         destinatarios: ['all'],
         emisorId: user?.uid,
         fechaCreacion: new Date().toISOString()
       });
-      showToast(`?Canción "${titulo}" guardada exitosamente en Kadosh App!`, "success");
-      setTitulo(''); setArtista(''); setTono('C'); setEtiquetas([]); setTonosCantantes({}); setBpm(''); setLetraGenerada(''); setBusqueda(''); setAudioFile(null); setYoutubeUrl(''); setFondoUrl('');
+      showToast(`Cancion "${titulo}" guardada exitosamente en Kadosh App!`, "success");
+      setTitulo(''); setArtista(''); setTono('C'); setEtiquetas([]); setTonosCantantes({}); setBpm(''); setLetraGenerada(''); setBusqueda(''); setAudioFile(null); setYoutubeUrl(''); setFondoUrl(''); setFondoMediaId('');
     } catch (error) {
       console.error("Error guardando en Firebase:", error);
       showToast("Hubo un error al guardar la cancion. Verifica tu conexión a Firebase.");
@@ -283,7 +316,7 @@ const AddSongAI = ({ user }) => {
   const handleCleanFormat = async () => {
     const cleaned = limpiarTextoCancion(letraGenerada);
     if (!cleaned) return;
-    const hasHeavyCleanup = /\n{3,}|[????\u00a0]|\r/.test(letraGenerada);
+    const hasHeavyCleanup = /\n{3,}|[👗\u00a0]|\r/.test(letraGenerada);
     if (hasHeavyCleanup) {
       const shouldClean = await askConfirm({
         title: 'Limpiar formato',
@@ -313,7 +346,7 @@ const AddSongAI = ({ user }) => {
       <div className="flex flex-col items-center justify-center h-64 text-center">
         <AlertCircle size={48} className="text-red-500 mb-4" />
         <h2 className="text-2xl font-bold text-zinc-900">Acceso Denegado</h2>
-        <p className="text-zinc-500 mt-2">Los músicos no tienen permisos para añadir canciones.</p>
+        <p className="text-zinc-500 mt-2">Los musicos no tienen permisos para añadir canciones.</p>
       </div>
     );
   }
@@ -326,7 +359,7 @@ const AddSongAI = ({ user }) => {
           <Sparkles size={28} />
         </div>
         <div>
-          <h1 className="text-3xl font-black text-white tracking-tight">Añadir Canción</h1>
+          <h1 className="text-3xl font-black text-white tracking-tight">Añadir Cancion</h1>
           <p className="text-zinc-400 mt-1 text-sm font-medium">Crea una cancion con acordes, secciones, tonos y vista previa musical.</p>
         </div>
         </div>
@@ -398,7 +431,7 @@ const AddSongAI = ({ user }) => {
 
           <div className="kp-card p-6 rounded-3xl grid grid-cols-1 sm:grid-cols-2 gap-4">
              <div className="col-span-2">
-                <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Título de la Canción</label>
+                <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">Título de la Cancion</label>
                 <input type="text" value={titulo} onChange={(e)=>setTitulo(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" />
              </div>
              <div className="col-span-2">
@@ -464,7 +497,7 @@ const AddSongAI = ({ user }) => {
                      </button>
                    ))}
                  </div>
-                 <p className="mt-2 text-[10px] font-bold text-zinc-500">Estos filtros aparecen en Repertorio y ayudan a encontrar la cancion sin editarla despues.</p>
+                 <p className="mt-2 text-[10px] font-bold text-zinc-500">Estos filtros aparecen en Repertorio y ayudan a encontrar la cancion sin editarla después.</p>
               </div>
               <div className="col-span-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
                  <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Pista o Secuencia de Audio (MP3)</label>
@@ -486,7 +519,7 @@ const AddSongAI = ({ user }) => {
                       ) : (
                         <img src={fondoUrl} alt="Fondo" className="h-full w-full object-cover" />
                       )}
-                      <button type="button" onClick={() => setFondoUrl('')} className="absolute right-2 top-2 rounded-lg bg-red-600/90 p-2 text-white">
+                      <button type="button" onClick={() => handleFondoUrlChange('')} className="absolute right-2 top-2 rounded-lg bg-red-600/90 p-2 text-white">
                         <Trash2 size={14} />
                       </button>
                     </div>
@@ -495,7 +528,7 @@ const AddSongAI = ({ user }) => {
                     <input
                       type="url"
                       value={fondoUrl}
-                      onChange={e => setFondoUrl(e.target.value)}
+                      onChange={e => handleFondoUrlChange(e.target.value)}
                       placeholder="Pegar URL de imagen, GIF o video corto"
                       className="kp-input min-w-0 flex-1 p-2.5 text-xs"
                     />
@@ -560,12 +593,12 @@ const AddSongAI = ({ user }) => {
             
             {showExample && (
               <div className="p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-700 dark:text-slate-300 animate-in fade-in slide-in-from-top-1 mb-2">
-                <p className="font-bold text-slate-900 dark:text-white mb-2 font-sans">As? debe estructurarse tu texto:</p>
+                <p className="font-bold text-slate-900 dark:text-white mb-2 font-sans">Así debe estructurarse tu texto:</p>
                 # Verso 1<br/>
                 [G]Esta es la primera [D]línea<br/>
                 [Em]Y los acordes van [C]pegados<br/><br/>
                 # Coro<br/>
-                [G]Canto con a[D]legr?a
+                [G]Canto con a[D]legría
               </div>
             )}
           </div>
@@ -573,7 +606,7 @@ const AddSongAI = ({ user }) => {
             value={letraGenerada} 
             onChange={(e) => setLetraGenerada(e.target.value)} 
             className="kp-input flex-1 w-full p-4 rounded-2xl text-sm font-mono whitespace-pre-wrap resize-none"
-            placeholder="Pega aqu? la letra y haz clic en los botones de arriba para agregar las secciones..."
+            placeholder="Pega aquí la letra y haz clic en los botones de arriba para agregar las secciones..."
           ></textarea>
           {chordWarnings.length > 0 && (
             <div className="mt-3 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200">
@@ -590,30 +623,30 @@ const AddSongAI = ({ user }) => {
             className="kp-button-primary mt-4 w-full flex items-center justify-center gap-2 py-3 px-6 rounded-xl text-sm font-bold disabled:opacity-50 transition-all active:scale-95"
           >
             <Save size={18} />
-            {isSaving ? 'Guardando...' : 'Guardar Canción'}
+            {isSaving ? 'Guardando...' : 'Guardar Cancion'}
           </button>
         </div>
       </div>
 
       <section className="kp-card mt-8 p-5 md:p-6 rounded-3xl">
         <div className="flex items-center justify-between gap-3 mb-4">
-          <h2 className="text-sm font-black text-zinc-900 dark:text-white flex items-center gap-2"><Eye size={16} className="text-blue-600"/> Vista previa para músicos</h2>
+          <h2 className="text-sm font-black text-zinc-900 dark:text-white flex items-center gap-2"><Eye size={16} className="text-blue-600"/> Vista previa para musicos</h2>
           <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{parsedPreview.length} secciones</span>
         </div>
         <div className="rounded-2xl border border-white/10 bg-zinc-950/60 p-4 max-h-[420px] overflow-y-auto">
           <div className="mb-5">
             <p className="text-xl font-black text-zinc-900 dark:text-white">{titulo || 'Título sin definir'}</p>
-            <p className="text-sm font-bold text-zinc-500">{artista || 'Artista sin definir'} ? Tono {traducirAcorde(normalizeKey(tono), user?.preferencias?.formatoAcordes, notacion)}</p>
+            <p className="text-sm font-bold text-zinc-500">{artista || 'Artista sin definir'} · Tono {traducirAcorde(normalizeKey(tono), user?.preferencias?.formatoAcordes, notacion)}</p>
           </div>
           {parsedPreview.length === 0 ? (
-            <p className="text-sm text-zinc-500 italic">La vista previa aparecer? cuando escribas letra o acordes.</p>
+            <p className="text-sm text-zinc-500 italic">La vista previa aparecerá cuando escribas letra o acordes.</p>
           ) : (
             <div className="space-y-6">
-              {parsedPreview.map((sección, idx) => (
-                <div key={`${sección.titulo}-${idx}`}>
-                  <span className="inline-block mb-3 text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 border border-blue-200">{sección.titulo}</span>
+              {parsedPreview.map((seccion, idx) => (
+                <div key={`${seccion.titulo}-${idx}`}>
+                  <span className="inline-block mb-3 text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 border border-blue-200">{seccion.titulo}</span>
                   <div className="space-y-2 font-medium text-zinc-800 dark:text-zinc-100">
-                    {(sección.items?.length ? sección.items : sección.lineas.map(line => ({ type: 'lyrics', line }))).map((item, lineIdx) => (
+                    {(seccion.items?.length ? seccion.items : seccion.lineas.map(line => ({ type: 'lyrics', line }))).map((item, lineIdx) => (
                       item.type === 'cue' ? (
                         <div key={lineIdx} className="inline-flex rounded-xl border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-black text-violet-700">
                           * {item.text}
@@ -647,9 +680,9 @@ const AddSongAI = ({ user }) => {
       {showImportModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-in fade-in">
           <div className="bg-white dark:bg-zinc-900 rounded-3xl shadow-2xl max-w-lg w-full flex flex-col overflow-hidden border border-zinc-200 dark:border-zinc-800">
-            <div className="p-4 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-950"><h3 className="font-bold text-zinc-900 dark:text-white flex items-center gap-2"><Download size={18}/> Importar Canción</h3><button onClick={() => setShowImportModal(false)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"><X size={20}/></button></div>
+            <div className="p-4 border-b border-zinc-100 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-950"><h3 className="font-bold text-zinc-900 dark:text-white flex items-center gap-2"><Download size={18}/> Importar Cancion</h3><button onClick={() => setShowImportModal(false)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"><X size={20}/></button></div>
             <div className="p-4 flex-1">
-              <p className="text-xs text-zinc-500 mb-3">Pega aqu? canciones desde internet que tengan los acordes entre corchetes <code>[G]</code> o etiquetas <code>&#123;title: ...&#125;</code>. El sistema lo adaptar? a tu editor.</p>
+              <p className="text-xs text-zinc-500 mb-3">Pega aquí canciones desde internet que tengan los acordes entre corchetes <code>[G]</code> o etiquetas <code>&#123;title: ...&#125;</code>. El sistema lo adaptará a tu editor.</p>
               <textarea value={chordProText} onChange={e => setChordProText(e.target.value)} className="w-full h-48 p-3 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs font-mono bg-zinc-50 dark:bg-zinc-950 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none resize-none"></textarea>
             </div>
             <div className="p-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 flex justify-end">
@@ -700,3 +733,6 @@ const AddSongAI = ({ user }) => {
 };
 
 export default AddSongAI;
+
+
+

@@ -13,6 +13,7 @@ import {
 } from '../../utils/outputPresence';
 import { isAdmin, isMultimedia, isOwner } from '../../utils/rolePermissions';
 import { PREACHER_REQUEST_STATUS, PREACHER_REQUEST_TYPES, MULTIMEDIA_TO_PASTOR_PRESETS, buildPreachingProjectorState } from '../../utils/preachingLive';
+import { createInactiveSongLiveState } from '../../utils/liveState';
 import { useFeedback } from '../ui/FeedbackProvider';
 
 const OUTPUT_STATUS_STYLES = {
@@ -335,7 +336,13 @@ const MultimediaHub = ({ user }) => {
         proyectorSongId: null,
         proyectorSlideIndex: -1,
         proyectorNextSlide: null,
-        proyectorNextSong: null
+        proyectorNextSong: null,
+        liveState: createInactiveSongLiveState({
+          contentType: 'preaching',
+          contentTitle: request.title || request.reference || 'Predica',
+          updatedBy: user?.nombre || user?.email || 'Multimedia'
+        }),
+        currentSongId: null
       };
       await setDoc(doc(db, 'eventos', request.eventId), updates, { merge: true });
       await updateDoc(doc(db, 'eventos', request.eventId, 'preacherRequests', request.id), {
@@ -597,7 +604,7 @@ const MultimediaHub = ({ user }) => {
               <Film size={32} />
             </div>
             <h2 className="text-2xl font-black mb-2">Control Solo Medios</h2>
-            <p className="text-indigo-100 font-medium leading-relaxed">Proyecta videos, fondos y logos sin necesidad de cargar una canción o setlist específico.</p>
+            <p className="text-indigo-100 font-medium leading-relaxed">Proyecta videos, fondos y logos sin necesidad de cargar una cancion o setlist específico.</p>
           </div>
           <button 
             onClick={() => navigate('/control-proyector/global', { state: { returnTo: '/multimedia-hub' } })}

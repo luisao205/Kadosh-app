@@ -1,0 +1,68 @@
+[
+  {
+    "translation": "RVR1960",
+    "books": 66,
+    "chapters": 1189,
+    "verseNodes": 31102,
+    "emptyVerses": 1,
+    "annotations": 0,
+    "omittedText": 0,
+    "groupedRanges": 0,
+    "generatedVerseNodes": 31102
+  },
+  {
+    "translation": "DHH",
+    "books": 66,
+    "chapters": 1189,
+    "verseNodes": 31102,
+    "emptyVerses": 0,
+    "annotations": 5217,
+    "omittedText": 332,
+    "groupedRanges": 0,
+    "generatedVerseNodes": 31102
+  },
+  {
+    "translation": "NTV",
+    "books": 66,
+    "chapters": 1189,
+    "verseNodes": 31102,
+    "emptyVerses": 24,
+    "annotations": 4765,
+    "omittedText": 0,
+    "groupedRanges": 24,
+    "generatedVerseNodes": 31102
+  },
+  {
+    "translation": "NVI",
+    "books": 66,
+    "chapters": 1189,
+    "verseNodes": 31102,
+    "emptyVerses": 2,
+    "annotations": 5933,
+    "omittedText": 0,
+    "groupedRanges": 0,
+    "generatedVerseNodes": 31102
+  },
+  {
+    "translation": "PDT",
+    "books": 66,
+    "chapters": 1189,
+    "verseNodes": 31102,
+    "emptyVerses": 0,
+    "annotations": 1569,
+    "omittedText": 0,
+    "groupedRanges": 0,
+    "generatedVerseNodes": 31102
+  },
+  {
+    "translation": "TLA",
+    "books": 66,
+    "chapters": 1189,
+    "verseNodes": 31102,
+    "emptyVerses": 4453,
+    "annotations": 480,
+    "omittedText": 0,
+    "groupedRanges": 2294,
+    "generatedVerseNodes": 31102
+  }
+]

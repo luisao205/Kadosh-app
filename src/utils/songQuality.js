@@ -1,4 +1,4 @@
-import { parsearCancion } from './songParser';
+import { isSongSectionTitle, parsearCancion } from './songParser';
 
 const hasSectionMedia = (song = {}) => (
   song.sectionMedia
@@ -13,9 +13,15 @@ export const hasSongMultimedia = (song = {}) => Boolean(song.fondoUrl)
 export const getSongQuality = (song = {}) => {
   const letra = String(song.letraRaw || '');
   const sections = parsearCancion(letra);
+  const hasExplicitSections = letra.split('\n').some(line => {
+    const trimmed = line.trim();
+    if (/^#\s*\S+/.test(trimmed)) return true;
+    const bracketMatch = trimmed.match(/^\[(.*?)\]$/);
+    return bracketMatch ? isSongSectionTitle(bracketMatch[1]) : false;
+  });
   const hasKey = Boolean(song.tonoOriginal || song.tono);
   const hasLyrics = letra.trim().length > 0;
-  const hasSections = sections.length > 0;
+  const hasSections = sections.length > 0 && hasExplicitSections;
   const hasChords = /\[[A-G](?:#|b)?(?:m|maj|min|sus|dim|aug|add)?[0-9]*(?:\/[A-G](?:#|b)?)?\]/i.test(letra);
   const hasMedia = hasSongMultimedia(song);
   const issues = [];
@@ -29,13 +35,14 @@ export const getSongQuality = (song = {}) => {
   const criticalIssues = issues.filter(issue => issue !== 'Sin multimedia');
 
   return {
-    status: criticalIssues.length === 0 && hasMedia ? 'complete' : 'review',
-    label: criticalIssues.length === 0 && hasMedia ? 'Completa' : 'Requiere revision',
+    status: criticalIssues.length === 0 ? 'complete' : 'review',
+    label: criticalIssues.length === 0 ? 'Completa' : 'Requiere revision',
     issues,
     checks: {
       hasKey,
       hasLyrics,
       hasSections,
+      hasExplicitSections,
       hasChords,
       hasMedia
     }

@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc, deleteDoc, deleteField, serverTimestamp } from 'firebase/firestore';
+import { createPortal } from 'react-dom';
+import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc, deleteDoc, deleteField, runTransaction, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { parsearCancion } from '../../utils/songParser';
+import { getSectionKey, parsearCancion } from '../../utils/songParser';
 import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon, Search, SearchCode, Settings2, Clock, ShieldCheck, MessageSquare, Music, BookOpen } from 'lucide-react';
 import { calcularOffsetSemitonos, traducirAcorde } from '../../utils/musicCore';
+import { getEventSingerForSong, getSingerTone, getSongBaseKey } from '../../utils/songAssignments';
 import { formatEventDate, parseAppDate } from '../../utils/dateUtils';
 import { getSongSearchMatch } from '../../utils/songSearch';
 import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
@@ -12,20 +14,16 @@ import { isVideoMediaUrl } from '../../utils/mediaUtils';
 import AutoFitText from './AutoFitText';
 import useMediaLibrary from '../../hooks/useMediaLibrary';
 import { canAccessMediaLibrary } from '../../utils/mediaLibraryPermissions';
+import { resolveSectionMediaForKey, resolveSongBackground } from '../../utils/mediaResolver';
+import { createInactiveSongLiveState } from '../../utils/liveState';
+import { buildProjectorMediaPayload } from '../../utils/projectorMediaState';
+import { agregarCancionEnVivo, quitarCancionEnVivo } from '../../utils/liveSetlistFunctions';
 import { useFeedback } from '../ui/FeedbackProvider';
 import { PREACHER_REQUEST_STATUS, PREACHER_REQUEST_TYPES, MULTIMEDIA_TO_PASTOR_PRESETS, buildPreachingProjectorState } from '../../utils/preachingLive';
 import { isAdmin, isMultimedia, isOwner } from '../../utils/rolePermissions';
 import BiblePicker from '../bible/BiblePicker';
+import { assertBibleOutlineSize, buildBibleOutlineUpdate, createBibleOutlineItem, getBibleOutlinePreview, normalizeBibleOutlineItems } from '../../utils/bibleOutline';
 
-const getSectionKey = (section, index) => {
-  const title = String(section?.titulo || 'sección')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'sección';
-  return `${index}_${title}`;
-};
 
 const ProyectorController = ({ user }) => {
   const { notify } = useFeedback();
@@ -43,7 +41,7 @@ const ProyectorController = ({ user }) => {
   };
   
   const [evento, setEvento] = useState(null);
-  const [canciones, setCanciónes] = useState([]);
+  const [canciones, setCanciones] = useState([]);
   const [loading, setLoading] = useState(true);
   
   const [activeSongId, setActiveSongId] = useState(null);
@@ -58,7 +56,7 @@ const ProyectorController = ({ user }) => {
   const [isUploadingFondo, setIsUploadingFondo] = useState(false);
   const [fondoActivo, setFondoActivo] = useState(null);
   const [transicionActiva, setTransicionActiva] = useState('fade');
-  const [guardarEnCanción, setGuardarEnCanción] = useState(true);
+  const [guardarEnCancion, setGuardarEnCancion] = useState(true);
   const [mediaActive, setMediaActive] = useState(null); // { url, type, playing, volume }
   const [multimediaLib, setMultimediaLib] = useState([]);
   const [largePreview, setLargePreview] = useState(null); // Para el visualizador grande
@@ -114,24 +112,73 @@ const ProyectorController = ({ user }) => {
   const [activePreaching, setActivePreaching] = useState(null);
   const [handlingPreacherRequestId, setHandlingPreacherRequestId] = useState('');
   const [projectionSourceMode, setProjectionSourceMode] = useState('songs');
+  const [showScreensMenu, setShowScreensMenu] = useState(false);
+  const [screensMenuPosition, setScreensMenuPosition] = useState(null);
+  const screensMenuButtonRef = useRef(null);
+  const screensMenuRef = useRef(null);
   const [lastBiblePassage, setLastBiblePassage] = useState(null);
+  const [biblePreview, setBiblePreview] = useState(null);
+  const [biblePreviewOutlineItemId, setBiblePreviewOutlineItemId] = useState(null);
+  const [isBibleOutlinePickerOpen, setIsBibleOutlinePickerOpen] = useState(false);
+  const [editingBibleOutlineItem, setEditingBibleOutlineItem] = useState(null);
+  const [outlinePickerPreview, setOutlinePickerPreview] = useState(null);
+  const [isSavingBibleOutline, setIsSavingBibleOutline] = useState(false);
   const [showMobilePreacherSheet, setShowMobilePreacherSheet] = useState(false);
   const [isPreacherPanelOpen, setIsPreacherPanelOpen] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem('controller.preacherPanelOpen') === 'true';
   });
 
-  const mediaLibraryById = useMemo(() => {
-    const map = new Map();
-    mediaLibraryItems.forEach(item => {
-      if (item.id) map.set(item.id, item);
-      if (item.mediaId) map.set(item.mediaId, item);
-    });
-    return map;
-  }, [mediaLibraryItems]);
-
   const canHandlePastorRequests = isOwner(user) || isMultimedia(user);
   const canReadPastorRequests = canHandlePastorRequests || isAdmin(user);
+  const canManageBibleOutline = isOwner(user) || isAdmin(user) || isMultimedia(user);
+  const controllerScreens = [
+    { id: 'projector', label: 'Proyector General', detail: 'Pantalla de congregacion', Icon: Monitor, path: `/proyector/${eventoId}` },
+    { id: 'singers', label: 'Retorno Cantantes', detail: 'Letras e indicaciones', Icon: Type, path: `/retorno/${eventoId}` },
+    { id: 'musicians', label: 'Retorno Musicos', detail: 'Acordes y preparacion', Icon: Music, path: `/retorno-musicos/${eventoId}` },
+    { id: 'preacher', label: 'Canal Predicador', detail: 'Pantalla privada', Icon: ShieldCheck, path: `/predicador/${eventoId}` }
+  ];
+
+  const openControllerScreen = (path) => {
+    setShowScreensMenu(false);
+    window.open(path, '_blank', 'noopener,noreferrer');
+  };
+
+  const updateScreensMenuPosition = () => {
+    const button = screensMenuButtonRef.current;
+    if (!button) return;
+
+    const rect = button.getBoundingClientRect();
+    const menuWidth = 320;
+    const viewportPadding = 8;
+    setScreensMenuPosition({
+      top: rect.bottom + 8,
+      left: Math.max(viewportPadding, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding))
+    });
+  };
+
+  useEffect(() => {
+    if (!showScreensMenu) return undefined;
+
+    const closeOnOutsidePointer = (event) => {
+      if (screensMenuButtonRef.current?.contains(event.target) || screensMenuRef.current?.contains(event.target)) return;
+      setShowScreensMenu(false);
+    };
+
+    updateScreensMenuPosition();
+    document.addEventListener('pointerdown', closeOnOutsidePointer, true);
+    window.addEventListener('resize', updateScreensMenuPosition);
+    window.addEventListener('scroll', updateScreensMenuPosition, true);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+      window.removeEventListener('resize', updateScreensMenuPosition);
+      window.removeEventListener('scroll', updateScreensMenuPosition, true);
+    };
+  }, [showScreensMenu]);
+
+  useEffect(() => {
+    setShowScreensMenu(false);
+  }, [eventoId, projectionSourceMode]);
 
   const publicPreachingBlocks = useMemo(() => {
     const blocks = Array.isArray(activePreaching?.blocks) ? activePreaching.blocks : [];
@@ -154,6 +201,10 @@ const ProyectorController = ({ user }) => {
 
   const publicVerses = useMemo(() => publicPreachingBlocks.filter(block => block.type === 'verse'), [publicPreachingBlocks]);
   const publicMediaInstructions = useMemo(() => publicPreachingBlocks.filter(block => block.type === 'mediaInstruction'), [publicPreachingBlocks]);
+  const bibleOutlineItems = useMemo(
+    () => normalizeBibleOutlineItems(evento?.bibleOutline?.items),
+    [evento?.bibleOutline?.items]
+  );
 
   const screenNow = useMemo(() => {
     const state = evento?.projectorState;
@@ -184,40 +235,16 @@ const ProyectorController = ({ user }) => {
     return { label: 'Sin contenido activo', actor: '' };
   }, [evento?.projectorState, isBlackout, isLogoActive, liveSlide, mediaActive]);
 
-  const resolveSectionMediaResource = (resource = {}) => {
-    const mediaId = resource.mediaId || null;
-    const libraryResource = mediaId ? mediaLibraryById.get(mediaId) : null;
-
-    if (!libraryResource) {
-      return resource;
-    }
-
-    return {
-      ...resource,
-      ...libraryResource,
-      id: resource.id || libraryResource.id,
-      mediaId: libraryResource.mediaId || libraryResource.id || mediaId,
-      source: 'library',
-      title: libraryResource.title || resource.title || resource.name || 'Recurso multimedia',
-      name: libraryResource.title || resource.name || resource.title || 'Recurso multimedia',
-      type: libraryResource.type || resource.type || 'link',
-      url: libraryResource.url || resource.url || '',
-      thumbnailUrl: libraryResource.thumbnailUrl || resource.thumbnailUrl || '',
-      provider: libraryResource.provider || resource.provider || ''
-    };
-  };
-
-  const resolveSectionMediaList = (resources = []) => (
-    Array.isArray(resources)
-      ? resources.map(resolveSectionMediaResource).filter(resource => resource?.url)
-      : []
-  );
-
   // 🔄 LIMPIADOR DE MEMORIA: Reiniciar estados cuando cambia el evento
   useEffect(() => {
     setActiveSongId(null);
     setPreviewSlide(null);
     setPreviewMedia(null);
+    setBiblePreview(null);
+    setBiblePreviewOutlineItemId(null);
+    setIsBibleOutlinePickerOpen(false);
+    setEditingBibleOutlineItem(null);
+    setOutlinePickerPreview(null);
     setLiveSlide(null);
     setMediaActive(null);
     setFondoActivo(null);
@@ -334,7 +361,7 @@ const ProyectorController = ({ user }) => {
             const uniqueIds = [...new Set(songIds)];
             if (uniqueIds.length > 0) {
               const snaps = await Promise.all(uniqueIds.map(id => getDoc(doc(db, 'canciones', id))));
-              setCanciónes(snaps.map(s => ({ id: s.id, ...s.data() })));
+              setCanciones(snaps.map(s => ({ id: s.id, ...s.data() })));
             }
           }
         }
@@ -354,7 +381,7 @@ const ProyectorController = ({ user }) => {
         setMultimediaLib(data.multimediaLib || []);
         setMultimediaFolders(data.multimediaFolders || []);
         
-        // MIGRACIÓN REFORZADA: Si el doc existe pero las carpetas no, intentamos traerlas de 'global'
+        // MIGRACION REFORZADA: Si el doc existe pero las carpetas no, intentamos traerlas de 'global'
         if (!data.multimediaFolders || data.multimediaFolders.length === 0) {
           getDoc(doc(db, 'eventos', 'global')).then(oldSnap => {
             if (oldSnap.exists() && oldSnap.data().multimediaFolders) {
@@ -366,7 +393,7 @@ const ProyectorController = ({ user }) => {
         }
       } 
       else {
-        // MIGRACIÓN: Si el nuevo documento no existe, intentamos recuperar del antiguo 'global'
+        // MIGRACION: Si el nuevo documento no existe, intentamos recuperar del antiguo 'global'
         getDoc(doc(db, 'eventos', 'global')).then(oldSnap => {
           if (oldSnap.exists() && oldSnap.data().multimediaLib) {
             setDoc(doc(db, 'sistema', 'multimedia'), {
@@ -396,10 +423,6 @@ const ProyectorController = ({ user }) => {
         setModoTransmision(data.proyectorModoTransmision ?? false);
         setIsLogoActive(data.proyectorLogo ?? false);
         setMediaActive(data.proyectorMedia || null);
-        
-        // Si la media activa en el proyector es nula, limpiamos la previsualización local
-        if (!data.proyectorMedia) setPreviewMedia(null);
-        if (!data.proyectorSlide) setPreviewSlide(null);
       }
     });
 
@@ -542,6 +565,14 @@ const ProyectorController = ({ user }) => {
     };
   };
 
+  const buildInactiveSongLiveState = (contentType = 'none', contentTitle = '') => (
+    createInactiveSongLiveState({
+      contentType,
+      contentTitle,
+      updatedBy: user?.nombre || user?.email || 'Multimedia'
+    })
+  );
+
   const cloneLiveValue = (value) => {
     if (value === undefined) return undefined;
     if (value === null) return null;
@@ -622,7 +653,7 @@ const ProyectorController = ({ user }) => {
       undoSnapshotRef.current = null;
       setCanUndoLastSend(false);
       setPreviewMedia(null);
-      notify('Último envío deshecho.', { type: 'success' });
+      notify('Ultimo envío deshecho.', { type: 'success' });
     } catch (e) {
       console.error('Error restaurando el estado anterior:', e);
       notify('No se pudo restaurar el estado anterior.', { type: 'error' });
@@ -631,24 +662,10 @@ const ProyectorController = ({ user }) => {
     }
   };
 
-  const handleSelectSong = async (song) => {
+  const handleSelectSong = (song) => {
     if (!song) return;
-    rememberUndoSnapshot();
     setActiveSongId(song.id);
     setPreviewSlide(null);
-    setPreviewMedia(null);
-
-    const updates = {
-      liveState: buildLiveState(song.id, -1, '', song),
-      currentSongId: song.id
-    };
-    if (song.fondoUrl) updates.proyectorFondo = song.fondoUrl;
-
-    try {
-      await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true });
-    } catch (e) {
-      console.error('Error sincronizando cancion activa:', e);
-    }
   };
 
   // Convertir las secciones en Diapositivas (Slides)
@@ -658,14 +675,13 @@ const ProyectorController = ({ user }) => {
       linea.map(palabra => palabra.map(silaba => silaba.texto === '\u00A0' ? '' : silaba.texto).join('')).join(' ')
     ).join('\n');
     const sectionKey = getSectionKey(sec, index);
-    const rawSectionMedia = Array.isArray(activeSong?.sectionMedia?.[sectionKey]) ? activeSong.sectionMedia[sectionKey] : [];
     slides.push({
       titulo: sec.titulo,
       texto: texto.trim() || ' ',
       lineas: sec.lineas,
       cues: (sec.items || []).filter(item => item.type === 'cue').map(item => item.text),
       sectionKey,
-      media: resolveSectionMediaList(rawSectionMedia),
+      media: resolveSectionMediaForKey(activeSong?.sectionMedia, sectionKey, mediaLibraryItems),
       originalIndex: slides.length
     });
   });
@@ -771,7 +787,9 @@ const ProyectorController = ({ user }) => {
         proyectorSongId: null,
         proyectorSlideIndex: -1,
         proyectorNextSlide: null,
-        proyectorNextSong: null
+        proyectorNextSong: null,
+        liveState: buildInactiveSongLiveState('preaching', request.title || request.reference || 'Predica'),
+        currentSongId: null
       }, { merge: true });
       await updateDoc(doc(db, 'eventos', eventoId, 'preacherRequests', request.id), {
         status: PREACHER_REQUEST_STATUS.PROJECTED,
@@ -794,6 +812,22 @@ const ProyectorController = ({ user }) => {
 
   const projectPreachingBlockFromController = async (block) => {
     if (!canHandlePastorRequests || !block || !activePreaching?.id) return;
+    if (block.type === 'verse' && block.biblePassage?.verses?.length) {
+      await projectBiblePassage({
+        passage: {
+          ...block.biblePassage,
+          bibleId: block.bibleId || '',
+          passageId: block.passageId || '',
+          provider: block.provider || 'local',
+          copyright: block.copyright || '',
+          abbreviation: block.translation || '',
+          translationName: block.translationName || ''
+        },
+        slides: block.biblePassage.slides || [],
+        selectedIndex: 0
+      });
+      return;
+    }
     try {
       rememberUndoSnapshot();
       const requestLike = block.type === PREACHER_REQUEST_TYPES.VERSE || block.type === 'verse'
@@ -827,7 +861,9 @@ const ProyectorController = ({ user }) => {
         proyectorSongId: null,
         proyectorSlideIndex: -1,
         proyectorNextSlide: null,
-        proyectorNextSong: null
+        proyectorNextSong: null,
+        liveState: buildInactiveSongLiveState('preaching', requestLike.title || requestLike.reference || 'Predica'),
+        currentSongId: null
       }, { merge: true });
       notify('Contenido de predica proyectado.', { type: 'success' });
     } catch (error) {
@@ -836,14 +872,16 @@ const ProyectorController = ({ user }) => {
     }
   };
 
-  const projectBiblePassage = async ({ passage, slides = [] }) => {
+  const projectBiblePassage = async ({ passage, slides = [], selectedIndex = 0, outlineItemId = null }) => {
     if (!passage) return;
-    const slide = slides[0] || {
+    const safeSlides = slides.length ? slides : [{
       reference: passage.reference,
       translation: passage.abbreviation,
       translationName: passage.translationName,
       text: passage.text
-    };
+    }];
+    const safeIndex = Math.max(0, Math.min(selectedIndex, safeSlides.length - 1));
+    const slide = safeSlides[safeIndex];
     try {
       rememberUndoSnapshot();
       const now = Date.now();
@@ -851,7 +889,7 @@ const ProyectorController = ({ user }) => {
         projectorState: {
           type: 'preaching',
           preachingType: 'verse',
-          contentType: 'verse',
+          contentType: 'bible',
           title: slide.reference,
           reference: slide.reference,
           translation: slide.translation,
@@ -862,9 +900,20 @@ const ProyectorController = ({ user }) => {
           passageId: passage.passageId,
           copyright: passage.copyright || '',
           bibleSlideIndex: slide.slideIndex || 0,
-          bibleSlideCount: slide.slideCount || 1,
+          bibleSlideCount: safeSlides.length,
+          bible: {
+            passageId: passage.passageId,
+            translation: passage.abbreviation,
+            translationName: passage.translationName,
+            slides: safeSlides,
+            slideIndex: safeIndex,
+            slideCount: safeSlides.length,
+            outlineItemId: outlineItemId || null
+          },
+          media: null,
           background: null,
           backgroundMedia: null,
+          previousProjectorState: null,
           sourceActor: 'multimedia',
           actorUid: user?.uid || null,
           actorName: user?.nombre || user?.email || 'Multimedia',
@@ -881,7 +930,9 @@ const ProyectorController = ({ user }) => {
         proyectorSongId: null,
         proyectorSlideIndex: -1,
         proyectorNextSlide: null,
-        proyectorNextSong: null
+        proyectorNextSong: null,
+        liveState: buildInactiveSongLiveState('bible', slide.reference || 'Biblia'),
+        currentSongId: null
       }, { merge: true });
       setLastBiblePassage(passage);
       notify('Pasaje proyectado.', { type: 'success' });
@@ -889,6 +940,124 @@ const ProyectorController = ({ user }) => {
       console.error('Error proyectando Biblia:', error);
       notify('No se pudo proyectar el pasaje.', { type: 'error' });
     }
+  };
+
+  const openBibleOutlinePicker = (item = null) => {
+    if (!canManageBibleOutline || eventoId === 'global') return;
+    setEditingBibleOutlineItem(item);
+    setOutlinePickerPreview(item ? getBibleOutlinePreview(item) : null);
+    setIsBibleOutlinePickerOpen(true);
+  };
+
+  const closeBibleOutlinePicker = () => {
+    if (isSavingBibleOutline) return;
+    setIsBibleOutlinePickerOpen(false);
+    setEditingBibleOutlineItem(null);
+    setOutlinePickerPreview(null);
+  };
+
+  const updateBibleOutline = async (mutate, successMessage) => {
+    if (!canManageBibleOutline || eventoId === 'global') {
+      notify('El bosquejo biblico requiere un evento especifico.', { type: 'error' });
+      return false;
+    }
+
+    setIsSavingBibleOutline(true);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const eventRef = doc(db, 'eventos', eventoId);
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no esta disponible.');
+        const currentItems = normalizeBibleOutlineItems(snapshot.data()?.bibleOutline?.items);
+        const nextItems = assertBibleOutlineSize(mutate(currentItems));
+        transaction.update(eventRef, buildBibleOutlineUpdate(nextItems));
+      });
+      notify(successMessage, { type: 'success' });
+      return true;
+    } catch (error) {
+      console.error('Error guardando bosquejo biblico:', error);
+      notify(error.message || 'No se pudo guardar el bosquejo biblico.', { type: 'error' });
+      return false;
+    } finally {
+      setIsSavingBibleOutline(false);
+    }
+  };
+
+  const saveBibleOutlinePassage = async ({ passage, slides }) => {
+    const itemToEdit = editingBibleOutlineItem;
+    const saved = await updateBibleOutline((items) => {
+      if (itemToEdit) {
+        const index = items.findIndex((item) => item.id === itemToEdit.id);
+        if (index < 0) throw new Error('El pasaje ya no existe en el bosquejo.');
+        const replacement = createBibleOutlineItem({ passage, slides, existingItem: items[index] });
+        return items.map((item, itemIndex) => itemIndex === index ? replacement : item);
+      }
+      return [...items, createBibleOutlineItem({ passage, slides })];
+    }, itemToEdit ? 'Pasaje preparado actualizado.' : 'Pasaje agregado al bosquejo.');
+    if (saved) closeBibleOutlinePicker();
+  };
+
+  const previewBibleOutlineItem = (item) => {
+    setBiblePreview(getBibleOutlinePreview(item));
+    setBiblePreviewOutlineItemId(item.id);
+  };
+
+  const projectBibleOutlineItem = async (item) => {
+    const preview = getBibleOutlinePreview(item);
+    if (!preview) return;
+    setBiblePreview(preview);
+    setBiblePreviewOutlineItemId(item.id);
+    await projectBiblePassage({ ...preview, outlineItemId: item.id });
+  };
+
+  const moveBiblePreviewSlide = async (delta) => {
+    const slides = Array.isArray(biblePreview?.slides) ? biblePreview.slides : [];
+    if (slides.length < 2) return;
+    const projectedItemId = evento?.projectorState?.contentType === 'bible'
+      ? evento?.projectorState?.bible?.outlineItemId
+      : null;
+    const currentIndex = projectedItemId && projectedItemId === biblePreviewOutlineItemId
+      ? Number(evento?.projectorState?.bible?.slideIndex || 0)
+      : Number(biblePreview?.selectedIndex || 0);
+    const nextIndex = Math.max(0, Math.min(currentIndex + delta, slides.length - 1));
+    if (nextIndex === currentIndex) return;
+    setBiblePreview((current) => current ? { ...current, selectedIndex: nextIndex } : current);
+    if (projectedItemId && projectedItemId === biblePreviewOutlineItemId) {
+      await projectBibleDeckSlide(delta);
+    }
+  };
+
+  const moveBibleOutlineItem = async (itemId, delta) => {
+    await updateBibleOutline((items) => {
+      const index = items.findIndex((item) => item.id === itemId);
+      const targetIndex = index + delta;
+      if (index < 0 || targetIndex < 0 || targetIndex >= items.length) return items;
+      const next = [...items];
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return next.map((item, nextOrder) => ({ ...item, order: nextOrder }));
+    }, 'Orden del bosquejo actualizado.');
+  };
+
+  const removeBibleOutlineItem = async (item) => {
+    await updateBibleOutline((items) => items.filter((candidate) => candidate.id !== item.id), 'Pasaje eliminado del bosquejo.');
+  };
+
+  const requestRemoveBibleOutlineItem = (item) => {
+    const isProjected = evento?.projectorState?.contentType === 'bible'
+      && evento?.projectorState?.bible?.outlineItemId === item.id;
+    if (!isProjected) {
+      removeBibleOutlineItem(item);
+      return;
+    }
+    setConfirmModal({
+      show: true,
+      title: 'Eliminar pasaje proyectado',
+      message: 'Se quitara del bosquejo, pero la proyeccion actual continuara hasta que envíes otro contenido.',
+      onConfirm: () => {
+        setConfirmModal((current) => ({ ...current, show: false }));
+        removeBibleOutlineItem(item);
+      }
+    });
   };
 
   const ignorePreacherRequest = async (request) => {
@@ -957,18 +1126,20 @@ const ProyectorController = ({ user }) => {
       nextSlide = slides[slide.originalIndex + 1];
     }
     const sectionPrimaryMedia = Array.isArray(slide.media) ? slide.media.find(resource => resource?.url) : null;
-    const slideBackground = sectionPrimaryMedia?.url || fondoActivo || activeSong?.fondoUrl || null;
-    const slideBackgroundMedia = sectionPrimaryMedia?.url ? {
-      mediaId: sectionPrimaryMedia.mediaId || null,
-      title: sectionPrimaryMedia.title || sectionPrimaryMedia.name || slide.titulo || 'Multimedia de sección',
-      type: sectionPrimaryMedia.type || (isVideoMediaUrl(sectionPrimaryMedia.url) ? 'video' : 'image'),
-      url: sectionPrimaryMedia.url,
-      thumbnailUrl: sectionPrimaryMedia.thumbnailUrl || '',
-      provider: sectionPrimaryMedia.provider || '',
-      source: sectionPrimaryMedia.source || 'sectionMedia'
+    const songBackground = resolveSongBackground(activeSong, mediaLibraryItems);
+    const slideBackground = sectionPrimaryMedia?.url || fondoActivo || songBackground?.url || null;
+    const backgroundSourceMedia = sectionPrimaryMedia || (!fondoActivo ? songBackground : null);
+    const slideBackgroundMedia = backgroundSourceMedia?.url ? {
+      mediaId: backgroundSourceMedia.mediaId || null,
+      title: backgroundSourceMedia.title || backgroundSourceMedia.name || slide.titulo || 'Multimedia de seccion',
+      type: backgroundSourceMedia.type || (isVideoMediaUrl(backgroundSourceMedia.url) ? 'video' : 'image'),
+      url: backgroundSourceMedia.url,
+      thumbnailUrl: backgroundSourceMedia.thumbnailUrl || '',
+      provider: backgroundSourceMedia.provider || '',
+      source: backgroundSourceMedia.source || (sectionPrimaryMedia ? 'sectionMedia' : 'songBackground')
     } : null;
 
-    // Encontrar el siguiente elemento del setlist (Canción o Nota)
+    // Encontrar el siguiente elemento del setlist (Cancion o Nota)
     let offset = 0;
     let nextSongInfo = null;
     if (evento && activeSongId) {
@@ -981,28 +1152,19 @@ const ProyectorController = ({ user }) => {
         } else {
           const nextSongObj = canciones.find(c => c.id === nextElement.value);
           if (nextSongObj) {
-            let tonoFinal = nextSongObj.tonoOriginal;
-            const cantante = evento.cantantesPorCanción?.[nextSongObj.id];
-            if (cantante && nextSongObj.tonosAlternativos) {
-              const opciones = nextSongObj.tonosAlternativos.split(',');
-              const match = opciones.find(o => o.trim().toLowerCase().startsWith(cantante.toLowerCase() + ':'));
-              if (match) tonoFinal = match.split(':')[1].trim();
-            }
+            const cantante = getEventSingerForSong(evento, nextSongObj.id);
+            const tonoFinal = getSingerTone(nextSongObj, cantante) || getSongBaseKey(nextSongObj);
             nextSongInfo = `🎵 ${nextSongObj.titulo} (${traducirAcorde(tonoFinal || 'C', formatoAcordes, notacion)})`;
           }
         }
       }
 
-      // Calcular la transposición actual para la Pantalla de Músicos
+      // Calcular la transposición actual para la Pantalla de Musicos
       const cancionActiva = canciones.find(c => c.id === activeSongId);
-      const cantanteActivo = evento.cantantesPorCanción?.[activeSongId];
-      if (cancionActiva && cantanteActivo && cancionActiva.tonosAlternativos) {
-        const opciones = cancionActiva.tonosAlternativos.split(',');
-        const match = opciones.find(o => o.trim().toLowerCase().startsWith(cantanteActivo.toLowerCase() + ':'));
-        if (match) {
-          const tonoDestino = match.split(':')[1].trim();
-          offset = calcularOffsetSemitonos(cancionActiva.tonoOriginal, tonoDestino);
-        }
+      const cantanteActivo = getEventSingerForSong(evento, activeSongId);
+      const tonoDestino = getSingerTone(cancionActiva, cantanteActivo);
+      if (cancionActiva && tonoDestino) {
+        offset = calcularOffsetSemitonos(getSongBaseKey(cancionActiva), tonoDestino);
       }
     }
 
@@ -1010,9 +1172,20 @@ const ProyectorController = ({ user }) => {
       proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
       projectorState: {
         type: 'lyrics',
+        contentType: 'lyrics',
+        preachingType: null,
         title: slide.titulo,
         content: slide.texto,
         media: null,
+        bible: null,
+        reference: null,
+        translation: null,
+        translationName: null,
+        provider: null,
+        bibleId: null,
+        passageId: null,
+        copyright: '',
+        previousProjectorState: null,
         timer: evento?.proyectorCountdown || null,
         background: slideBackground,
         backgroundMedia: slideBackgroundMedia,
@@ -1031,51 +1204,89 @@ const ProyectorController = ({ user }) => {
       proyectorApagado: false,
       proyectorMedia: null, // Limpiar cualquier media activa al proyectar una diapositiva
     };
-    setPreviewMedia(null); // Limpiar la pre-selección de media localmente
-
     try { await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true }); } 
     catch (e) { console.error("Error al proyectar diapositiva:", e); }
   };
 
-   // ➕ Agregar cancion externa al evento actual
-  const agregarCanciónAlSetlist = async (song) => {
+   // + Agregar cancion externa al evento actual
+  const agregarCancionAlSetlist = async (song) => {
     if (!evento) return;
-    
-    const itemActualizado = { type: 'song', value: song.id, idLocal: `extra_${song.id}_${Date.now()}` };
-    const nuevoSetlist = [...(evento.setlist || []), itemActualizado];
-    
+
     try {
-      await updateDoc(doc(db, 'eventos', eventoId), { setlist: nuevoSetlist });
-      // Actualizar estado local para que aparezca en la lista izquierda
-      setCanciónes(prev => prev.some(c => c.id === song.id) ? prev : [...prev, song]);
-      await handleSelectSong(song);
-      setSongSearchTerm(''); // Limpiar búsqueda
+      const result = await agregarCancionEnVivo({ eventoId, songId: song.id });
+      if (result?.code === 'already-present') {
+        notify('Esta cancion ya esta en el setlist.', { type: 'error' });
+        return;
+      }
+      setSongSearchTerm('');
+      notify('Cancion agregada al setlist.', { type: 'success' });
     } catch (e) {
       console.error("Error agregando cancion de última hora:", e);
+      const messages = {
+        'functions/permission-denied': 'No tienes permisos para realizar esta accion.',
+        'functions/not-found': 'El evento ya no esta disponible.',
+        'functions/failed-precondition': 'La cancion o el evento ya no esta disponible.',
+        'functions/unauthenticated': 'Debes iniciar sesion para realizar esta accion.'
+      };
+      notify(messages[e?.code] || 'No se pudo agregar la cancion al setlist.', { type: 'error' });
+    }
+  };
+
+  const projectBibleDeckSlide = async (delta) => {
+    const currentState = evento?.projectorState;
+    const bible = currentState?.contentType === 'bible' ? currentState.bible : null;
+    const slides = Array.isArray(bible?.slides) ? bible.slides : [];
+    if (!slides.length) return;
+    const currentIndex = Number.isFinite(Number(bible.slideIndex)) ? Number(bible.slideIndex) : 0;
+    const nextIndex = Math.max(0, Math.min(currentIndex + delta, slides.length - 1));
+    if (nextIndex === currentIndex) return;
+    const slide = slides[nextIndex];
+    const now = Date.now();
+    try {
+      await setDoc(doc(db, 'eventos', eventoId), {
+        projectorState: {
+          ...currentState,
+          title: slide.reference,
+          reference: slide.reference,
+          translation: slide.translation,
+          translationName: slide.translationName,
+          content: slide.text,
+          bibleSlideIndex: nextIndex,
+          bibleSlideCount: slides.length,
+          bible: { ...bible, slideIndex: nextIndex, slideCount: slides.length },
+          updatedAt: now,
+          projectionVersion: now
+        }
+      }, { merge: true });
+    } catch (error) {
+      console.error('Error navegando diapositiva biblica:', error);
+      notify('No se pudo cambiar la diapositiva.', { type: 'error' });
     }
   };
 
   const isTemporarySetlistItem = (item) => String(item?.idLocal || '').startsWith('extra_');
 
-  const quitarCanciónAgregada = async (item, e) => {
+  const quitarCancionAgregada = async (item, e) => {
     e?.stopPropagation();
     if (!evento || !isTemporarySetlistItem(item)) return;
 
-    const nuevoSetlist = (evento.setlist || []).filter(setlistItem => setlistItem.idLocal !== item.idLocal);
-    const updates = { setlist: nuevoSetlist };
-
-    if (activeSongId === item.value) {
-      updates.currentSongId = null;
-      updates.liveState = deleteField();
-      setActiveSongId(null);
-      setPreviewSlide(null);
-      setPreviewMedia(null);
-    }
-
     try {
-      await updateDoc(doc(db, 'eventos', eventoId), updates);
+      const result = await quitarCancionEnVivo({ eventoId, idLocal: item.idLocal });
+      if (result?.clearedActiveSong) {
+        setActiveSongId(null);
+        setPreviewSlide(null);
+        setPreviewMedia(null);
+      }
+      notify('Cancion quitada del setlist.', { type: 'success' });
     } catch (e) {
       console.error("Error quitando cancion agregada:", e);
+      const messages = {
+        'functions/permission-denied': 'No tienes permisos para realizar esta accion.',
+        'functions/not-found': 'La cancion agregada ya no existe.',
+        'functions/failed-precondition': 'Esta cancion no se puede quitar desde el controlador.',
+        'functions/unauthenticated': 'Debes iniciar sesion para realizar esta accion.'
+      };
+      notify(messages[e?.code] || 'No se pudo quitar la cancion del setlist.', { type: 'error' });
     }
   };
 
@@ -1084,25 +1295,13 @@ const ProyectorController = ({ user }) => {
   const projectMedia = async (mediaObj) => {
     if (!mediaObj) return;
     rememberUndoSnapshot();
-    const updates = {
-      proyectorMedia: { ...mediaObj, playing: true, volume: 1, mode: 'foreground' },
-      projectorState: {
-        type: 'media',
-        title: mediaObj.name || 'Media',
-        content: '',
-        media: { ...mediaObj, playing: true, volume: 1, mode: 'foreground' },
-        timer: evento?.proyectorCountdown || null,
-        background: fondoActivo || null,
-        updatedAt: Date.now()
-      },
-      proyectorSlide: null,
-      proyectorSongId: null,
-      proyectorSlideIndex: -1,
-      proyectorNextSlide: null,
-      proyectorNextSong: null,
-      proyectorLogo: false,
-      proyectorApagado: false,
-    };
+    const updates = buildProjectorMediaPayload({
+      media: mediaObj,
+      title: mediaObj.name || mediaObj.title || 'Media',
+      timer: evento?.proyectorCountdown || null,
+      background: fondoActivo || null,
+      liveState: buildInactiveSongLiveState('media', mediaObj.name || mediaObj.title || 'Multimedia')
+    });
     try { await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true }); } 
     catch (e) { console.error(e); }
   };
@@ -1111,7 +1310,7 @@ const ProyectorController = ({ user }) => {
     if (!resource?.url) return;
     projectMedia({
       ...resource,
-      name: resource.name || resource.title || 'Multimedia de sección',
+      name: resource.name || resource.title || 'Multimedia de seccion',
       mode: 'foreground'
     });
   };
@@ -1135,6 +1334,14 @@ const ProyectorController = ({ user }) => {
     try {
       await setDoc(doc(db, 'eventos', eventoId), {
         proyectorApagado: nextBlackout,
+        ...(nextBlackout ? {
+          liveState: buildInactiveSongLiveState('blackout', 'Pantalla negra'),
+          currentSongId: null,
+          proyectorSongId: null,
+          proyectorSlideIndex: -1,
+          proyectorNextSlide: null,
+          proyectorNextSong: null
+        } : {}),
         projectorState: {
           type: nextBlackout ? 'blackout' : 'resume',
           title: nextBlackout ? 'Pantalla negra' : 'Proyector activo',
@@ -1162,6 +1369,14 @@ const ProyectorController = ({ user }) => {
       await setDoc(doc(db, 'eventos', eventoId), {
         proyectorLogo: nextLogo,
         proyectorApagado: false,
+        ...(nextLogo ? {
+          liveState: buildInactiveSongLiveState('logo', 'Logo'),
+          currentSongId: null,
+          proyectorSongId: null,
+          proyectorSlideIndex: -1,
+          proyectorNextSlide: null,
+          proyectorNextSong: null
+        } : {}),
         projectorState: {
           type: nextLogo ? 'logo' : 'clearLogo',
           title: nextLogo ? 'Logo' : 'Logo apagado',
@@ -1213,7 +1428,13 @@ const ProyectorController = ({ user }) => {
         proyectorSlide: null,
         proyectorMedia: null,
         proyectorApagado: false,
-        proyectorLogo: false
+        proyectorLogo: false,
+        liveState: buildInactiveSongLiveState('none', 'Sin contenido musical'),
+        currentSongId: null,
+        proyectorSongId: null,
+        proyectorSlideIndex: -1,
+        proyectorNextSlide: null,
+        proyectorNextSong: null
       }, { merge: true });
       notify('Contenido de predica quitado.', { type: 'success' });
     } catch (error) {
@@ -1246,6 +1467,9 @@ const ProyectorController = ({ user }) => {
     rememberUndoSnapshot();
     await setDoc(doc(db, 'eventos', eventoId), { 
       proyectorSlide: null, proyectorMedia: null, proyectorLogo: false, proyectorApagado: true, proyectorAlerta: null, proyectorTicker: null, proyectorFondoMedia: null,
+      proyectorSongId: null, proyectorSlideIndex: -1, proyectorNextSlide: null, proyectorNextSong: null,
+      liveState: buildInactiveSongLiveState('blackout', 'Pantalla negra'),
+      currentSongId: null,
       projectorState: { type: 'blackout', title: 'Pantalla negra', content: '', media: null, timer: null, background: null, backgroundMedia: null, updatedAt: Date.now() }
     }, { merge: true });
     setPreviewMedia(null);
@@ -1403,9 +1627,9 @@ const ProyectorController = ({ user }) => {
         }, { merge: true });
         
         // Si es una cancion real (no modo global), guardamos la referencia
-        if (eventoId !== 'global' && activeSongId && guardarEnCanción) {
+        if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
           await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: url }, { merge: true });
-          setCanciónes(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: url } : c));
+          setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: url } : c));
         }
       }
     } catch (err) {
@@ -1423,9 +1647,9 @@ const ProyectorController = ({ user }) => {
     rememberUndoSnapshot();
     await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: null, proyectorFondoMedia: null }, { merge: true });
     
-    if (eventoId !== 'global' && activeSongId && guardarEnCanción) {
+    if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
       await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: null }, { merge: true });
-      setCanciónes(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: null } : c));
+      setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: null } : c));
     }
     setShowFondosModal(false);
   };
@@ -1511,12 +1735,136 @@ const ProyectorController = ({ user }) => {
 
   const previewSectionMedia = Array.isArray(previewSlide?.media) ? previewSlide.media.find(resource => resource?.url) : null;
   const previewBackground = previewSectionMedia?.url || fondoActivo;
+  const projectedBibleOutlineItemId = evento?.projectorState?.contentType === 'bible'
+    ? evento?.projectorState?.bible?.outlineItemId
+    : null;
+  const isBiblePreviewProjected = Boolean(
+    biblePreviewOutlineItemId
+    && projectedBibleOutlineItemId === biblePreviewOutlineItemId
+  );
+  const biblePreviewSlides = Array.isArray(biblePreview?.slides) ? biblePreview.slides : [];
+  const biblePreviewIndex = isBiblePreviewProjected
+    ? Math.max(0, Math.min(Number(evento?.projectorState?.bible?.slideIndex || 0), Math.max(biblePreviewSlides.length - 1, 0)))
+    : Math.max(0, Math.min(Number(biblePreview?.selectedIndex || 0), Math.max(biblePreviewSlides.length - 1, 0)));
+  const biblePreviewSlide = biblePreviewSlides[biblePreviewIndex] || null;
+  const bibleOutlinePanel = (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.24em] text-blue-300">Bosquejo biblico</p>
+          <h2 className="mt-1 text-lg font-black text-white">Pasajes preparados</h2>
+          <p className="mt-1 text-xs font-bold text-blue-100/65">Preparar no cambia la pantalla publica.</p>
+        </div>
+        {canManageBibleOutline && eventoId !== 'global' && (
+          <button type="button" onClick={() => openBibleOutlinePicker()} disabled={isSavingBibleOutline} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-blue-500 disabled:opacity-50">
+            <Plus size={15} /> Agregar pasaje
+          </button>
+        )}
+      </div>
+      {biblePreviewSlide && (
+        <section className="rounded-2xl border border-blue-400/25 bg-blue-500/10 p-4 md:hidden">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-blue-200">Preview</p>
+              <p className="truncate text-xs font-black text-white">{biblePreviewSlide.reference}</p>
+            </div>
+            <span className={`shrink-0 rounded-full border px-2 py-1 text-[9px] font-black uppercase ${isBiblePreviewProjected ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100' : 'border-blue-400/25 bg-black/20 text-blue-100'}`}>
+              {isBiblePreviewProjected ? 'En proyeccion' : 'Local'}
+            </span>
+          </div>
+          {biblePreviewSlide.heading && <p className="mb-2 text-xs font-black uppercase tracking-wide text-blue-100">{biblePreviewSlide.heading}</p>}
+          <p className="whitespace-pre-wrap text-sm font-black leading-relaxed text-white">{biblePreviewSlide.text}</p>
+          {biblePreviewSlides.length > 1 && (
+            <div className="mt-4 flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/20 p-1">
+              <button type="button" onClick={() => moveBiblePreviewSlide(-1)} disabled={biblePreviewIndex === 0} className="inline-flex min-h-10 items-center gap-1 rounded-lg px-3 text-[10px] font-black uppercase text-blue-100 disabled:opacity-30"><ChevronLeft size={16} /> Anterior</button>
+              <span className="text-[10px] font-black text-blue-100">{biblePreviewIndex + 1} / {biblePreviewSlides.length}</span>
+              <button type="button" onClick={() => moveBiblePreviewSlide(1)} disabled={biblePreviewIndex >= biblePreviewSlides.length - 1} className="inline-flex min-h-10 items-center gap-1 rounded-lg px-3 text-[10px] font-black uppercase text-blue-100 disabled:opacity-30">Siguiente <ChevronRight size={16} /></button>
+            </div>
+          )}
+          <button type="button" onClick={() => projectBiblePassage({ ...biblePreview, selectedIndex: biblePreviewIndex, outlineItemId: biblePreviewOutlineItemId })} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-wide text-white hover:bg-blue-500"><Monitor size={16} /> Proyectar Biblia</button>
+        </section>
+      )}
+      {eventoId === 'global' ? (
+        <p className="rounded-2xl border border-dashed border-zinc-700 bg-black/20 p-4 text-sm font-bold text-zinc-500">Selecciona un evento para preparar un bosquejo biblico.</p>
+      ) : bibleOutlineItems.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-7 text-center">
+          <BookOpen className="mx-auto mb-3 text-zinc-600" size={32} />
+          <p className="font-black text-white">Aun no hay pasajes preparados.</p>
+          <p className="mt-1 text-xs font-bold text-zinc-500">Agrega los pasajes que necesitaras durante el culto.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {bibleOutlineItems.map((item, index) => {
+            const isProjected = projectedBibleOutlineItemId === item.id;
+            const isPreviewed = biblePreview?.passage?.passageId === item.passage?.passageId;
+            return (
+              <article key={item.id} className={`rounded-2xl border p-3 ${isProjected ? 'border-emerald-400/45 bg-emerald-500/10' : 'border-white/10 bg-zinc-950/55'}`}>
+                <div className="flex items-start gap-3">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-black/30 text-xs font-black text-blue-200">{index + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-black text-white">{item.passage?.reference || 'Pasaje sin referencia'}</p>
+                      <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase ${isProjected ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100' : isPreviewed ? 'border-blue-400/35 bg-blue-500/15 text-blue-100' : 'border-zinc-600 bg-white/5 text-zinc-400'}`}>
+                        {isProjected ? 'En proyeccion' : isPreviewed ? 'Previsualizado' : 'Preparado'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[10px] font-bold text-zinc-500">{item.passage?.abbreviation || 'Biblia'} - {item.passage?.translationName || 'Traduccion local'} - {item.slides?.length || 0} diapositivas</p>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => previewBibleOutlineItem(item)} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-blue-400/25 bg-blue-500/10 px-3 py-2 text-[9px] font-black uppercase text-blue-100 hover:bg-blue-500/20"><Eye size={13} /> Previsualizar</button>
+                  <button type="button" onClick={() => projectBibleOutlineItem(item)} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[9px] font-black uppercase text-white hover:bg-blue-500"><Monitor size={13} /> Proyectar</button>
+                  {canManageBibleOutline && (
+                    <>
+                      <button type="button" onClick={() => openBibleOutlinePicker(item)} disabled={isSavingBibleOutline} aria-label={`Editar ${item.passage?.reference || 'pasaje'}`} title="Editar pasaje" className="inline-flex min-h-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 px-2 text-zinc-300 hover:bg-white/10 disabled:opacity-50"><Edit2 size={14} /></button>
+                      <button type="button" onClick={() => moveBibleOutlineItem(item.id, -1)} disabled={isSavingBibleOutline || index === 0} aria-label="Subir pasaje" title="Subir" className="inline-flex min-h-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 px-2 text-zinc-300 hover:bg-white/10 disabled:opacity-30"><ChevronLeft className="rotate-90" size={14} /></button>
+                      <button type="button" onClick={() => moveBibleOutlineItem(item.id, 1)} disabled={isSavingBibleOutline || index === bibleOutlineItems.length - 1} aria-label="Bajar pasaje" title="Bajar" className="inline-flex min-h-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 px-2 text-zinc-300 hover:bg-white/10 disabled:opacity-30"><ChevronRight className="rotate-90" size={14} /></button>
+                      <button type="button" onClick={() => requestRemoveBibleOutlineItem(item)} disabled={isSavingBibleOutline} aria-label={`Eliminar ${item.passage?.reference || 'pasaje'}`} title="Eliminar pasaje" className="inline-flex min-h-9 items-center justify-center rounded-lg border border-red-400/20 bg-red-500/10 px-2 text-red-200 hover:bg-red-500/20 disabled:opacity-50"><Trash2 size={14} /></button>
+                    </>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+  const screensMenu = showScreensMenu && screensMenuPosition && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        ref={screensMenuRef}
+        role="menu"
+        className="fixed z-50 w-80 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 p-2 shadow-2xl shadow-black/50 backdrop-blur-xl"
+        style={{ top: screensMenuPosition.top, left: screensMenuPosition.left }}
+      >
+        <p className="px-3 pb-2 pt-1 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-500">Abrir pantalla</p>
+        {controllerScreens.map(({ id, label, detail, Icon, path }) => (
+          <button
+            key={id}
+            type="button"
+            role="menuitem"
+            onClick={() => openControllerScreen(path)}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-white/10"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-500/10 text-violet-200"><Icon size={16} /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-black text-white">{label}</span>
+              <span className="block truncate text-[10px] font-bold text-zinc-500">{detail}</span>
+            </span>
+            <span className="text-[10px] font-black uppercase tracking-wide text-violet-300">Abrir</span>
+          </button>
+        ))}
+      </div>,
+      document.body
+    )
+    : null;
 
   return (
-    <div className="relative h-screen bg-zinc-950 flex flex-col text-white font-sans overflow-hidden">
+    <div className="relative h-[100dvh] min-h-0 bg-zinc-950 flex flex-col text-white font-sans overflow-hidden">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(124,58,237,0.16),transparent_32%),linear-gradient(rgba(255,255,255,0.026)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.026)_1px,transparent_1px)] bg-[size:auto,88px_88px,88px_88px]" />
       {/* Cabecera */}
-      <header className="relative z-10 h-16 border-b border-white/10 bg-zinc-950/88 flex items-center justify-between px-3 sm:px-6 shrink-0 shadow-[0_10px_40px_rgba(0,0,0,0.25)] backdrop-blur-md">
+      <header className="relative z-30 h-16 shrink-0 overflow-visible border-b border-white/10 bg-zinc-950/88 flex items-center justify-between px-3 sm:px-6 shadow-[0_10px_40px_rgba(0,0,0,0.25)] backdrop-blur-md">
         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
             <button onClick={() => navigate(returnTo)} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors shrink-0">
               <ArrowLeft size={20} />
@@ -1562,6 +1910,23 @@ const ProyectorController = ({ user }) => {
             <Layers size={14} className="text-blue-400"/>
             <span className="hidden lg:inline">Cambiar Evento</span>
           </button>
+          <div className="hidden lg:block">
+            <button
+              ref={screensMenuButtonRef}
+              type="button"
+              onClick={() => {
+                if (!showScreensMenu) updateScreensMenuPosition();
+                setShowScreensMenu(prev => !prev);
+              }}
+              aria-expanded={showScreensMenu}
+              aria-haspopup="menu"
+              className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs font-black uppercase tracking-wide text-zinc-100 transition-colors hover:bg-zinc-700"
+            >
+              <Monitor size={15} className="text-violet-300" />
+              Pantallas
+              <ChevronRight size={14} className={`transition-transform ${showScreensMenu ? 'rotate-90' : ''}`} />
+            </button>
+          </div>
           <div className="hidden md:flex items-center gap-2 bg-zinc-800/50 px-3 py-1.5 rounded-lg border border-zinc-700"> {/* Desktop only */}
             <span className="text-xs text-zinc-400 font-bold">Animación:</span>
             <select 
@@ -1624,9 +1989,9 @@ const ProyectorController = ({ user }) => {
       </section>
 
       {/* VISTA PC: 3 Columnas (Se oculta en móviles) */}
-      <div className="relative z-10 hidden md:flex flex-1 overflow-hidden [@media_(orientation:landscape)_and_(max-height:500px)]:hidden">
+      <div className="relative z-10 hidden min-h-0 md:flex flex-1 overflow-hidden [@media_(orientation:landscape)_and_(max-height:500px)]:hidden">
         {/* Columna Izquierda: Setlist */}
-        <div className="w-1/4 min-w-[250px] bg-zinc-950/55 border-r border-white/10 flex flex-col backdrop-blur-sm">
+        <div className="w-1/4 min-w-[250px] min-h-0 bg-zinc-950/55 border-r border-white/10 flex flex-col backdrop-blur-sm">
           <div className="p-4 border-b border-white/10 bg-zinc-950/65">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={14} />
@@ -1639,7 +2004,7 @@ const ProyectorController = ({ user }) => {
               />
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-1 [&::-webkit-scrollbar]:hidden">
+          <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-1 [&::-webkit-scrollbar]:hidden">
             {songSearchTerm.trim() !== '' ? (
               <div className="space-y-2 animate-in fade-in duration-200">
                 <p className="text-[10px] font-black text-violet-400 uppercase tracking-widest px-1 flex justify-between">
@@ -1650,7 +2015,7 @@ const ProyectorController = ({ user }) => {
                   return (
                   <button 
                     key={song.id}
-                    onClick={() => agregarCanciónAlSetlist(song)}
+                    onClick={() => agregarCancionAlSetlist(song)}
                     className="w-full text-left p-3 rounded-xl bg-violet-600/10 border border-violet-500/30 hover:bg-violet-600/20 transition-all group flex justify-between items-center gap-3"
                   >
                     <div className="min-w-0">
@@ -1702,7 +2067,7 @@ const ProyectorController = ({ user }) => {
                     {isTemporarySetlistItem(item) && (
                       <button
                         type="button"
-                        onClick={(e) => quitarCanciónAgregada(item, e)}
+                        onClick={(e) => quitarCancionAgregada(item, e)}
                         className="my-2 mr-2 shrink-0 rounded-xl border border-red-500/25 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-300 hover:bg-red-500/20"
                         title="Quitar cancion agregada"
                       >
@@ -1717,14 +2082,19 @@ const ProyectorController = ({ user }) => {
         </div>
 
         {/* Columna Central: Diapositivas */}
-        <div className="flex-1 bg-zinc-950/35 flex flex-col border-r border-white/10">
+        <div className="min-h-0 min-w-0 flex-1 bg-zinc-950/35 flex flex-col border-r border-white/10">
           <div className="p-4 border-b border-white/10 bg-zinc-950/65 flex justify-between items-center backdrop-blur-sm">
-            <h2 className="font-bold text-sm flex items-center gap-2"><Type size={16} className="text-amber-500"/> Diapositivas {activeSong && <span className="text-zinc-500">- {activeSong.titulo}</span>}</h2>
+            <h2 className="font-bold text-sm flex items-center gap-2">
+              {projectionSourceMode === 'media' ? <Film size={16} className="text-indigo-400"/> : projectionSourceMode === 'songs' ? <Type size={16} className="text-amber-500"/> : <BookOpen size={16} className="text-blue-400"/>}
+              {projectionSourceMode === 'media' ? 'Multimedia' : projectionSourceMode === 'preaching' ? 'Predica' : projectionSourceMode === 'bible' ? 'Biblia' : 'Diapositivas'}
+              {projectionSourceMode === 'songs' && activeSong && <span className="text-zinc-500">- {activeSong.titulo}</span>}
+            </h2>
           </div>
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
             
             {/* 📺 NUEVO: PANEL DE MULTIMEDIA RÁPIDA (Bóveda) */}
-            <div className="bg-zinc-950/45 border-b border-white/10 p-4">
+            {projectionSourceMode === 'media' && (
+            <div className="min-h-0 flex-1 overflow-y-auto bg-zinc-950/45 border-b border-white/10 p-4 [&::-webkit-scrollbar]:hidden">
               <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center gap-2">
                   <div className="relative mr-2">
@@ -1797,7 +2167,7 @@ const ProyectorController = ({ user }) => {
                 {filteredMedia.map((m, i) => (
                   <div key={i} className="group relative shrink-0">
                     <button 
-                      onClick={() => { setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name }); setPreviewSlide(null); }}
+                      onClick={() => setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })}
                       className={`w-24 h-16 rounded-2xl overflow-hidden border transition-all bg-black relative ${previewMedia?.url === m.url ? 'border-indigo-500 ring-2 ring-indigo-500/30' : 'border-white/10 hover:border-indigo-400'}`}
                     >
                       {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
@@ -1833,10 +2203,11 @@ const ProyectorController = ({ user }) => {
                 {filteredMedia.length === 0 && !currentFolder && multimediaFolders.length === 0 && <p className="text-xs text-zinc-700 italic">No hay medios guardados aún.</p>}
               </div>
             </div>
+            )}
 
             {/* 🎛️ CONSOLA DE MEDIOS (Control de reproducción) */}
             {projectionSourceMode === 'preaching' && (
-              <div className="border-b border-emerald-500/20 bg-emerald-500/7 p-4">
+              <div className="min-h-0 flex-1 overflow-y-auto border-b border-emerald-500/20 bg-emerald-500/7 p-4 pr-5 [&::-webkit-scrollbar]:hidden">
                 <div className="mb-3 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-300">Predica en vivo</p>
@@ -1903,12 +2274,12 @@ const ProyectorController = ({ user }) => {
             )}
 
             {projectionSourceMode === 'bible' && (
-              <div className="border-b border-blue-500/20 bg-blue-500/7 p-4">
+              <div className="min-h-0 flex-1 overflow-y-auto border-b border-blue-500/20 bg-blue-500/7 p-4 pr-5 [&::-webkit-scrollbar]:hidden">
                 <div className="mb-3 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <p className="text-[10px] font-black uppercase tracking-[0.24em] text-blue-300">Biblia Kadosh</p>
-                    <h2 className="truncate text-lg font-black text-white">Buscar y proyectar pasajes</h2>
-                    <p className="mt-1 text-xs font-bold text-zinc-400">RV1909 local/offline. Las traducciones con licencia quedan preparadas para una fase segura.</p>
+                    <h2 className="truncate text-lg font-black text-white">Preparar y proyectar pasajes</h2>
+                    <p className="mt-1 text-xs font-bold text-zinc-400">El bosquejo es local al evento; solo proyectar cambia la pantalla publica.</p>
                   </div>
                   {lastBiblePassage && (
                     <span className="rounded-full border border-blue-400/25 bg-blue-500/10 px-3 py-1 text-[10px] font-black uppercase text-blue-100">
@@ -1916,16 +2287,11 @@ const ProyectorController = ({ user }) => {
                     </span>
                   )}
                 </div>
-                <BiblePicker
-                  open
-                  title="Biblia"
-                  mode="project"
-                  onProject={projectBiblePassage}
-                />
+                {bibleOutlinePanel}
               </div>
             )}
 
-            {mediaActive && mediaActive.type === 'video' && (
+            {projectionSourceMode === 'media' && mediaActive && mediaActive.type === 'video' && (
               <div className="bg-indigo-600/10 border-b border-indigo-500/30 p-4 flex items-center gap-4 animate-in slide-in-from-top-2 relative group/console">
                 <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-500/20">
                   <Film size={24} className="text-white"/>
@@ -1969,7 +2335,8 @@ const ProyectorController = ({ user }) => {
               </div>
             )}
 
-            <div className="flex-1 flex flex-col p-4 bg-zinc-950/25 overflow-hidden">
+            {projectionSourceMode === 'songs' && (
+            <div className="min-h-0 flex-1 flex flex-col p-4 bg-zinc-950/25 overflow-hidden">
             {!activeSong ? (
               <div className="h-full flex items-center justify-center text-zinc-600 font-medium">Selecciona una cancion del setlist</div>
             ) : (
@@ -1989,11 +2356,11 @@ const ProyectorController = ({ user }) => {
                 </button>
               </div>
               
-              <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden grid grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
+              <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden grid grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
                 {slides.map((s, idx) => (
                   <div 
                     key={s.titulo + idx} // Usar una key más robusta
-                    onClick={() => { setPreviewSlide(s); setPreviewMedia(null); }} // Al tocar una letra, quitamos el video de "Pre"
+                    onClick={() => setPreviewSlide(s)}
                     onDoubleClick={() => projectSlide(s)}
                     className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-36 transition-all transform active:scale-95 ${previewSlide?.texto === s.texto ? 'border-violet-400 ring-2 ring-violet-500/30' : 'border-white/10 hover:border-zinc-500'} ${liveSlide?.texto === s.texto && !isBlackout ? 'bg-violet-500/12 shadow-[0_0_28px_rgba(139,92,246,0.16)]' : 'bg-zinc-900/82'}`}
                   >
@@ -2003,7 +2370,7 @@ const ProyectorController = ({ user }) => {
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
                         {s.media?.length > 0 && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[8px] font-black text-violet-200" title="Multimedia de sección">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[8px] font-black text-violet-200" title="Multimedia de seccion">
                             <ImageIcon size={10} /> {s.media.length}
                           </span>
                         )}
@@ -2020,17 +2387,18 @@ const ProyectorController = ({ user }) => {
               </div>
               
               {/* Botón flotante para PC/Tablet de Siguiente */}
-              <button onClick={projectNextSlide} className="fixed bottom-32 right-1/3 mr-8 p-6 bg-orange-600 hover:bg-orange-500 text-white rounded-full shadow-2xl z-20 hover:scale-110 active:scale-95 transition-all flex items-center justify-center border-4 border-white/20">
+              <button onClick={projectNextSlide} className="absolute bottom-6 right-6 p-6 bg-orange-600 hover:bg-orange-500 text-white rounded-full shadow-2xl z-20 hover:scale-110 active:scale-95 transition-all flex items-center justify-center border-4 border-white/20">
                 <ChevronRight size={40} />
               </button>
               </>
             )}
           </div>
+            )}
           </div> 
         </div> 
 
         {/* Columna Derecha: Vista Previa y En Vivo */}
-        <div className="w-1/3 min-w-[320px] bg-zinc-950/55 flex flex-col backdrop-blur-sm">
+        <div className="w-1/3 min-w-[320px] min-h-0 bg-zinc-950/55 flex flex-col overflow-y-auto backdrop-blur-sm [&::-webkit-scrollbar]:hidden">
           {canReadPastorRequests && eventoId !== 'global' && (
             <div className="border-b border-white/10 bg-zinc-950/85 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
@@ -2089,13 +2457,13 @@ const ProyectorController = ({ user }) => {
           )}
 
           {/* Pre-visualización */}
-          <div className="flex-1 border-b border-white/10 flex flex-col">
+          <div className="min-h-[260px] border-b border-white/10 flex flex-col">
             <div className="p-3 border-b border-white/10 bg-zinc-950/70">
               <h2 className="font-bold text-sm flex items-center gap-2 text-zinc-400"><Eye size={16}/> Pre-proyección</h2>
             </div>
-            <div className="flex-1 p-5 flex flex-col">
+            <div className="min-h-0 flex-1 p-5 flex flex-col">
               <div className="flex-1 bg-black rounded-3xl border border-white/10 shadow-[inset_0_0_60px_rgba(255,255,255,0.03),0_18px_45px_rgba(0,0,0,0.28)] flex items-center justify-center p-6 text-center overflow-hidden relative">
-                {previewMedia ? (
+                {projectionSourceMode === 'media' && previewMedia ? (
                   <>
                     {previewMedia.type === 'video' ? (
                       <video src={previewMedia.url} controls muted playsInline className="absolute inset-0 z-0 w-full h-full object-contain bg-zinc-900" />
@@ -2104,7 +2472,7 @@ const ProyectorController = ({ user }) => {
                     )}
                     <button onClick={() => setPreviewMedia(null)} className="absolute top-4 right-4 p-2 bg-red-600/80 hover:bg-red-600 rounded-full text-white shadow-xl z-20 transition-all"><X size={18}/></button>
                   </>
-                ) : previewSlide ? (
+                ) : projectionSourceMode === 'songs' && previewSlide ? (
                   <>
                     {previewBackground && isVideoMediaUrl(previewBackground) ? (
                       <video src={previewBackground} autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
@@ -2126,11 +2494,27 @@ const ProyectorController = ({ user }) => {
                       />
                     )}
                   </>
+                ) : projectionSourceMode === 'bible' && biblePreview?.slides?.[biblePreview.selectedIndex] ? (
+                  <>
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.22),transparent_55%)]" />
+                    <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-blue-200">{biblePreview.slides[biblePreview.selectedIndex].reference}</p>
+                      {biblePreview.slides[biblePreview.selectedIndex].heading && <p className="text-xs font-black uppercase tracking-wide text-blue-100">{biblePreview.slides[biblePreview.selectedIndex].heading}</p>}
+                      <AutoFitText text={biblePreview.slides[biblePreview.selectedIndex].text} minFontSize={10} maxFontSize={24} safeMaxWidth="92%" safeMaxHeight="72%" variant="preview" debounceMs={80} className="font-black text-white drop-shadow-lg" />
+                      <p className="text-[10px] font-bold text-blue-100/70">{biblePreview.selectedIndex + 1} / {biblePreview.slides.length} · {biblePreview.passage?.abbreviation || 'RVR1960'}</p>
+                    </div>
+                  </>
+                ) : projectionSourceMode === 'preaching' ? (
+                  <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3 text-center">
+                    <ShieldCheck size={28} className="text-emerald-300" />
+                    <p className="text-xs font-black uppercase tracking-widest text-emerald-200">Prédica preparada</p>
+                    <p className="max-w-xs text-[11px] font-bold leading-relaxed text-zinc-500">Selecciona un punto o versículo en el panel de prédica para previsualizarlo y proyectarlo.</p>
+                  </div>
                 ) : (
                   <p className="text-zinc-700 font-bold uppercase tracking-widest text-xs">Sin Selección</p>
                 )}
               </div>
-              {previewSlide?.media?.length > 0 && (
+              {projectionSourceMode === 'songs' && previewSlide?.media?.length > 0 && (
                 <div className="mt-3 rounded-2xl border border-violet-500/20 bg-violet-500/10 p-3">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-violet-200">
@@ -2164,22 +2548,59 @@ const ProyectorController = ({ user }) => {
                   </div>
                 </div>
               )}
-              <button 
-                onClick={() => previewMedia ? projectMedia(previewMedia) : projectSlide(previewSlide)} 
-                disabled={!previewSlide && !previewMedia}
-                className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
-              >
-                <Monitor size={18} /> {previewMedia ? 'Proyectar Contenido' : 'Proyectar Diapositiva'}
-              </button>
+              {projectionSourceMode === 'songs' && (
+                <button
+                  onClick={() => projectSlide(previewSlide)}
+                  disabled={!previewSlide}
+                  className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
+                >
+                  <Monitor size={18} /> Proyectar Diapositiva
+                </button>
+              )}
+              {projectionSourceMode === 'media' && (
+                <button
+                  onClick={() => projectMedia(previewMedia)}
+                  disabled={!previewMedia}
+                  className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
+                >
+                  <Monitor size={18} /> Proyectar Contenido
+                </button>
+              )}
+              {projectionSourceMode === 'bible' && (
+                <>
+                  <button
+                    onClick={() => projectBiblePassage({ ...biblePreview, outlineItemId: biblePreviewOutlineItemId })}
+                    disabled={!biblePreview}
+                    className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
+                  >
+                    <Monitor size={18} /> Proyectar Biblia
+                  </button>
+                  {evento?.projectorState?.contentType === 'bible' && Array.isArray(evento?.projectorState?.bible?.slides) && (
+                    <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-blue-400/20 bg-blue-500/10 p-2">
+                      <button type="button" onClick={() => projectBibleDeckSlide(-1)} disabled={!Number(evento.projectorState.bible?.slideIndex)} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-[10px] font-black uppercase text-blue-100 disabled:opacity-30"><ChevronLeft size={15} /> Anterior</button>
+                      <span className="text-[10px] font-black text-blue-100">{Number(evento.projectorState.bible?.slideIndex || 0) + 1} / {evento.projectorState.bible.slides.length}</span>
+                      <button type="button" onClick={() => projectBibleDeckSlide(1)} disabled={Number(evento.projectorState.bible?.slideIndex || 0) >= evento.projectorState.bible.slides.length - 1} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-[10px] font-black uppercase text-blue-100 disabled:opacity-30">Siguiente <ChevronRight size={15} /></button>
+                    </div>
+                  )}
+                </>
+              )}
+              {projectionSourceMode === 'preaching' && currentPublicPoint && (
+                <button
+                  onClick={() => projectPreachingBlockFromController(currentPublicPoint)}
+                  className="mt-4 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 transition-all active:scale-95 shadow-lg shadow-emerald-950/20"
+                >
+                  <Monitor size={18} /> Proyectar Punto
+                </button>
+              )}
             </div>
           </div>
 
           {/* En Vivo */}
-          <div className="flex-1 flex flex-col">
+          <div className="min-h-[260px] flex flex-col">
             <div className="p-3 border-b border-white/10 bg-zinc-950/70 flex justify-between items-center">
               <h2 className="font-bold text-sm flex items-center gap-2 text-red-500"><Play size={16}/> En Vivo</h2>
               
-              {/* ⏱️ CONTROL DE RELOJ (Countdown) SIEMPRE VISIBLE */}
+              {/* Tiempo CONTROL DE RELOJ (Countdown) SIEMPRE VISIBLE */}
               <div className="flex items-center gap-2 bg-zinc-950/90 p-1 rounded-xl border border-white/10 scale-90">
                 <input type="number" value={countdownMinutes} onChange={e => setCountdownMinutes(parseInt(e.target.value))} className="w-8 bg-transparent text-center font-bold text-xs outline-none text-violet-400" />
                 <button onClick={() => toggleCountdown(!(evento?.proyectorCountdown?.active))} className={`px-2 py-1 rounded text-[8px] font-black uppercase transition-all ${evento?.proyectorCountdown?.active ? 'bg-red-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-white'}`}>
@@ -2189,7 +2610,7 @@ const ProyectorController = ({ user }) => {
 
               {isBlackout && <span className="text-[10px] bg-red-600 px-2 py-0.5 rounded-full font-bold uppercase tracking-widest">Apagado</span>}
             </div>
-            <div className="flex-1 p-5">
+            <div className="min-h-0 flex-1 p-5">
               <div className={`relative w-full h-full rounded-3xl border shadow-[inset_0_0_60px_rgba(255,255,255,0.03),0_18px_45px_rgba(0,0,0,0.28)] flex flex-col p-6 overflow-hidden transition-colors ${isBlackout ? 'border-red-900/50 bg-black items-center justify-center' : modoTransmision ? 'border-emerald-500 bg-[#00FF00] items-start justify-end pb-8' : 'border-red-500/70 bg-black items-center justify-center text-center'}`}>
                 {countdownTimeLeft && (
                   <div className="absolute top-3 right-3 z-30 px-3 py-1.5 rounded-xl bg-emerald-500/95 text-white shadow-lg border border-white/20">
@@ -2199,6 +2620,12 @@ const ProyectorController = ({ user }) => {
                 )}
                 {isBlackout ? (
                    <p className="relative z-10 text-red-900/50 font-black uppercase tracking-widest">Pantalla en Negro</p>
+                ) : evento?.projectorState?.contentType === 'bible' ? (
+                  <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3 text-center">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-200">{evento.projectorState.reference}</p>
+                    <AutoFitText text={evento.projectorState.content || ''} minFontSize={10} maxFontSize={24} safeMaxWidth="92%" safeMaxHeight="72%" variant="preview" debounceMs={80} className="font-black text-white drop-shadow-lg" />
+                    <p className="text-[10px] font-bold text-zinc-400">{Number(evento.projectorState.bibleSlideIndex || 0) + 1} / {evento.projectorState.bibleSlideCount || 1} · {evento.projectorState.translation || 'RVR1960'}</p>
+                  </div>
                 ) : displayLiveSlide ? (
                   <> {/* LETRAS EN VIVO */}
                     {!modoTransmision && fondoActivo && isVideoMediaUrl(fondoActivo) ? (
@@ -2255,7 +2682,7 @@ const ProyectorController = ({ user }) => {
             </div>
           </div>
            {/* PANEL MEJORADO: Avisos a Tarima y Congregación */}
-          <div className="border-t border-white/10 bg-zinc-950/80 p-4 shrink-0 flex flex-col gap-3 shadow-[0_-10px_30px_rgba(0,0,0,0.35)] z-10 relative overflow-y-auto max-h-[35vh] backdrop-blur-sm">
+          <div className="border-t border-white/10 bg-zinc-950/80 p-4 shrink-0 flex flex-col gap-3 shadow-[0_-10px_30px_rgba(0,0,0,0.35)] z-10 relative backdrop-blur-sm">
             
             {/* Pantalla privada del Predicador */}
             <div className="rounded-3xl border border-amber-500/25 bg-amber-500/7 p-3 flex flex-col gap-3 shadow-[0_12px_30px_rgba(0,0,0,0.18)]">
@@ -2282,18 +2709,16 @@ const ProyectorController = ({ user }) => {
               )}
 
               {!isPreacherPanelOpen && (
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <button onClick={sendToPreacher} className="rounded-xl bg-amber-600 px-2 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-amber-500">Enviar rápido</button>
-                  <button onClick={() => handleOpenScreen(`/predicador/${eventoId}`)} className="rounded-xl border border-amber-500/30 px-2 py-2 text-[10px] font-black uppercase tracking-wide text-amber-200 hover:bg-amber-500/10">Abrir</button>
                   <button onClick={() => setIsPreacherPanelOpen(true)} className="rounded-xl bg-zinc-800 px-2 py-2 text-[10px] font-black uppercase tracking-wide text-zinc-300 hover:bg-zinc-700">Campos</button>
                 </div>
               )}
 
               {isPreacherPanelOpen && (
                 <>
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/20 bg-zinc-950/70 px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/20 bg-zinc-950/70 px-3 py-2">
                     <span className="text-[10px] font-black uppercase tracking-widest text-amber-200">Canal privado con el Pastor</span>
-                    <button onClick={() => handleOpenScreen(`/predicador/${eventoId}`)} className="text-[10px] px-2 py-1 rounded-lg border border-amber-500/30 text-amber-200 hover:bg-amber-500/10 font-black uppercase">Abrir pantalla</button>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <input value={preacherDraft.tema} onChange={e => updatePreacherDraft('tema', e.target.value)} placeholder="Tema" className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
@@ -2317,17 +2742,13 @@ const ProyectorController = ({ user }) => {
 
             {/* Retorno a Tarima */}
             <div className="flex flex-col gap-2 rounded-3xl border border-white/10 bg-zinc-900/45 p-3">
-              <div className="flex justify-between items-center">
+              <div className="flex items-center">
                  <h2 className="font-bold text-xs flex items-center gap-1.5 text-amber-500 uppercase tracking-widest"><AlertCircle size={14}/> Retorno a Tarima</h2>
-                 <div className="flex gap-2">
-                   <button onClick={() => handleOpenScreen(`/retorno/${eventoId}`)} className="text-zinc-400 border border-zinc-700 hover:bg-zinc-800 text-[10px] px-2 py-1 rounded font-bold transition-colors">Abrir Cantantes</button>
-                   <button onClick={() => handleOpenScreen(`/retorno-musicos/${eventoId}`)} className="text-emerald-400 border border-emerald-900/50 hover:bg-emerald-900/20 text-[10px] px-2 py-1 rounded font-bold transition-colors">Abrir Músicos</button>
-                 </div>
               </div>
               <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-950/70 p-1 border border-zinc-800">
                 {[
                   ['cantantes', 'Cantantes'],
-                  ['musicos', 'Músicos'],
+                  ['musicos', 'Musicos'],
                   ['all', 'Todos']
                 ].map(([target, label]) => (
                   <button
@@ -2351,13 +2772,13 @@ const ProyectorController = ({ user }) => {
                 ))}
               </div>
               <div className="flex gap-2">
-                <input type="text" value={alertaTarima} onChange={e => setAlertaTarima(e.target.value)} placeholder="Solo músicos..." className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:border-amber-500 outline-none text-white placeholder:text-zinc-600 transition-all" onKeyPress={e => e.key === 'Enter' && enviarAlerta()} />
+                <input type="text" value={alertaTarima} onChange={e => setAlertaTarima(e.target.value)} placeholder="Solo musicos..." className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:border-amber-500 outline-none text-white placeholder:text-zinc-600 transition-all" onKeyPress={e => e.key === 'Enter' && enviarAlerta()} />
                 <button onClick={enviarAlerta} disabled={isSendingAlert || !alertaTarima.trim()} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white px-3 py-2 rounded-lg font-bold transition-all"><Send size={16}/></button>
               </div>
               {evento?.proyectorAlerta && (
                 <div className="flex items-center justify-between bg-amber-500/10 border border-amber-500/30 p-2 rounded-lg">
                   <span className="text-[10px] text-amber-100 font-bold truncate">
-                    {typeof evento.proyectorAlerta === 'string' ? `Mensaje activo: ${evento.proyectorAlerta}` : `Mensaje activo para ${evento.proyectorAlerta.target === 'all' ? 'Todos' : evento.proyectorAlerta.target === 'cantantes' ? 'Cantantes' : 'Músicos'}: ${evento.proyectorAlerta.text || ''}`}
+                    {typeof evento.proyectorAlerta === 'string' ? `Mensaje activo: ${evento.proyectorAlerta}` : `Mensaje activo para ${evento.proyectorAlerta.target === 'all' ? 'Todos' : evento.proyectorAlerta.target === 'cantantes' ? 'Cantantes' : 'Musicos'}: ${evento.proyectorAlerta.text || ''}`}
                   </span>
                   <button onClick={limpiarAlerta} className="text-white hover:bg-red-500 text-[10px] font-bold uppercase bg-red-600 px-2 py-1 rounded transition-colors shrink-0">Ocultar</button>
                 </div>
@@ -2408,7 +2829,7 @@ const ProyectorController = ({ user }) => {
                   {isTemporarySetlistItem(item) && (
                     <button
                       type="button"
-                      onClick={(e) => quitarCanciónAgregada(item, e)}
+                      onClick={(e) => quitarCancionAgregada(item, e)}
                       className="mr-1 rounded-xl bg-red-500/20 px-2 py-1 text-[9px] font-black uppercase text-red-100"
                       title="Quitar cancion agregada"
                     >
@@ -2443,7 +2864,7 @@ const ProyectorController = ({ user }) => {
                 {slides.map((s, idx) => (
                   <div 
                     key={idx}
-                    onClick={() => { projectSlide(s); setPreviewMedia(null); }} // En móvil, proyectar letra limpia el video
+                    onClick={() => projectSlide(s)}
                     className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-32 transition-all transform active:scale-95 
                       ${evento?.proyectorSlideIndex === idx && !isBlackout ? 'border-violet-500 ring-2 ring-violet-500/50 bg-zinc-800 shadow-[0_0_15px_rgba(139,92,246,0.15)]' : 'border-zinc-800 bg-zinc-900'}
                       ${evento?.proyectorSlideIndex !== undefined && evento.proyectorSlideIndex + 1 === idx ? 'border-orange-500/60 border-2 dashed' : ''}`}
@@ -2525,13 +2946,8 @@ const ProyectorController = ({ user }) => {
         )}
 
         {projectionSourceMode === 'bible' && (
-          <div className="flex-1 overflow-y-auto p-3 pb-40">
-            <BiblePicker
-              open
-              title="Biblia"
-              mode="project"
-              onProject={projectBiblePassage}
-            />
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[calc(env(safe-area-inset-bottom)+11rem)] scroll-pb-[calc(env(safe-area-inset-bottom)+11rem)]">
+            {bibleOutlinePanel}
           </div>
         )}
 
@@ -2572,7 +2988,7 @@ const ProyectorController = ({ user }) => {
                 <button
                   key={`mobile-media-${m.url || i}`}
                   type="button"
-                  onClick={() => { setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name }); setPreviewSlide(null); }}
+                  onClick={() => setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })}
                   className={`overflow-hidden rounded-2xl border bg-black text-left ${previewMedia?.url === m.url ? 'border-indigo-400 ring-2 ring-indigo-500/30' : 'border-white/10'}`}
                 >
                   <div className="aspect-video bg-zinc-900">
@@ -2597,7 +3013,7 @@ const ProyectorController = ({ user }) => {
         )}
 
         {/* Barra Flotante Inferior de Estado (Móvil) */}
-        <div className="absolute bottom-0 left-0 w-full bg-zinc-950/95 border-t border-white/10 p-4 flex items-center gap-3 z-20 pb-6 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] backdrop-blur-md">
+        <div className="absolute bottom-0 left-0 w-full bg-zinc-950/95 border-t border-white/10 p-4 flex items-center gap-3 z-20 pb-[calc(env(safe-area-inset-bottom)+1rem)] shadow-[0_-10px_30px_rgba(0,0,0,0.5)] backdrop-blur-md">
            <div className={`w-3 h-3 rounded-full shrink-0 ${isBlackout ? 'bg-zinc-600' : 'bg-red-500 animate-pulse'}`}></div>
            <div className="flex-1 truncate">
              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-0.5">En Pantalla</p>
@@ -2628,7 +3044,7 @@ const ProyectorController = ({ user }) => {
             {/* Tabs */}
             <div className="flex overflow-x-auto border-b border-white/10 shrink-0 bg-zinc-950/60 [&::-webkit-scrollbar]:hidden">
               <button onClick={() => setMobileActiveTab('media')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'media' ? 'border-violet-500 text-white bg-violet-500/5' : 'border-transparent text-zinc-500'}`}>Bóveda</button>
-              <button onClick={() => setMobileActiveTab('songs')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'songs' ? 'border-emerald-500 text-white bg-emerald-500/5' : 'border-transparent text-zinc-500'}`}>Canciónes</button>
+              <button onClick={() => setMobileActiveTab('songs')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'songs' ? 'border-emerald-500 text-white bg-emerald-500/5' : 'border-transparent text-zinc-500'}`}>Canciones</button>
               <button onClick={() => setMobileActiveTab('liveControls')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'liveControls' ? 'border-amber-500 text-white bg-amber-500/5' : 'border-transparent text-zinc-500'}`}>En Vivo</button>
               <button onClick={() => setMobileActiveTab('messages')} className={`min-w-[6.5rem] flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${mobileActiveTab === 'messages' ? 'border-blue-500 text-white bg-blue-500/5' : 'border-transparent text-zinc-500'}`}>Mensajes</button>
             </div>
@@ -2723,7 +3139,7 @@ const ProyectorController = ({ user }) => {
                             </button>
                             <button
                               type="button"
-                              onClick={(e) => quitarCanciónAgregada(item, e)}
+                              onClick={(e) => quitarCancionAgregada(item, e)}
                               className="shrink-0 rounded-xl bg-red-600 px-3 py-2 text-[9px] font-black uppercase text-white"
                             >
                               Quitar
@@ -2749,7 +3165,7 @@ const ProyectorController = ({ user }) => {
                         <button
                           key={song.id}
                           type="button"
-                          onClick={() => agregarCanciónAlSetlist(song)}
+                          onClick={() => agregarCancionAlSetlist(song)}
                           className="w-full rounded-3xl border border-emerald-500/20 bg-zinc-950/80 p-4 text-left transition-all active:scale-[0.99]"
                         >
                           <div className="flex items-start justify-between gap-3">
@@ -2821,14 +3237,14 @@ const ProyectorController = ({ user }) => {
                     <h4 className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-amber-400"><AlertCircle size={15}/> Retorno</h4>
                     <div className="flex gap-2">
                       <button onClick={() => setAlertaTarget('cantantes')} className={`rounded-xl border px-2 py-1 text-[10px] font-bold ${alertaTarget === 'cantantes' ? 'border-pink-400 bg-pink-500/15 text-pink-200' : 'border-zinc-700 text-zinc-300'}`}>Cantantes</button>
-                      <button onClick={() => setAlertaTarget('musicos')} className={`rounded-xl border px-2 py-1 text-[10px] font-bold ${alertaTarget === 'musicos' ? 'border-emerald-400 bg-emerald-500/15 text-emerald-200' : 'border-emerald-900/60 text-emerald-300'}`}>Músicos</button>
+                      <button onClick={() => setAlertaTarget('musicos')} className={`rounded-xl border px-2 py-1 text-[10px] font-bold ${alertaTarget === 'musicos' ? 'border-emerald-400 bg-emerald-500/15 text-emerald-200' : 'border-emerald-900/60 text-emerald-300'}`}>Musicos</button>
                       <button onClick={() => setAlertaTarget('all')} className={`rounded-xl border px-2 py-1 text-[10px] font-bold ${alertaTarget === 'all' ? 'border-blue-400 bg-blue-500/15 text-blue-200' : 'border-zinc-700 text-zinc-300'}`}>Todos</button>
                     </div>
                   </div>
                   {evento?.proyectorAlerta ? (
                     <div className="flex items-center justify-between gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
                       <span className="min-w-0 truncate text-[10px] font-bold text-amber-100">
-                        {typeof evento.proyectorAlerta === 'string' ? `Activo: ${evento.proyectorAlerta}` : `Activo para ${evento.proyectorAlerta.target === 'all' ? 'Todos' : evento.proyectorAlerta.target === 'cantantes' ? 'Cantantes' : 'Músicos'}: ${evento.proyectorAlerta.text}`}
+                        {typeof evento.proyectorAlerta === 'string' ? `Activo: ${evento.proyectorAlerta}` : `Activo para ${evento.proyectorAlerta.target === 'all' ? 'Todos' : evento.proyectorAlerta.target === 'cantantes' ? 'Cantantes' : 'Musicos'}: ${evento.proyectorAlerta.text}`}
                       </span>
                       <button onClick={limpiarAlerta} className="rounded-xl bg-zinc-800 px-3 py-1.5 text-[10px] font-black uppercase text-zinc-200">Ocultar</button>
                     </div>
@@ -2936,7 +3352,7 @@ const ProyectorController = ({ user }) => {
 
               {activeSongId && (
                 <label className="flex items-center gap-3 p-3 bg-zinc-800/50 rounded-xl cursor-pointer border border-zinc-700/50 hover:bg-zinc-800 transition-colors">
-                  <input type="checkbox" checked={guardarEnCanción} onChange={e => setGuardarEnCanción(e.target.checked)} className="w-5 h-5 rounded text-indigo-500 focus:ring-indigo-500 bg-zinc-900 border-zinc-700" />
+                  <input type="checkbox" checked={guardarEnCancion} onChange={e => setGuardarEnCancion(e.target.checked)} className="w-5 h-5 rounded text-indigo-500 focus:ring-indigo-500 bg-zinc-900 border-zinc-700" />
                   <div className="flex flex-col">
                     <span className="text-sm font-bold text-white leading-none mb-1">Guardar en la cancion</span>
                     <span className="text-[10px] text-zinc-400 leading-tight">Este fondo se pondrá automáticamente la próxima vez que toques "{activeSong?.titulo}".</span>
@@ -2955,7 +3371,7 @@ const ProyectorController = ({ user }) => {
       )}
 
 
-      {/* 🚀 MODAL DE CONFIRMACIÓN (Borrar) */}
+      {/* 🚀 MODAL DE CONFIRMACION (Borrar) */}
       {confirmModal.show && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in duration-200">
           <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-200">
@@ -3153,6 +3569,16 @@ const ProyectorController = ({ user }) => {
         </div>
       )}
 
+      <BiblePicker
+        open={isBibleOutlinePickerOpen}
+        onClose={closeBibleOutlinePicker}
+        title={editingBibleOutlineItem ? 'Editar pasaje del bosquejo' : 'Agregar pasaje al bosquejo'}
+        primaryActionLabel={editingBibleOutlineItem ? 'Guardar cambios' : 'Agregar al bosquejo'}
+        onPrimaryAction={saveBibleOutlinePassage}
+        onPreviewChange={setOutlinePickerPreview}
+        preparedPreview={outlinePickerPreview}
+      />
+      {screensMenu}
     </div>
   );
 };

@@ -88,6 +88,25 @@ service cloud.firestore {
       return /databases/$(database)/documents/predicas/$(predicaId);
     }
 
+    function mediaPath(mediaId) {
+      return /databases/$(database)/documents/mediaLibrary/$(mediaId);
+    }
+
+    function isSharedActiveMediaData(data) {
+      return (data.status == 'active' || !('status' in data))
+        && (data.source == 'library' || !('source' in data));
+    }
+
+    function isSharedActiveMediaResource() {
+      return isSharedActiveMediaData(resource.data);
+    }
+
+    function isSharedActiveMediaId(mediaId) {
+      return mediaId is string
+        && exists(mediaPath(mediaId))
+        && isSharedActiveMediaData(get(mediaPath(mediaId)).data);
+    }
+
     function canUsePreachingPrivate(predicaId) {
       return signedIn()
         && isPastorRole()
@@ -150,6 +169,7 @@ service cloud.firestore {
         'fecha',
         'fechaEnsayo',
         'tipoEvento',
+        'lugar',
         'notas',
         'setlist',
         'canciones',
@@ -225,7 +245,9 @@ service cloud.firestore {
         'proyectorSongId',
         'proyectorSlideIndex',
         'proyectorNextSlide',
-        'proyectorNextSong'
+        'proyectorNextSong',
+        'liveState',
+        'currentSongId'
       ];
     }
 
@@ -236,6 +258,28 @@ service cloud.firestore {
         && request.resource.data.projectorState.sourceActor == 'pastor'
         && request.resource.data.projectorState.actorUid == request.auth.uid
         && request.resource.data.projectorState.predicaId == eventPreachingId(eventoId);
+    }
+
+    function isPastorPreachingMediaProjectorState(eventoId) {
+      return isAssignedPastorForEventPreaching(eventoId)
+        && request.resource.data.projectorState is map
+        && request.resource.data.projectorState.type == 'media'
+        && request.resource.data.projectorState.preachingType == 'mediaInstruction'
+        && request.resource.data.projectorState.sourceActor == 'pastor'
+        && request.resource.data.projectorState.actorUid == request.auth.uid
+        && request.resource.data.projectorState.predicaId == eventPreachingId(eventoId)
+        && request.resource.data.projectorState.blockId is string
+        && request.resource.data.projectorState.blockId != ''
+        && request.resource.data.projectorState.media is map
+        && request.resource.data.projectorState.media.source == 'preaching'
+        && request.resource.data.projectorState.media.predicaId == eventPreachingId(eventoId)
+        && request.resource.data.projectorState.media.blockId == request.resource.data.projectorState.blockId
+        && isSharedActiveMediaId(request.resource.data.projectorState.media.mediaId)
+        && request.resource.data.proyectorMedia is map
+        && request.resource.data.proyectorMedia.source == 'preaching'
+        && request.resource.data.proyectorMedia.predicaId == eventPreachingId(eventoId)
+        && request.resource.data.proyectorMedia.blockId == request.resource.data.projectorState.blockId
+        && request.resource.data.proyectorMedia.mediaId == request.resource.data.projectorState.media.mediaId;
     }
 
     function isCurrentPastorPreachingProjectorState(eventoId) {
@@ -255,13 +299,26 @@ service cloud.firestore {
       return isMediaOrAdmin() && onlyEventKeys(projectorEventFields());
     }
 
+    function canUpdateEventBibleOutline() {
+      return isMediaOrAdmin()
+        && onlyEventKeys(['bibleOutline'])
+        && request.resource.data.bibleOutline is map
+        && request.resource.data.bibleOutline.keys().hasOnly(['items', 'updatedAt'])
+        && request.resource.data.bibleOutline.items is list
+        && request.resource.data.bibleOutline.items.size() <= 50;
+    }
+
     function canUpdateEventAsParticipant() {
       return signedIn() && onlyEventKeys(sharedEventParticipationFields());
     }
 
     function canUpdateEventAsPastorProjection(eventoId) {
       return onlyEventKeys(pastorProjectionFields())
-        && (isPastorPreachingProjectorState(eventoId) || isCurrentPastorPreachingProjectorState(eventoId));
+        && (
+          isPastorPreachingProjectorState(eventoId)
+          || isPastorPreachingMediaProjectorState(eventoId)
+          || isCurrentPastorPreachingProjectorState(eventoId)
+        );
     }
 
     function isOwnerBootstrap() {
@@ -297,6 +354,7 @@ service cloud.firestore {
       allow create: if isAdminLike();
       allow update: if canUpdateEventAsAdmin()
         || canUpdateEventAsMedia()
+        || canUpdateEventBibleOutline()
         || canUpdateEventAsPastorProjection(eventoId)
         || canUpdateEventAsParticipant();
       allow delete: if isAdminLike();
@@ -328,11 +386,12 @@ service cloud.firestore {
 
     match /canciones/{songId} {
       allow read: if signedIn();
-      allow create, update, delete: if isMediaOrAdmin();
+      allow create, update: if isMediaOrAdmin();
+      allow delete: if isAdminLike();
     }
 
     match /mediaLibrary/{mediaId} {
-      allow read: if isMediaOrAdmin();
+      allow read: if isMediaOrAdmin() || (isPastorRole() && isSharedActiveMediaResource());
       allow create, update: if isMediaOrAdmin();
       allow delete: if isAdminLike();
     }

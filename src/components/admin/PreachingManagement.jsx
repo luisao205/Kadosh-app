@@ -1,13 +1,19 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
-import { ArrowDown, ArrowUp, BookOpen, Calendar, CheckCircle2, Eye, FileText, Lock, MessageSquare, Plus, Save, Search, User, Video } from 'lucide-react';
+import { collection, doc, getDoc, onSnapshot, query, serverTimestamp, where, writeBatch } from 'firebase/firestore';
+import { ArrowDown, ArrowUp, BookOpen, Calendar, CheckCircle2, Eye, FileText, Image as ImageIcon, Lock, MessageSquare, Plus, Save, Search, User, Video, X } from 'lucide-react';
 import { db } from '../../config/firebase';
 import { ACCOUNT_STATUSES, normalizeAccountStatus } from '../../utils/accountStatus';
-import { canCreatePreaching, canManageAnyPreaching, isAdmin, isMultimedia, isOwner, isPastor, isPreacherLegacy, normalizeRole } from '../../utils/rolePermissions';
+import { canCreatePreaching, canManageAnyPreaching, canUsePreachingMedia, isAdmin, isMultimedia, isOwner, isPastor, isPreacherLegacy, normalizeRole } from '../../utils/rolePermissions';
 import { formatEventDate } from '../../utils/dateUtils';
+import { useNavigationGuard } from '../../utils/navigationGuard';
+import { MEDIA_LIBRARY_COLLECTION, MEDIA_TYPES } from '../../utils/mediaLibrary';
+import { calculateMediaUsageFields } from '../../utils/mediaLibraryFirestoreSync';
 import { useFeedback } from '../ui/FeedbackProvider';
 import BiblePicker from '../bible/BiblePicker';
+import MediaPicker from '../media/MediaPicker';
+import { getMediaTypeLabel } from '../media/mediaDisplay';
+import { splitPassageIntoSlides } from '../../utils/bibleService';
 
 const EXTERNAL_PREACHER_VALUE = '__external__';
 
@@ -81,9 +87,115 @@ const sanitizeBlocks = (blocks = []) => (Array.isArray(blocks) ? blocks : []).ma
 
 const hasPrivateNoteBlocks = (blocks = []) => blocks.some(block => block.type === 'note' && block.visibility === 'preacher_only');
 
+const normalizePrivateNotes = (notes = {}) => Object.keys(notes || {})
+  .sort()
+  .reduce((acc, blockId) => {
+    acc[blockId] = { content: notes?.[blockId]?.content || '' };
+    return acc;
+  }, {});
+
+const buildDirtySnapshot = (form, privateNotes) => JSON.stringify({
+  form: {
+    title: form.title || '',
+    topic: form.topic || '',
+    preacherId: form.preacherId || '',
+    preacherName: form.preacherName || '',
+    preacherType: form.preacherType || '',
+    eventId: form.eventId || '',
+    mainReference: form.mainReference || '',
+    targetDurationMinutes: form.targetDurationMinutes || '',
+    status: form.status || 'draft',
+    blocks: sanitizeBlocks(form.blocks || [])
+  },
+  privateNotes: normalizePrivateNotes(privateNotes)
+});
+
+const buildPrivateNotesWrite = ({ sharedBlocks, privateNotes, preachingId, user }) => {
+  const privateBlockIds = new Set(
+    sharedBlocks
+      .filter(block => block.type === 'note' && block.visibility === 'preacher_only')
+      .map(block => block.id)
+  );
+  const notes = {};
+  privateBlockIds.forEach(blockId => {
+    const content = privateNotes?.[blockId]?.content || '';
+    notes[blockId] = { content, updatedAt: Date.now() };
+  });
+  return {
+    ref: doc(db, 'predicas', preachingId, 'private', 'preacher'),
+    notes,
+    data: {
+      notes,
+      preacherId: user.uid,
+      updatedAt: serverTimestamp()
+    }
+  };
+};
+
+const createPreachingMediaReference = (media = {}) => ({
+  mediaId: media.mediaId || media.id || null,
+  title: media.title || media.name || 'Recurso multimedia',
+  mediaType: media.type || MEDIA_TYPES.LINK,
+  thumbnailUrl: media.thumbnailUrl || '',
+  provider: media.provider || '',
+  source: 'library'
+});
+
+const getMediaInstructionRefs = (blocks = []) => (Array.isArray(blocks) ? blocks : [])
+  .filter(block => block?.type === 'mediaInstruction' && block.mediaId)
+  .map(block => ({
+    blockId: block.id,
+    resourceId: block.id,
+    mediaId: block.mediaId,
+    title: block.title || 'Recurso multimedia',
+    mediaType: block.mediaType || MEDIA_TYPES.LINK
+  }));
+
+const buildPreachingMediaUsage = ({ preachingId, preachingTitle, mediaRef }) => ({
+  entityType: 'preaching',
+  entityId: preachingId,
+  predicaId: preachingId,
+  predicaTitle: preachingTitle || 'Predica sin titulo',
+  location: 'preaching-outline',
+  blockId: mediaRef.blockId,
+  resourceId: mediaRef.resourceId || mediaRef.blockId,
+  blockTitle: mediaRef.title || 'Bloque multimedia'
+});
+
+const buildPreachingMediaUsageChanges = ({ initialRefs = [], currentRefs = [], preachingId, preachingTitle }) => {
+  const currentByBlock = new Map(currentRefs.map(ref => [ref.blockId, ref]));
+  const initialByBlock = new Map(initialRefs.map(ref => [ref.blockId, ref]));
+  const changes = [];
+
+  initialRefs.forEach(initialRef => {
+    const currentRef = currentByBlock.get(initialRef.blockId);
+    if (!currentRef || currentRef.mediaId !== initialRef.mediaId) {
+      changes.push({
+        mediaId: initialRef.mediaId,
+        usage: buildPreachingMediaUsage({ preachingId, preachingTitle, mediaRef: initialRef }),
+        action: 'remove'
+      });
+    }
+  });
+
+  currentRefs.forEach(currentRef => {
+    const initialRef = initialByBlock.get(currentRef.blockId);
+    if (!initialRef || initialRef.mediaId !== currentRef.mediaId) {
+      changes.push({
+        mediaId: currentRef.mediaId,
+        usage: buildPreachingMediaUsage({ preachingId, preachingTitle, mediaRef: currentRef }),
+        action: 'add'
+      });
+    }
+  });
+
+  return changes;
+};
+
 const PreachingManagement = ({ user }) => {
   const navigate = useNavigate();
   const { notify, confirm } = useFeedback();
+  const { registerNavigationGuard } = useNavigationGuard();
   const [preachings, setPreachings] = useState([]);
   const [events, setEvents] = useState([]);
   const [users, setUsers] = useState([]);
@@ -95,7 +207,10 @@ const PreachingManagement = ({ user }) => {
   const [form, setForm] = useState(emptyForm);
   const [privateNotes, setPrivateNotes] = useState({});
   const [biblePickerBlockId, setBiblePickerBlockId] = useState(null);
+  const [mediaPickerBlockId, setMediaPickerBlockId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [initialSnapshot, setInitialSnapshot] = useState(() => buildDirtySnapshot(emptyForm, {}));
+  const [initialMediaRefs, setInitialMediaRefs] = useState([]);
 
   const role = normalizeRole(user?.rol || user?.role);
   const canManageShared = canManageAnyPreaching(user);
@@ -104,16 +219,48 @@ const PreachingManagement = ({ user }) => {
   const isAssignedPastor = isPastor(user) && form.preacherType === 'user' && form.preacherId === user?.uid;
   const canEditShared = canManageShared || isAssignedPastor;
   const canEditCurrent = canEditShared && !isReadOnlyAdmin;
+  const canUseMediaInPreaching = canUsePreachingMedia(user, form);
+  const isLimitedPreachingMediaUser = canUseMediaInPreaching && !canManageShared;
   const canUsePrivateNotes = isAssignedPastor;
+  const canManageEventAssociation = isOwner(user);
+  const currentSnapshot = useMemo(() => buildDirtySnapshot(form, privateNotes), [form, privateNotes]);
+  const isDirty = canEditCurrent && currentSnapshot !== initialSnapshot;
+
+  const confirmDiscardChanges = useCallback(async () => {
+    if (!isDirty) return true;
+    return confirm({
+      title: 'Cambios sin guardar',
+      message: 'Tienes cambios sin guardar en esta predica. Si sales ahora, se perderan.',
+      confirmLabel: 'Salir sin guardar',
+      cancelLabel: 'Seguir editando',
+      variant: 'danger'
+    });
+  }, [confirm, isDirty]);
+
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isDirty]);
+
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    return registerNavigationGuard(confirmDiscardChanges);
+  }, [confirmDiscardChanges, isDirty, registerNavigationGuard]);
 
   const getPreachingEvent = (preaching) => events.find(item => item.id === preaching?.eventId) || null;
 
-  const openPreachingView = (preaching, event) => {
+  const openPreachingView = async (preaching, event) => {
     if (!preaching?.id) return;
+    if (!(await confirmDiscardChanges())) return;
     navigate(`/predicador/${event?.id || preaching.id}`);
   };
 
-  const startOrContinuePreaching = (preaching, event) => {
+  const startOrContinuePreaching = async (preaching, event) => {
     if (!event?.id) {
       notify('Esta predica no tiene evento asociado. Puedes abrirla en modo ensayo.', { type: 'warning' });
       return;
@@ -122,6 +269,7 @@ const PreachingManagement = ({ user }) => {
       notify('Solo el Pastor asignado puede iniciar esta predica.', { type: 'warning' });
       return;
     }
+    if (!(await confirmDiscardChanges())) return;
     navigate(`/predicador/${event.id}`, { state: { intent: 'startPreaching' } });
   };
 
@@ -181,39 +329,53 @@ const PreachingManagement = ({ user }) => {
   }, [mineOnly, preachings, queryText, statusFilter, user?.uid]);
 
   const loadPrivateNotes = async (preaching) => {
-    setPrivateNotes({});
-    if (!preaching?.id || !isPastor(user) || preaching.preacherId !== user.uid || preaching.preacherType === 'external') return;
+    if (!preaching?.id || !isPastor(user) || preaching.preacherId !== user.uid || preaching.preacherType === 'external') {
+      setPrivateNotes({});
+      return {};
+    }
     try {
       const snap = await getDoc(doc(db, 'predicas', preaching.id, 'private', 'preacher'));
-      setPrivateNotes(snap.exists() ? (snap.data().notes || {}) : {});
+      const notes = snap.exists() ? (snap.data().notes || {}) : {};
+      setPrivateNotes(notes);
+      return notes;
     } catch (error) {
       console.warn('No se pudo cargar contenido privado del pastor:', error);
       setPrivateNotes({});
+      return {};
     }
   };
 
-  const resetForm = () => {
-    setSelectedId(null);
-    setPrivateNotes({});
-    setForm({
+  const resetFormState = () => {
+    const nextForm = {
       ...emptyForm,
       preacherId: isPastor(user) ? user.uid : '',
       preacherName: isPastor(user) ? getUserName(user) : '',
       preacherType: isPastor(user) ? 'user' : ''
-    });
+    };
+    setSelectedId(null);
+    setPrivateNotes({});
+    setInitialMediaRefs([]);
+    setForm(nextForm);
+    setInitialSnapshot(buildDirtySnapshot(nextForm, {}));
+  };
+
+  const resetForm = async () => {
+    if (!(await confirmDiscardChanges())) return;
+    resetFormState();
   };
 
   useEffect(() => {
     if (!selectedId && isPastor(user) && !form.preacherId) {
-      resetForm();
+      resetFormState();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, user?.uid]);
 
   const openPreaching = async (preaching) => {
+    if (preaching?.id !== selectedId && !(await confirmDiscardChanges())) return;
     setSelectedId(preaching.id);
     const preacherType = preaching.preacherType || (preaching.preacherId ? 'user' : preaching.preacherName ? 'external' : '');
-    setForm({
+    const nextForm = {
       title: preaching.title || '',
       topic: preaching.topic || '',
       preacherId: preaching.preacherId || '',
@@ -224,8 +386,11 @@ const PreachingManagement = ({ user }) => {
       targetDurationMinutes: preaching.targetDurationMinutes || '',
       status: preaching.status || 'draft',
       blocks: sanitizeBlocks(preaching.blocks || [])
-    });
-    await loadPrivateNotes({ ...preaching, preacherType });
+    };
+    setForm(nextForm);
+    const notes = await loadPrivateNotes({ ...preaching, preacherType });
+    setInitialMediaRefs(getMediaInstructionRefs(nextForm.blocks));
+    setInitialSnapshot(buildDirtySnapshot(nextForm, notes));
   };
 
   const ensureEditable = () => {
@@ -257,9 +422,6 @@ const PreachingManagement = ({ user }) => {
         variant: 'danger'
       });
       if (!ok) return;
-      if (selectedId && canManageShared) {
-        await deleteDoc(doc(db, 'predicas', selectedId, 'private', 'preacher')).catch(() => {});
-      }
       setForm(prev => ({
         ...prev,
         blocks: sanitizeBlocks(prev.blocks.filter(block => !(block.type === 'note' && block.visibility === 'preacher_only')))
@@ -299,6 +461,7 @@ const PreachingManagement = ({ user }) => {
 
   const applyBiblePassageToBlock = (blockId, passage) => {
     if (!blockId || !passage || !ensureEditable()) return;
+    const slides = splitPassageIntoSlides(passage);
     updateBlock(blockId, {
       reference: passage.reference || '',
       translation: passage.abbreviation || passage.translation || '',
@@ -307,9 +470,43 @@ const PreachingManagement = ({ user }) => {
       bibleId: passage.bibleId || '',
       passageId: passage.passageId || '',
       provider: passage.provider || 'local',
-      copyright: passage.copyright || ''
+      copyright: passage.copyright || '',
+      biblePassage: {
+        translationId: passage.translationId || '',
+        bookCode: passage.bookCode || '',
+        bookName: passage.bookName || '',
+        chapter: passage.chapter || null,
+        reference: passage.reference || '',
+        verses: passage.verses || [],
+        slides
+      }
     });
     setBiblePickerBlockId(null);
+  };
+
+  const selectMediaInstructionResource = (media) => {
+    if (!mediaPickerBlockId || !media) return;
+    if (!canUseMediaInPreaching) {
+      notify('No tienes permiso para asociar recursos de Biblioteca Multimedia en esta predica.', { type: 'warning' });
+      return;
+    }
+    updateBlock(mediaPickerBlockId, createPreachingMediaReference(media));
+    setMediaPickerBlockId(null);
+  };
+
+  const removeMediaInstructionResource = (blockId) => {
+    if (!canUseMediaInPreaching) {
+      notify('No tienes permiso para quitar recursos de Biblioteca Multimedia en esta predica.', { type: 'warning' });
+      return;
+    }
+    updateBlock(blockId, {
+      mediaId: null,
+      title: '',
+      mediaType: '',
+      thumbnailUrl: '',
+      provider: '',
+      source: ''
+    });
   };
 
   const updatePrivateNote = (blockId, content) => {
@@ -369,31 +566,11 @@ const PreachingManagement = ({ user }) => {
   };
 
   const validateEventLink = () => {
-    if (!form.eventId) return true;
+    if (!canManageEventAssociation || !form.eventId) return true;
     const linked = preachings.find(item => item.eventId === form.eventId && item.id !== selectedId && item.archived !== true);
     if (!linked) return true;
     notify(`Ese evento ya tiene una predica asociada: ${linked.title || 'Sin titulo'}.`, { type: 'warning' });
     return false;
-  };
-
-  const savePrivateNotes = async (preachingId, sharedBlocks) => {
-    if (!canUsePrivateNotes) return;
-    const privateBlockIds = new Set(sharedBlocks.filter(block => block.type === 'note' && block.visibility === 'preacher_only').map(block => block.id));
-    const notes = {};
-    privateBlockIds.forEach(blockId => {
-      const content = privateNotes?.[blockId]?.content || '';
-      notes[blockId] = { content, updatedAt: Date.now() };
-    });
-    const privateRef = doc(db, 'predicas', preachingId, 'private', 'preacher');
-    if (Object.keys(notes).length === 0) {
-      await deleteDoc(privateRef).catch(() => {});
-      return;
-    }
-    await setDoc(privateRef, {
-      notes,
-      preacherId: user.uid,
-      updatedAt: serverTimestamp()
-    }, { merge: false });
   };
 
   const savePreaching = async () => {
@@ -448,10 +625,18 @@ const PreachingManagement = ({ user }) => {
       };
 
       let savedId = selectedId;
+      const preachingRef = selectedId ? doc(db, 'predicas', selectedId) : doc(collection(db, 'predicas'));
+      savedId = preachingRef.id;
+      const previousPreaching = selectedId ? preachings.find(item => item.id === selectedId) : null;
+      const previousEventId = previousPreaching?.eventId || null;
+      const nextEventId = canManageEventAssociation ? (form.eventId || null) : previousEventId;
+      payload.eventId = nextEventId;
+
+      const batch = writeBatch(db);
       if (selectedId) {
-        await updateDoc(doc(db, 'predicas', selectedId), payload);
+        batch.update(preachingRef, payload);
       } else {
-        const created = await addDoc(collection(db, 'predicas'), {
+        batch.set(preachingRef, {
           ...payload,
           createdAt: serverTimestamp(),
           createdBy: {
@@ -460,16 +645,46 @@ const PreachingManagement = ({ user }) => {
             role
           }
         });
-        savedId = created.id;
-        setSelectedId(savedId);
       }
 
-      await savePrivateNotes(savedId, sharedBlocks);
+      const hasPrivateBlocks = hasPrivateNoteBlocks(sharedBlocks);
+      if (canUsePrivateNotes) {
+        const privateWrite = buildPrivateNotesWrite({ sharedBlocks, privateNotes, preachingId: savedId, user });
+        if (Object.keys(privateWrite.notes).length === 0) {
+          if (selectedId) {
+            batch.delete(privateWrite.ref);
+          }
+        } else {
+          batch.set(privateWrite.ref, privateWrite.data);
+        }
+      } else if (selectedId && canManageShared && !hasPrivateBlocks) {
+        batch.delete(doc(db, 'predicas', savedId, 'private', 'preacher'));
+      }
 
-      if (form.eventId) {
-        const selectedEvent = events.find(item => item.id === form.eventId);
-        if (!selectedEvent?.predicaId || selectedEvent.predicaId === savedId) {
-          await updateDoc(doc(db, 'eventos', form.eventId), {
+      if (canManageEventAssociation) {
+        if (previousEventId && previousEventId !== nextEventId) {
+          const previousEventRef = doc(db, 'eventos', previousEventId);
+          const previousEventSnap = await getDoc(previousEventRef);
+          if (previousEventSnap.exists() && previousEventSnap.data().predicaId === savedId) {
+            batch.update(previousEventRef, {
+              predicaId: null,
+              predicaTitle: '',
+              predicadorId: null,
+              predicadorNombre: ''
+            });
+          }
+        }
+
+        if (nextEventId) {
+          const nextEventRef = doc(db, 'eventos', nextEventId);
+          const nextEventSnap = await getDoc(nextEventRef);
+          const nextEventData = nextEventSnap.exists() ? nextEventSnap.data() : null;
+          if (nextEventData?.predicaId && nextEventData.predicaId !== savedId) {
+            notify(`Ese evento ya tiene una predica asociada: ${nextEventData.predicaTitle || 'Sin titulo'}.`, { type: 'warning' });
+            setIsSaving(false);
+            return;
+          }
+          batch.update(nextEventRef, {
             predicaId: savedId,
             predicaTitle: form.title.trim(),
             predicadorId: payload.preacherId || null,
@@ -477,6 +692,52 @@ const PreachingManagement = ({ user }) => {
           });
         }
       }
+
+      const currentMediaRefs = getMediaInstructionRefs(sharedBlocks);
+      const mediaUsageChanges = canManageShared
+        ? buildPreachingMediaUsageChanges({
+          initialRefs: initialMediaRefs,
+          currentRefs: currentMediaRefs,
+          preachingId: savedId,
+          preachingTitle: form.title.trim()
+        })
+        : [];
+
+      const mediaUsageById = mediaUsageChanges.reduce((acc, change) => {
+        if (!change.mediaId) return acc;
+        acc.set(change.mediaId, [...(acc.get(change.mediaId) || []), change]);
+        return acc;
+      }, new Map());
+
+      for (const [mediaId, changes] of mediaUsageById.entries()) {
+        const mediaRef = doc(db, MEDIA_LIBRARY_COLLECTION, mediaId);
+        const mediaSnap = await getDoc(mediaRef);
+        if (!mediaSnap.exists()) {
+          throw new Error(`media_not_found:${mediaId}`);
+        }
+        const mediaData = mediaSnap.data() || {};
+        const usageFields = changes.reduce((fields, change) => {
+          const nextFields = calculateMediaUsageFields(fields.usedBy, change.usage, change.action);
+          return {
+            ...nextFields,
+            firstUsedAt: fields.firstUsedAt || nextFields.firstUsedAt
+          };
+        }, {
+          usedBy: Array.isArray(mediaData.usedBy) ? mediaData.usedBy : [],
+          firstUsedAt: mediaData.firstUsedAt || null
+        });
+        batch.update(mediaRef, {
+          ...usageFields,
+          firstUsedAt: mediaData.firstUsedAt || usageFields.firstUsedAt
+        });
+      }
+
+      await batch.commit();
+      setSelectedId(savedId);
+      const savedForm = { ...form, eventId: nextEventId || '', blocks: sharedBlocks };
+      setForm(savedForm);
+      setInitialMediaRefs(currentMediaRefs);
+      setInitialSnapshot(buildDirtySnapshot(savedForm, privateNotes));
 
       notify(selectedId ? 'Predica actualizada.' : 'Predica creada.', { type: 'success' });
     } catch (error) {
@@ -576,7 +837,63 @@ const PreachingManagement = ({ user }) => {
         )}
 
         {block.type === 'mediaInstruction' && (
-          <textarea disabled={disabled} className="kp-input min-h-28 rounded-2xl px-4 py-3 text-sm disabled:opacity-70" value={block.instruction || ''} onChange={e => updateBlock(block.id, { instruction: e.target.value })} placeholder="Ej. Preparar imagen de la cruz o video testimonio.mp4" />
+          <div className="grid gap-3">
+            <div className="rounded-3xl border border-white/10 bg-black/20 p-3">
+              {block.mediaId ? (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="flex aspect-video w-full items-center justify-center overflow-hidden rounded-2xl bg-zinc-950 text-zinc-500 sm:w-36">
+                    {block.thumbnailUrl ? (
+                      <img src={block.thumbnailUrl} alt={block.title || 'Recurso multimedia'} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                    ) : block.mediaType === MEDIA_TYPES.IMAGE ? (
+                      <ImageIcon size={30} />
+                    ) : (
+                      <Video size={30} />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-black text-white">{block.title || 'Recurso multimedia'}</p>
+                    <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-violet-300">
+                      Biblioteca Multimedia {block.mediaType ? `- ${getMediaTypeLabel(block.mediaType)}` : ''}
+                    </p>
+                    <p className="mt-1 truncate text-[11px] font-bold text-zinc-500">mediaId: {block.mediaId}</p>
+                  </div>
+                  {canEditCurrent && canUseMediaInPreaching && (
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" onClick={() => setMediaPickerBlockId(block.id)} className="rounded-xl border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-[10px] font-black uppercase text-violet-100 hover:bg-violet-500/20">
+                        Cambiar
+                      </button>
+                      <button type="button" onClick={() => removeMediaInstructionResource(block.id)} className="rounded-xl border border-red-500/20 bg-red-500/10 p-2 text-red-200 hover:bg-red-500/20" aria-label="Quitar recurso multimedia">
+                        <X size={15} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-black text-white">Sin recurso de Biblioteca</p>
+                    <p className="mt-1 text-xs font-bold text-zinc-500">Puedes conservar solo la instruccion textual para compatibilidad.</p>
+                  </div>
+                  {canEditCurrent && canUseMediaInPreaching && (
+                    <button type="button" onClick={() => setMediaPickerBlockId(block.id)} className="rounded-xl border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-[10px] font-black uppercase text-violet-100 hover:bg-violet-500/20">
+                      Biblioteca
+                    </button>
+                  )}
+                </div>
+              )}
+              {canEditCurrent && !canUseMediaInPreaching && (
+                <p className="mt-3 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-100">
+                  Tu rol puede editar la instruccion, pero no asociar recursos de Biblioteca Multimedia.
+                </p>
+              )}
+              {canEditCurrent && isLimitedPreachingMediaUser && (
+                <p className="mt-3 rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] font-bold text-cyan-100">
+                  Puedes usar recursos compartidos activos en tus predicas, sin administrar la biblioteca.
+                </p>
+              )}
+            </div>
+            <textarea disabled={disabled} className="kp-input min-h-24 rounded-2xl px-4 py-3 text-sm disabled:opacity-70" value={block.instruction || ''} onChange={e => updateBlock(block.id, { instruction: e.target.value })} placeholder="Instruccion opcional para el operador multimedia" />
+          </div>
         )}
       </div>
     );
@@ -668,6 +985,11 @@ const PreachingManagement = ({ user }) => {
             <div>
               <p className="text-xs font-black uppercase tracking-[0.22em] text-zinc-500">{selectedId ? (canEditCurrent ? 'Editar predica' : 'Vista de solo lectura') : 'Nueva predica'}</p>
               <h2 className="text-2xl font-black text-white">{form.title || 'Borrador sin titulo'}</h2>
+              {canEditCurrent && (
+                <p className={`mt-2 text-xs font-black uppercase ${isDirty ? 'text-amber-300' : 'text-emerald-300'}`}>
+                  {isDirty ? 'Cambios sin guardar' : 'Todos los cambios guardados'}
+                </p>
+              )}
             </div>
             {canEditCurrent ? (
               <button type="button" onClick={savePreaching} disabled={isSaving} className="kp-button-primary inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-black disabled:opacity-50">
@@ -700,10 +1022,13 @@ const PreachingManagement = ({ user }) => {
             )}
             <label className="space-y-1">
               <span className="text-xs font-black uppercase text-zinc-500">Evento / Culto</span>
-              <select disabled={!canEditCurrent} className="kp-input w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-70" value={form.eventId} onChange={e => updateForm('eventId', e.target.value)}>
+              <select disabled={!canEditCurrent || !canManageEventAssociation} className="kp-input w-full rounded-2xl px-4 py-3 text-sm disabled:opacity-70" value={form.eventId} onChange={e => updateForm('eventId', e.target.value)}>
                 <option value="" className="bg-zinc-900">Sin evento asignado</option>
                 {events.map(event => <option key={event.id} value={event.id} className="bg-zinc-900">{event.titulo} {event.fecha ? `- ${formatEventDate(event.fecha)}` : ''}</option>)}
               </select>
+              {canEditCurrent && !canManageEventAssociation && (
+                <p className="text-[11px] font-bold text-zinc-500">La asociacion con eventos la administra el dueño para evitar cambios rechazados por permisos.</p>
+              )}
             </label>
             <label className="space-y-1">
               <span className="text-xs font-black uppercase text-zinc-500">Estado</span>
@@ -772,6 +1097,14 @@ const PreachingManagement = ({ user }) => {
         onUse={(passage) => applyBiblePassageToBlock(biblePickerBlockId, passage)}
         title="Buscar en Biblia"
         mode="editor"
+      />
+      <MediaPicker
+        open={Boolean(mediaPickerBlockId)}
+        onClose={() => setMediaPickerBlockId(null)}
+        onSelect={selectMediaInstructionResource}
+        title="Seleccionar recurso para predica"
+        context="predicas"
+        libraryOptions={isLimitedPreachingMediaUser ? { activeOnly: true, sharedOnly: true } : {}}
       />
     </div>
   );

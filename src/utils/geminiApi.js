@@ -20,7 +20,7 @@ export const buscarSugerenciasIA = async (busqueda) => {
 
   const prompt = `Busca hasta 5 opciones de canciones (preferiblemente cristianas o de adoración) que coincidan con la búsqueda: "${busqueda}".
   Devuelve ÚNICAMENTE un arreglo de objetos JSON con esta estructura exacta, sin texto adicional ni formato markdown:
-  [{"titulo": "Nombre de la canción", "artista": "Nombre del artista"}]`;
+  [{"titulo": "Nombre de la cancion", "artista": "Nombre del artista"}]`;
 
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${API_KEY}`, {
@@ -59,7 +59,7 @@ export const buscarMetadatosIA = async (titulo, artista) => {
     });
   }
 
-  const prompt = `Actúa como un director musical. BUSCA EN INTERNET (es obligatorio usar la herramienta de búsqueda) el tono original y el BPM (tempo) de la canción "${titulo}" de "${artista}".
+  const prompt = `Actúa como un director musical. BUSCA EN INTERNET (es obligatorio usar la herramienta de búsqueda) el tono original y el BPM (tempo) de la cancion "${titulo}" de "${artista}".
   IMPORTANTE: No adivines ni inventes los datos. Si no los encuentras en internet, déjalos vacíos.
   Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura exacta, sin formato markdown ni texto adicional:
   {"tono": "Tono o vacío", "bpm": 120 o 0}`;

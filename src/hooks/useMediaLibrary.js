@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { MEDIA_LIBRARY_COLLECTION, createMediaLibraryDocument, normalizeMediaText } from '../utils/mediaLibrary';
 import { isMediaTrashed } from '../utils/mediaTrash';
@@ -44,7 +44,7 @@ const sortMediaItems = (items) => [...items].sort((a, b) => {
   return String(a.title || '').localeCompare(String(b.title || ''));
 });
 
-export const useMediaLibrary = ({ enabled = true } = {}) => {
+export const useMediaLibrary = ({ enabled = true, activeOnly = false, sharedOnly = false } = {}) => {
   const [allItems, setAllItems] = useState([]);
   const [loading, setLoading] = useState(Boolean(enabled));
   const [error, setError] = useState(null);
@@ -56,8 +56,15 @@ export const useMediaLibrary = ({ enabled = true } = {}) => {
     }
 
     setLoading(true);
+    const constraints = [];
+    if (activeOnly) constraints.push(where('status', '==', 'active'));
+    if (sharedOnly) constraints.push(where('source', '==', 'library'));
+    const mediaQuery = constraints.length
+      ? query(collection(db, MEDIA_LIBRARY_COLLECTION), ...constraints)
+      : collection(db, MEDIA_LIBRARY_COLLECTION);
+
     const unsubscribe = onSnapshot(
-      collection(db, MEDIA_LIBRARY_COLLECTION),
+      mediaQuery,
       (snapshot) => {
         const nextItems = snapshot.docs.map(normalizeMediaLibraryDoc);
         setAllItems(sortMediaItems(nextItems));
@@ -72,7 +79,7 @@ export const useMediaLibrary = ({ enabled = true } = {}) => {
     );
 
     return () => unsubscribe();
-  }, [enabled]);
+  }, [activeOnly, enabled, sharedOnly]);
 
   const counts = useMemo(() => {
     const activeItems = allItems.filter(item => !isMediaTrashed(item));

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, onSnapshot, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -6,10 +6,11 @@ import { db } from '../../config/firebase';
 import { Save, ArrowLeft, Edit3, AlertCircle, X } from 'lucide-react';
 import { detectarTonoDesdeAcordes } from '../../utils/musicCore';
 import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
-import { parsearCancion } from '../../utils/songParser';
+import { getSectionKey, parsearCancion } from '../../utils/songParser';
 import { MEDIA_LIBRARY_COLLECTION, MEDIA_PROVIDERS, createMediaReference, detectMediaProvider, detectMediaTypeFromUrl } from '../../utils/mediaLibrary';
 import { calculateMediaUsageFields, createOrReuseMediaLibraryResource } from '../../utils/mediaLibraryFirestoreSync';
 import { getSongQualityBadges } from '../../utils/songQuality';
+import { parseSingerTones } from '../../utils/songAssignments';
 import SectionMediaManager from './SectionMediaManager';
 import SongMetadataForm from './SongMetadataForm';
 import SongResourcesPanel from './SongResourcesPanel';
@@ -26,15 +27,6 @@ const normalizeKey = (value, fallback = 'C') => {
   return match || clean || fallback;
 };
 
-const getSectionKey = (section, index) => {
-  const title = String(section?.titulo || 'sección')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'sección';
-  return `${index}_${title}`;
-};
 
 const sortObjectKeys = (value) => {
   if (Array.isArray(value)) return value.map(sortObjectKeys);
@@ -63,7 +55,8 @@ const normalizeEditableSongState = (state = {}) => ({
     type: state.audioFile.type || ''
   } : null,
   youtubeUrl: String(state.youtubeUrl || ''),
-  fondoUrl: String(state.fondoUrl || '')
+  fondoUrl: String(state.fondoUrl || ''),
+  fondoMediaId: String(state.fondoMediaId || '')
 });
 
 const stringifySongState = (state) => JSON.stringify(normalizeEditableSongState(state));
@@ -95,16 +88,19 @@ const EditSong = ({ user }) => {
   const [audioFile, setAudioFile] = useState(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [fondoUrl, setFondoUrl] = useState('');
+  const [fondoMediaId, setFondoMediaId] = useState('');
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showExample, setShowExample] = useState(false);
   const [showSingerModal, setShowSingerModal] = useState(false);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
-  const [isSavingAndExiting, setIsSavingAndExiting] = useState(false);
+  const [isSavingAndExiting, setIsSavingAndExiting] = useState(false);
+
 
   const audioRef = useRef(null);
   const initialSongStateRef = useRef(null);
+  const pendingMediaUsageRef = useRef([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -129,8 +125,9 @@ const EditSong = ({ user }) => {
     audioUrl,
     audioFile,
     youtubeUrl,
-    fondoUrl
-  }), [titulo, artista, bpm, tono, etiquetas, recursos, multitracks, sectionMedia, tonosCantantes, letraRaw, audioUrl, audioFile, youtubeUrl, fondoUrl]);
+    fondoUrl,
+    fondoMediaId
+  }), [titulo, artista, bpm, tono, etiquetas, recursos, multitracks, sectionMedia, tonosCantantes, letraRaw, audioUrl, audioFile, youtubeUrl, fondoUrl, fondoMediaId]);
   const currentEditableSnapshot = useMemo(() => stringifySongState(currentEditableState), [currentEditableState]);
   const isDirty = Boolean(initialSongStateRef.current && initialSongStateRef.current !== currentEditableSnapshot);
   const showToast = (message, type = 'error') => notify(message, { type });
@@ -161,17 +158,15 @@ const EditSong = ({ user }) => {
           setMultitracks(data.multitracks || []);
           setRecursos(data.recursos || []);
           setSectionMedia(data.sectionMedia || {});
+          pendingMediaUsageRef.current = [];
           setLetraRaw(data.letraRaw || '');
           setAudioUrl(data.audioUrl || '');
           setYoutubeUrl(data.youtubeUrl || '');
           setFondoUrl(data.fondoUrl || '');
+          setFondoMediaId(data.fondoMediaId || '');
 
-          if (data.tonosAlternativos) {
-            const parsed = {};
-            data.tonosAlternativos.split(',').forEach(item => {
-              const [name, key] = item.split(':');
-              if (name) parsed[name.trim()] = (key || '').trim();
-            });
+          if (data.tonosAlternativos || data.tonosPorCantante) {
+            const parsed = parseSingerTones(data.tonosPorCantante || data.tonosAlternativos);
             setTonosCantantes(parsed);
             initialSongStateRef.current = stringifySongState({
               titulo: data.titulo || '',
@@ -187,7 +182,8 @@ const EditSong = ({ user }) => {
               audioUrl: data.audioUrl || '',
               audioFile: null,
               youtubeUrl: data.youtubeUrl || '',
-              fondoUrl: data.fondoUrl || ''
+              fondoUrl: data.fondoUrl || '',
+              fondoMediaId: data.fondoMediaId || ''
             });
           } else {
             initialSongStateRef.current = stringifySongState({
@@ -204,7 +200,8 @@ const EditSong = ({ user }) => {
               audioUrl: data.audioUrl || '',
               audioFile: null,
               youtubeUrl: data.youtubeUrl || '',
-              fondoUrl: data.fondoUrl || ''
+              fondoUrl: data.fondoUrl || '',
+              fondoMediaId: data.fondoMediaId || ''
             });
           }
         } else {
@@ -311,11 +308,30 @@ const EditSong = ({ user }) => {
 
   const buildSectionMediaUsage = (sectionKey, sectionTitle) => ({
     songId: id,
-    songTitle: titulo || 'Canción sin titulo',
+    songTitle: titulo || 'Cancion sin titulo',
     location: 'section',
     sectionKey,
     sectionTitle: sectionTitle || sectionKey
   });
+
+  const queueMediaLibraryUsage = (mediaResource, usage, action = 'add') => {
+    const mediaId = mediaResource?.mediaId || mediaResource?.id;
+    if (!mediaId || mediaResource?.source !== 'library') return;
+
+    pendingMediaUsageRef.current = [
+      ...pendingMediaUsageRef.current,
+      {
+        mediaResource: {
+          ...mediaResource,
+          id: mediaId,
+          mediaId,
+          source: 'library'
+        },
+        usage,
+        action
+      }
+    ];
+  };
 
   const updateMediaLibraryUsage = async (mediaResource, usage, action = 'add') => {
     const mediaId = mediaResource?.mediaId || mediaResource?.id;
@@ -324,7 +340,9 @@ const EditSong = ({ user }) => {
     try {
       const mediaRef = doc(db, MEDIA_LIBRARY_COLLECTION, mediaId);
       const mediaSnap = await getDoc(mediaRef);
-      if (!mediaSnap.exists()) return;
+      if (!mediaSnap.exists()) {
+        throw new Error(`media_not_found:${mediaId}`);
+      }
 
       const data = mediaSnap.data() || {};
       const usageFields = calculateMediaUsageFields(data.usedBy, usage, action);
@@ -336,12 +354,13 @@ const EditSong = ({ user }) => {
     } catch (error) {
       console.error('Error actualizando uso de mediaLibrary:', error);
       showToast('No se pudo actualizar el uso en Biblioteca Multimedia.');
+      throw error;
     }
   };
 
-  const createSectionMediaReference = (media, usageDelta = 0) => ({
+  const createSectionMediaReference = (media, usageDelta = 0, existingId = null) => ({
     ...createMediaReference(media),
-    id: `library_${media.mediaId || media.id || Date.now()}_${Date.now()}`,
+    id: existingId || `library_${media.mediaId || media.id || Date.now()}_${Date.now()}`,
     mediaId: media.mediaId || media.id || null,
     title: media.title || media.name || 'Recurso multimedia',
     source: 'library',
@@ -349,6 +368,71 @@ const EditSong = ({ user }) => {
     usedBy: Array.isArray(media.usedBy) ? media.usedBy : [],
     createdAt: new Date().toISOString()
   });
+
+  const createPendingSectionMediaReference = (resource, sectionTitle = '') => ({
+    id: `pending_library_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    mediaId: null,
+    title: resource.title || 'Recurso multimedia',
+    name: resource.title || 'Recurso multimedia',
+    type: resource.type || 'link',
+    url: resource.url || '',
+    thumbnailUrl: resource.thumbnailUrl || '',
+    provider: resource.provider || detectMediaProvider(resource.url),
+    source: 'pending-library',
+    usageCount: 0,
+    usedBy: [],
+    sectionTitle,
+    pendingLibraryResource: resource,
+    createdAt: new Date().toISOString()
+  });
+
+  const resolvePendingSectionMediaForSave = async (currentSectionMedia = {}) => {
+    const resolvedSectionMedia = {};
+    const usageChanges = [];
+
+    for (const [sectionKey, resources] of Object.entries(currentSectionMedia || {})) {
+      resolvedSectionMedia[sectionKey] = [];
+
+      for (const resource of (Array.isArray(resources) ? resources : [])) {
+        if (resource?.source !== 'pending-library' || !resource.pendingLibraryResource) {
+          resolvedSectionMedia[sectionKey].push(resource);
+          continue;
+        }
+
+        const usage = buildSectionMediaUsage(sectionKey, resource.sectionTitle || sectionKey);
+        const { media } = await createOrReuseMediaLibraryResource(resource.pendingLibraryResource, {
+          firestore: db,
+          now: Date.now(),
+          userId: user?.uid || null
+        });
+        const resolvedResource = createSectionMediaReference({
+          ...media,
+          id: media.id,
+          mediaId: media.mediaId || media.id
+        }, 0, resource.id);
+
+        resolvedSectionMedia[sectionKey].push(resolvedResource);
+        usageChanges.push({
+          mediaResource: { ...resolvedResource, id: resolvedResource.mediaId },
+          usage,
+          action: 'add'
+        });
+      }
+    }
+
+    return { resolvedSectionMedia, usageChanges };
+  };
+
+  const flushPendingMediaUsage = async (extraChanges = []) => {
+    const changes = [...pendingMediaUsageRef.current, ...extraChanges];
+    if (!changes.length) return;
+
+    for (const change of changes) {
+      await updateMediaLibraryUsage(change.mediaResource, change.usage, change.action);
+    }
+
+    pendingMediaUsageRef.current = [];
+  };
 
   const handleSelectLibrarySectionMedia = async ({ sectionKey, sectionTitle, replaceResourceId = null, media }) => {
     if (!sectionKey || !media) return;
@@ -367,28 +451,26 @@ const EditSong = ({ user }) => {
     }));
 
     if (previousResource?.mediaId) {
-      await updateMediaLibraryUsage(previousResource, usage, 'remove');
+      queueMediaLibraryUsage(previousResource, usage, 'remove');
     }
-    await updateMediaLibraryUsage({ ...nextResource, id: nextResource.mediaId }, usage, 'add');
+    queueMediaLibraryUsage({ ...nextResource, id: nextResource.mediaId }, usage, 'add');
 
-    showToast('Recurso de Biblioteca asignado a la sección.', 'success');
+    showToast('Recurso de Biblioteca asignado a la seccion.', 'success');
   };
 
   const addSectionMediaResource = async (sectionKey, sectionTitle = sectionKey) => {
     const draft = getSectionDraft(sectionKey);
     if (!draft.title || !draft.url) {
-      showToast("Título y URL son obligatorios para el recurso de sección.");
+      showToast("Título y URL son obligatorios para el recurso de seccion.");
       return;
     }
 
-    showToast("Agregando URL a Biblioteca...", "info");
+    showToast("Preparando URL para Biblioteca...", "info");
     setIsSaving(true);
     try {
       const url = draft.url.trim();
-      const usage = buildSectionMediaUsage(sectionKey, sectionTitle);
-      const now = Date.now();
       const mediaType = draft.type && draft.type !== 'link' ? draft.type : detectMediaTypeFromUrl(url);
-      const { media } = await createOrReuseMediaLibraryResource({
+      const resource = createPendingSectionMediaReference({
         title: draft.title.trim(),
         type: mediaType,
         url,
@@ -400,25 +482,14 @@ const EditSong = ({ user }) => {
           mimeType: null,
           thumbnail: null
         }
-      }, {
-        firestore: db,
-        now,
-        userId: user?.uid || null,
-        usage
-      });
-
-      const resource = createSectionMediaReference({
-        ...media,
-        id: media.id,
-        mediaId: media.mediaId || media.id
-      });
+      }, sectionTitle);
 
       setSectionMedia(prev => ({
         ...prev,
         [sectionKey]: [...(prev[sectionKey] || []), resource]
       }));
       setSectionMediaDrafts(prev => ({ ...prev, [sectionKey]: { title: '', type: 'link', url: '' } }));
-      showToast("URL agregada a Biblioteca y asignada a la sección.", "success");
+      showToast("URL preparada. Se guardará en Biblioteca al guardar la cancion.", "success");
     } catch (error) {
       console.error("Error agregando URL a mediaLibrary:", error);
       showToast("Error al agregar la URL a Biblioteca Multimedia.");
@@ -440,14 +511,12 @@ const EditSong = ({ user }) => {
             ? 'image'
             : 'link';
 
-    showToast("Subiendo recurso de sección...", "info");
+    showToast("Subiendo recurso de seccion...", "info");
     setIsSaving(true);
     try {
       const uploaded = await uploadToCloudinary(file, 'kadosh/section-media');
-      const usage = buildSectionMediaUsage(sectionKey, sectionTitle);
-      const now = Date.now();
       const mediaTitle = (draft.title || file.name).trim();
-      const { media } = await createOrReuseMediaLibraryResource({
+      const resource = createPendingSectionMediaReference({
         title: mediaTitle,
         type: fileType,
         url: uploaded.url,
@@ -466,28 +535,17 @@ const EditSong = ({ user }) => {
           duration: uploaded.duration || null,
           thumbnail: uploaded.thumbnailUrl || null
         }
-      }, {
-        firestore: db,
-        now,
-        userId: user?.uid || null,
-        usage
-      });
-
-      const resource = createSectionMediaReference({
-        ...media,
-        id: media.id,
-        mediaId: media.mediaId || media.id
-      });
+      }, sectionTitle);
 
       setSectionMedia(prev => ({
         ...prev,
         [sectionKey]: [...(prev[sectionKey] || []), resource]
       }));
       setSectionMediaDrafts(prev => ({ ...prev, [sectionKey]: { title: '', type: 'link', url: '' } }));
-      showToast("Recurso subido a Biblioteca y asignado a la sección.", "success");
+      showToast("Recurso subido y preparado. Se guardará en Biblioteca al guardar la cancion.", "success");
     } catch (err) {
-      console.error("Error subiendo recurso de sección:", err);
-      showToast("Error al subir el recurso de sección.");
+      console.error("Error subiendo recurso de seccion:", err);
+      showToast("Error al subir el recurso de seccion.");
     } finally {
       setIsSaving(false);
     }
@@ -510,7 +568,7 @@ const EditSong = ({ user }) => {
     }));
 
     if (resourceToRemove?.mediaId) {
-      await updateMediaLibraryUsage(resourceToRemove, buildSectionMediaUsage(sectionKey, sectionTitle), 'remove');
+      queueMediaLibraryUsage(resourceToRemove, buildSectionMediaUsage(sectionKey, sectionTitle), 'remove');
     }
   };
 
@@ -574,15 +632,45 @@ const EditSong = ({ user }) => {
     setMultitracks(multitracks.filter(m => m.id !== id));
   };
 
+  const handleFondoUrlChange = (value) => {
+    setFondoUrl(value);
+    setFondoMediaId('');
+  };
+
   const handleUploadFondo = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     showToast("Subiendo fondo de proyección...", "info");
     setIsSaving(true);
     try {
-      const { url } = await uploadToCloudinary(file, 'kadosh/song-backgrounds');
-      setFondoUrl(url);
-      showToast("¡Fondo de proyector subido exitosamente!", "success");
+      const uploaded = await uploadToCloudinary(file, 'kadosh/song-backgrounds');
+      const { media } = await createOrReuseMediaLibraryResource({
+        title: file.name || (titulo ? `Fondo - ${titulo}` : 'Fondo de cancion'),
+        type: uploaded.type || (file.type?.startsWith('video/') ? 'video' : 'image'),
+        url: uploaded.url,
+        thumbnailUrl: uploaded.thumbnailUrl || '',
+        provider: MEDIA_PROVIDERS.CLOUDINARY,
+        source: 'song_background',
+        folder: 'kadosh/song-backgrounds',
+        category: 'Fondos',
+        cloudinaryPublicId: uploaded.publicId,
+        cloudinaryResourceType: uploaded.type,
+        metadata: {
+          size: uploaded.bytes || file.size || null,
+          mimeType: file.type || null,
+          width: uploaded.width || null,
+          height: uploaded.height || null,
+          duration: uploaded.duration || null,
+          thumbnail: uploaded.thumbnailUrl || null
+        }
+      }, {
+        firestore: db,
+        now: Date.now(),
+        userId: user?.uid || null
+      });
+      setFondoUrl(uploaded.url);
+      setFondoMediaId(media.mediaId || media.id || '');
+      showToast("¡Fondo de proyector subido y registrado en Biblioteca!", "success");
     } catch (err) {
       console.error("Error subiendo fondo:", err);
       showToast("Error al subir el fondo.");
@@ -623,6 +711,11 @@ const EditSong = ({ user }) => {
         .map(([name, key]) => `${name}: ${normalizeKey(key, tonoNormalizado)}`)
         .join(', ');
 
+      const {
+        resolvedSectionMedia,
+        usageChanges: resolvedMediaUsageChanges
+      } = await resolvePendingSectionMediaForSave(sectionMedia);
+
       const docRef = doc(db, 'canciones', id);
       const savedData = {
         titulo,
@@ -631,16 +724,24 @@ const EditSong = ({ user }) => {
         etiquetas,
         multitracks,
         recursos,
-        sectionMedia,
+        sectionMedia: resolvedSectionMedia,
         tonosAlternativos: tonosAlternativosStr,
         bpm: Number(bpm) || 0,
         letraRaw,
         audioUrl: newAudioUrl,
         youtubeUrl,
         fondoUrl,
+        fondoMediaId: fondoMediaId || null,
         fechaActualizacion: new Date().toISOString()
       };
       await updateDoc(docRef, savedData);
+      try {
+        await flushPendingMediaUsage(resolvedMediaUsageChanges);
+      } catch (usageError) {
+        console.error('La canción fue guardada, pero falló la sincronización de uso multimedia:', usageError);
+        showToast("La canción se guardó, pero no se pudo actualizar Biblioteca Multimedia. Vuelve a guardar para reintentar.");
+        return false;
+      }
 
       if (stemsNuevosCount > 0) {
         await addDoc(collection(db, 'notificaciones'), {
@@ -654,6 +755,7 @@ const EditSong = ({ user }) => {
 
       setAudioUrl(newAudioUrl);
       setAudioFile(null);
+      setSectionMedia(resolvedSectionMedia);
       setStemsNuevosCount(0);
       initialSongStateRef.current = stringifySongState({
         ...savedData,
@@ -661,7 +763,7 @@ const EditSong = ({ user }) => {
         audioFile: null
       });
 
-      showToast("¡Canción actualizada exitosamente!", "success");
+      showToast("¡Cancion actualizada exitosamente!", "success");
       if (navigateOnSuccess) {
         setTimeout(() => navigate(returnTo), 1500); // Volver al origen tras leer el mensaje
       }
@@ -703,7 +805,7 @@ const EditSong = ({ user }) => {
       <div className="flex flex-col items-center justify-center h-64 text-center">
         <AlertCircle size={48} className="text-red-500 mb-4" />
         <h2 className="text-2xl font-bold text-zinc-900">Acceso Denegado</h2>
-        <p className="text-zinc-500 mt-2">Los músicos no tienen permisos para editar canciones.</p>
+        <p className="text-zinc-500 mt-2">Los musicos no tienen permisos para editar canciones.</p>
       </div>
     );
   }
@@ -727,7 +829,7 @@ const EditSong = ({ user }) => {
             <Edit3 size={28} />
           </div>
           <div>
-            <h1 className="text-3xl font-black text-white tracking-tight">Editar Canción</h1>
+            <h1 className="text-3xl font-black text-white tracking-tight">Editar Cancion</h1>
           <p className="text-zinc-400 mt-1 text-sm font-medium">Gestiona contenido, tonos, pistas de audio y recursos de ensayo.</p>
           </div>
         </div>
@@ -787,7 +889,7 @@ const EditSong = ({ user }) => {
         <div className="kp-card p-6 rounded-3xl h-fit grid grid-cols-1 sm:grid-cols-2 gap-4">
             <SongMetadataForm
               titulo={titulo}
-              onTítuloChange={setTitulo}
+              onTituloChange={setTitulo}
               artista={artista}
               onArtistaChange={setArtista}
               tono={tono}
@@ -830,7 +932,7 @@ const EditSong = ({ user }) => {
               onUploadStem={handleUploadStem}
               onRemoveStem={removeStem}
               fondoUrl={fondoUrl}
-              onFondoUrlChange={setFondoUrl}
+              onFondoUrlChange={handleFondoUrlChange}
               onUploadFondo={handleUploadFondo}
               recursos={recursos}
               nuevoRecurso={nuevoRecurso}
@@ -869,7 +971,7 @@ const EditSong = ({ user }) => {
         <div className="kp-card p-6 rounded-3xl flex flex-col h-[430px] md:h-[640px]">
           <div className="mb-3">
             <label className="block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2 flex justify-between items-center">
-              <span>Estructura de la Canción</span>
+              <span>Estructura de la Cancion</span>
               <div className="flex items-center gap-3">
                 <button 
                   type="button" 
@@ -993,9 +1095,11 @@ const EditSong = ({ user }) => {
         </div>
       )}
 
-      {/* Toast Notification */}
+      {/* Toast Notification */}
+
     </div>
   );
 };
 
 export default EditSong;
+

@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { ArrowLeft, Eye, EyeOff, Link2, Minus, Plus, Settings2 } from 'lucide-react';
 import { db } from '../../config/firebase';
 import { transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
+import { resolveEffectiveLiveState } from '../../utils/liveState';
+import useFitReturnContent from '../../hooks/useFitReturnContent';
 
 const readLocal = (key, fallback) => {
   if (typeof window === 'undefined') return fallback;
@@ -50,6 +52,8 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
     width: typeof window === 'undefined' ? 1024 : window.innerWidth,
     height: typeof window === 'undefined' ? 768 : window.innerHeight
   }));
+  const musicAreaRef = useRef(null);
+  const musicContentRef = useRef(null);
 
   useEffect(() => writeLocal('singerDisplay.showChords', showChords), [showChords]);
   useEffect(() => writeLocal('singerDisplay.fontScale', fontScale), [fontScale]);
@@ -74,13 +78,7 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
     const unsub = onSnapshot(doc(db, 'eventos', eventoId), (snap) => {
       if (!snap.exists()) return;
       const data = snap.data();
-      const nextLiveState = data.liveState || {
-        activeSongId: data.proyectorSongId || null,
-        activeSongTitle: '',
-        activeSectionIndex: data.proyectorSlideIndex ?? -1,
-        activeSectionTitle: data.proyectorSlide?.titulo || '',
-        updatedBy: 'Multimedia'
-      };
+      const nextLiveState = resolveEffectiveLiveState(data);
 
       setEvento(data);
       setLiveState(nextLiveState);
@@ -143,11 +141,11 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
   });
 
   const lyricFontSize = isPortraitPhone
-    ? `calc(clamp(1.35rem, 5.4vmin, 3.15rem) * ${fontScale})`
+    ? `calc(clamp(1.35rem, 5.4vmin, 3.15rem) * ${fontScale} * var(--return-content-scale, 1))`
     : isMobileLandscape
-      ? `calc(clamp(1.05rem, 5.1vmin, 2.65rem) * ${fontScale})`
-    : `calc(clamp(1.7rem, 6.4vmin, 5.6rem) * ${fontScale})`;
-  const chordFontSize = `calc(clamp(0.8rem, 2.5vmin, 1.7rem) * ${fontScale})`;
+      ? `calc(clamp(1.05rem, 5.1vmin, 2.65rem) * ${fontScale} * var(--return-content-scale, 1))`
+      : `calc(clamp(1.7rem, 6.4vmin, 5.6rem) * ${fontScale} * var(--return-content-scale, 1))`;
+  const chordFontSize = `calc(clamp(0.8rem, 2.5vmin, 1.7rem) * ${fontScale} * var(--return-content-scale, 1))`;
 
   const adjustFont = (delta) => {
     setFontScale(prev => Math.min(1.45, Math.max(0.82, Number((prev + delta).toFixed(2)))));
@@ -180,6 +178,13 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
   const contentItems = currentSection?.items?.length
     ? currentSection.items
     : (slide?.texto ? slide.texto.split('\n').map(line => ({ type: 'plain', text: line })) : []);
+  const contentSignature = JSON.stringify(contentItems);
+  useFitReturnContent({
+    containerRef: musicAreaRef,
+    contentRef: musicContentRef,
+    minScale: isMobileLandscape || isPortraitPhone ? 0.78 : 0.72,
+    dependencies: [songData?.id, currentIndex, contentSignature, fontScale, showChords, offset, formato, notacion, isMobileLandscape, isPortraitPhone]
+  });
   const alertaData = typeof alerta === 'string' ? { text: alerta, priority: 'urgente', target: 'all' } : alerta;
   const alertIsActive = alertaData && alertaData.active !== false && (!alertaData.expiresAt || alertaData.expiresAt > Date.now());
   const shouldShowAlert = alertIsActive && (!alertaData.target || alertaData.target === 'all' || alertaData.target === 'cantantes');
@@ -244,8 +249,8 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
           </div>
         </header>
 
-        <main className={`flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-4 text-center sm:justify-center sm:px-8 sm:py-5 lg:px-14 [&::-webkit-scrollbar]:hidden ${isMobileLandscape ? 'justify-center py-2' : 'justify-start pb-4 pt-5'}`}>
-          <div className={`mx-auto flex w-full max-w-7xl flex-col items-center ${isMobileLandscape ? 'gap-2' : 'gap-3 sm:gap-6'}`}>
+        <main ref={musicAreaRef} className={`flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden scroll-pb-8 px-4 text-center sm:justify-center sm:px-8 sm:py-5 lg:px-14 [&::-webkit-scrollbar]:hidden ${isMobileLandscape ? 'justify-center py-2' : 'justify-start pb-8 pt-5'}`}>
+          <div ref={musicContentRef} className={`mx-auto flex w-full max-w-7xl flex-col items-center ${isMobileLandscape ? 'gap-1.5 pb-1' : 'gap-2 pb-2 sm:gap-4'}`}>
             <div className={`inline-flex max-w-full rounded-full border border-blue-400/30 bg-blue-500/15 font-black uppercase text-blue-100 ${isMobileLandscape ? 'px-3 py-1 text-[10px] tracking-[0.14em]' : 'px-4 py-1.5 text-xs tracking-[0.18em] sm:text-sm sm:tracking-[0.2em]'}`}>
               {showLogo ? 'Logo en pantalla' : activeTitle}
             </div>
@@ -257,7 +262,7 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
                 {contentItems.map((item, idx) => {
                   if (item.type === 'cue') {
                     return (
-                      <div key={idx} className="max-w-full rounded-2xl border border-violet-300/45 bg-violet-500/22 px-5 py-2.5 text-base font-black uppercase tracking-wide text-violet-50 shadow-[0_18px_45px_rgba(124,58,237,0.18)] sm:text-2xl">
+                      <div key={idx} className="max-w-full rounded-2xl border border-violet-300/45 bg-violet-500/22 px-5 py-2.5 font-black uppercase tracking-wide text-violet-50 shadow-[0_18px_45px_rgba(124,58,237,0.18)]" style={{ fontSize: `calc(clamp(1rem, 3.2vmin, 2rem) * ${fontScale} * var(--return-content-scale, 1))` }}>
                         Indicación: {item.text}
                       </div>
                     );

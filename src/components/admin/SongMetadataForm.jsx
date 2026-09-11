@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { traducirAcorde } from '../../utils/musicCore';
 
 const SongMetadataForm = ({
@@ -87,3 +87,4 @@ const SongMetadataForm = ({
 );
 
 export default SongMetadataForm;
+
