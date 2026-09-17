@@ -218,7 +218,8 @@ service cloud.firestore {
         'currentSongId',
         'proyectorAlerta',
         'proyectorTicker',
-        'outputs'
+        'outputs',
+        'announcementState'
       ];
     }
 
@@ -296,7 +297,12 @@ service cloud.firestore {
     }
 
     function canUpdateEventAsMedia() {
-      return isMediaOrAdmin() && onlyEventKeys(projectorEventFields());
+      return isMediaOrAdmin()
+        && onlyEventKeys(projectorEventFields())
+        && (
+          !changedEventKeys().hasAny(['announcementState'])
+          || validInactiveAnnouncementState()
+        );
     }
 
     function canUpdateEventBibleOutline() {
@@ -306,6 +312,65 @@ service cloud.firestore {
         && request.resource.data.bibleOutline.keys().hasOnly(['items', 'updatedAt'])
         && request.resource.data.bibleOutline.items is list
         && request.resource.data.bibleOutline.items.size() <= 50;
+    }
+
+    function validAnnouncementState() {
+      return request.resource.data.announcementState is map
+        && request.resource.data.announcementState.keys().hasOnly([
+          'announcementId', 'currentSlideIndex', 'currentSlide', 'totalSlides',
+          'presentationActive', 'transition', 'autoAdvance', 'updatedAt'
+        ])
+        && request.resource.data.announcementState.announcementId is string
+        && request.resource.data.announcementState.currentSlideIndex is int
+        && request.resource.data.announcementState.currentSlideIndex >= 0
+        && request.resource.data.announcementState.totalSlides is int
+        && request.resource.data.announcementState.totalSlides >= 0
+        && request.resource.data.announcementState.totalSlides <= 100
+        && request.resource.data.announcementState.presentationActive is bool
+        && request.resource.data.announcementState.transition is map
+        && request.resource.data.announcementState.transition.type in ['fade', 'slide', 'zoom']
+        && request.resource.data.announcementState.transition.durationMs is int
+        && request.resource.data.announcementState.transition.durationMs >= 0
+        && request.resource.data.announcementState.transition.durationMs <= 5000
+        && request.resource.data.announcementState.autoAdvance is map
+        && request.resource.data.announcementState.autoAdvance.enabled is bool
+        && request.resource.data.announcementState.autoAdvance.durationMs is int
+        && request.resource.data.announcementState.autoAdvance.durationMs >= 1000
+        && request.resource.data.announcementState.autoAdvance.durationMs <= 3600000
+        && (
+          !request.resource.data.announcementState.presentationActive
+          || (
+            request.resource.data.announcementState.announcementId != ''
+            && exists(/databases/$(database)/documents/anuncios/$(request.resource.data.announcementState.announcementId))
+            && request.resource.data.announcementState.totalSlides > 0
+            && request.resource.data.announcementState.currentSlideIndex < request.resource.data.announcementState.totalSlides
+            && request.resource.data.announcementState.currentSlide is map
+            && request.resource.data.announcementState.currentSlide.keys().hasOnly(['id'])
+            && request.resource.data.announcementState.currentSlide.id is string
+            && request.resource.data.announcementState.currentSlide.id != ''
+          )
+        );
+    }
+
+    function validInactiveAnnouncementState() {
+      return validAnnouncementState()
+        && request.resource.data.announcementState.announcementId == ''
+        && request.resource.data.announcementState.currentSlideIndex == 0
+        && request.resource.data.announcementState.currentSlide == null
+        && request.resource.data.announcementState.totalSlides == 0
+        && request.resource.data.announcementState.presentationActive == false
+        && request.resource.data.announcementState.autoAdvance.enabled == false;
+    }
+
+    function canUpdateEventAnnouncement() {
+      return isOwnerOnly()
+        && onlyEventKeys([
+          'announcementState', 'projectorState', 'liveState', 'proyectorMedia',
+          'proyectorSlide', 'proyectorFondo', 'proyectorFondoMedia', 'currentSongId',
+          'proyectorSongId', 'proyectorSlideIndex', 'proyectorNextSlide',
+          'proyectorNextSong', 'proyectorLogo', 'proyectorApagado'
+        ])
+        && validAnnouncementState();
     }
 
     function canUpdateEventAsParticipant() {
@@ -355,6 +420,7 @@ service cloud.firestore {
       allow update: if canUpdateEventAsAdmin()
         || canUpdateEventAsMedia()
         || canUpdateEventBibleOutline()
+        || canUpdateEventAnnouncement()
         || canUpdateEventAsPastorProjection(eventoId)
         || canUpdateEventAsParticipant();
       allow delete: if isAdminLike();
@@ -394,6 +460,10 @@ service cloud.firestore {
       allow read: if isMediaOrAdmin() || (isPastorRole() && isSharedActiveMediaResource());
       allow create, update: if isMediaOrAdmin();
       allow delete: if isAdminLike();
+    }
+
+    match /anuncios/{announcementId} {
+      allow read, create, update, delete: if isOwnerOnly();
     }
 
     match /predicas/{predicaId} {

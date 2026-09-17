@@ -9,6 +9,8 @@ import { canAccessController, canAccessMultimediaTools, canViewEventsAndSetlists
 import confetti from 'canvas-confetti';
 import { useFeedback } from '../ui/FeedbackProvider';
 
+const isOperationalEvent = (event = {}) => !event.completado && event.estado !== 'cancelado';
+
 const AdminDashboard = ({ user }) => {
   const navigate = useNavigate();
   const { confirm: askConfirm } = useFeedback();
@@ -49,7 +51,7 @@ const AdminDashboard = ({ user }) => {
     const unsubEventos = onSnapshot(qEventos, async (snap) => {
       if (!snap.empty) {
         const docs = snap.docs.map(d => ({id: d.id, ...d.data()}));
-        const activeEvents = docs.filter(d => !d.completado);
+        const activeEvents = docs.filter(isOperationalEvent);
         setEventosProximos(activeEvents);
         const nextEv = activeEvents[0]; // Filtramos localmente los completados
 
@@ -85,7 +87,7 @@ const AdminDashboard = ({ user }) => {
         const invs = [];
         snap.docs.forEach(doc => {
           const ev = doc.data();
-          if (ev.estadoAsistencia && ev.estadoAsistencia[user.uid] === 'pendiente') invs.push({ id: doc.id, ...ev });
+          if (isOperationalEvent(ev) && ev.estadoAsistencia && ev.estadoAsistencia[user.uid] === 'pendiente') invs.push({ id: doc.id, ...ev });
         });
         setInvitaciones(invs);
       });

@@ -16,13 +16,16 @@ import useMediaLibrary from '../../hooks/useMediaLibrary';
 import { canAccessMediaLibrary } from '../../utils/mediaLibraryPermissions';
 import { resolveSectionMediaForKey, resolveSongBackground } from '../../utils/mediaResolver';
 import { createInactiveSongLiveState } from '../../utils/liveState';
-import { buildProjectorMediaPayload } from '../../utils/projectorMediaState';
+import { buildPanicProjectorPayload, buildProjectorMediaPayload, buildStoppedProjectorMediaPayload, createProjectionWriteQueue, resolveProjectorBackground, selectSongProjectionBackground } from '../../utils/projectorMediaState';
 import { agregarCancionEnVivo, quitarCancionEnVivo } from '../../utils/liveSetlistFunctions';
+import { buildInactiveAnnouncementState } from '../../utils/announcementState';
 import { useFeedback } from '../ui/FeedbackProvider';
 import { PREACHER_REQUEST_STATUS, PREACHER_REQUEST_TYPES, MULTIMEDIA_TO_PASTOR_PRESETS, buildPreachingProjectorState } from '../../utils/preachingLive';
 import { isAdmin, isMultimedia, isOwner } from '../../utils/rolePermissions';
 import BiblePicker from '../bible/BiblePicker';
 import { assertBibleOutlineSize, buildBibleOutlineUpdate, createBibleOutlineItem, getBibleOutlinePreview, normalizeBibleOutlineItems } from '../../utils/bibleOutline';
+import { buildStoppedBibleProjectionPayload, capturePreviousProjectionFields, isMatchingBibleProjection } from '../../utils/bibleProjectionState';
+import { getPreachingBiblePreview, normalizePreachingBiblePreviewIndex } from '../../utils/preachingProjectionState';
 
 
 const ProyectorController = ({ user }) => {
@@ -91,6 +94,9 @@ const ProyectorController = ({ user }) => {
   const liveVideoRef = useRef(null); // Ref para el video en la vista "En Vivo"
   const livePreviewMediaRef = useRef(null); // Ref para el video en la vista "Pre-proyección"
   const undoSnapshotRef = useRef(null);
+  const preBibleVisualStateRef = useRef(null);
+  const bibleProjectionActiveRef = useRef(false);
+  const [enqueueProjectionWrite] = useState(() => createProjectionWriteQueue());
   const [canUndoLastSend, setCanUndoLastSend] = useState(false);
   const [isUndoingLastSend, setIsUndoingLastSend] = useState(false);
   const [countdownMinutes, setCountdownMinutes] = useState(5);
@@ -110,6 +116,8 @@ const ProyectorController = ({ user }) => {
   const [preacherRequests, setPreacherRequests] = useState([]);
   const [preachingStatus, setPreachingStatus] = useState(null);
   const [activePreaching, setActivePreaching] = useState(null);
+  const [selectedPreachingBlockId, setSelectedPreachingBlockId] = useState('');
+  const [preachingBiblePreviewIndex, setPreachingBiblePreviewIndex] = useState(0);
   const [handlingPreacherRequestId, setHandlingPreacherRequestId] = useState('');
   const [projectionSourceMode, setProjectionSourceMode] = useState('songs');
   const [showScreensMenu, setShowScreensMenu] = useState(false);
@@ -201,10 +209,47 @@ const ProyectorController = ({ user }) => {
 
   const publicVerses = useMemo(() => publicPreachingBlocks.filter(block => block.type === 'verse'), [publicPreachingBlocks]);
   const publicMediaInstructions = useMemo(() => publicPreachingBlocks.filter(block => block.type === 'mediaInstruction'), [publicPreachingBlocks]);
+  const publicProjectableBlocks = useMemo(() => publicPreachingBlocks.filter(block => ['point', 'subpoint', 'verse'].includes(block.type)), [publicPreachingBlocks]);
+  const selectedPreachingBlockIndex = Math.max(0, publicProjectableBlocks.findIndex(block => block.id === selectedPreachingBlockId));
+  const selectedPreachingBlock = publicProjectableBlocks[selectedPreachingBlockIndex] || null;
+  const selectedPreachingBiblePreview = useMemo(
+    () => getPreachingBiblePreview(selectedPreachingBlock),
+    [selectedPreachingBlock]
+  );
+  const selectedPreachingBibleSlides = selectedPreachingBiblePreview?.slides || [];
+  const safePreachingBiblePreviewIndex = normalizePreachingBiblePreviewIndex(
+    selectedPreachingBibleSlides,
+    preachingBiblePreviewIndex
+  );
+  const selectedPreachingBibleSlide = selectedPreachingBibleSlides[safePreachingBiblePreviewIndex] || null;
+
+  const selectPreachingBlock = (blockId) => {
+    setSelectedPreachingBlockId(blockId || '');
+    setPreachingBiblePreviewIndex(0);
+  };
+
+  useEffect(() => {
+    if (!publicProjectableBlocks.length) {
+      setSelectedPreachingBlockId('');
+      return;
+    }
+    if (!publicProjectableBlocks.some(block => block.id === selectedPreachingBlockId)) {
+      setSelectedPreachingBlockId(currentPublicPoint?.id || publicProjectableBlocks[0].id);
+      setPreachingBiblePreviewIndex(0);
+    }
+  }, [currentPublicPoint?.id, publicProjectableBlocks, selectedPreachingBlockId]);
   const bibleOutlineItems = useMemo(
     () => normalizeBibleOutlineItems(evento?.bibleOutline?.items),
     [evento?.bibleOutline?.items]
   );
+
+  useEffect(() => {
+    if (!biblePreviewOutlineItemId) return;
+    if (bibleOutlineItems.some((item) => item.id === biblePreviewOutlineItemId)) return;
+    setBiblePreview(null);
+    setBiblePreviewOutlineItemId(null);
+    setPreachingBiblePreviewIndex(0);
+  }, [bibleOutlineItems, biblePreviewOutlineItemId]);
 
   const screenNow = useMemo(() => {
     const state = evento?.projectorState;
@@ -253,6 +298,8 @@ const ProyectorController = ({ user }) => {
     setSearchTerm(''); // 🔍 Limpiar búsqueda
     setIsLogoActive(false);
     setIsBlackout(false);
+    preBibleVisualStateRef.current = null;
+    bibleProjectionActiveRef.current = false;
   }, [eventoId]);
 
   useEffect(() => {
@@ -416,6 +463,7 @@ const ProyectorController = ({ user }) => {
       if (snap.exists()) {
         const data = snap.data();
         setEvento(data);
+        bibleProjectionActiveRef.current = data.projectorState?.contentType === 'bible';
         setLiveSlide(data.proyectorSlide || null);
         setIsBlackout(data.proyectorApagado ?? false);
         setFondoActivo(data.proyectorFondo || null);
@@ -649,7 +697,7 @@ const ProyectorController = ({ user }) => {
 
     setIsUndoingLastSend(true);
     try {
-      await setDoc(doc(db, 'eventos', eventoId), buildRestorePayload(snapshot), { merge: true });
+      await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), buildRestorePayload(snapshot), { merge: true }));
       undoSnapshotRef.current = null;
       setCanUndoLastSend(false);
       setPreviewMedia(null);
@@ -777,12 +825,14 @@ const ProyectorController = ({ user }) => {
         sourceActor: 'multimedia',
         previousProjectorState: evento?.projectorState || null
       });
-      await setDoc(doc(db, 'eventos', eventoId), {
+      await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), {
+        announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
         proyectorMedia: null,
         proyectorLogo: false,
         proyectorApagado: false,
+        proyectorFondo: null,
         proyectorFondoMedia: null,
         proyectorSongId: null,
         proyectorSlideIndex: -1,
@@ -790,7 +840,7 @@ const ProyectorController = ({ user }) => {
         proyectorNextSong: null,
         liveState: buildInactiveSongLiveState('preaching', request.title || request.reference || 'Predica'),
         currentSongId: null
-      }, { merge: true });
+      }, { merge: true }));
       await updateDoc(doc(db, 'eventos', eventoId, 'preacherRequests', request.id), {
         status: PREACHER_REQUEST_STATUS.PROJECTED,
         handledAt: serverTimestamp(),
@@ -810,21 +860,14 @@ const ProyectorController = ({ user }) => {
     }
   };
 
-  const projectPreachingBlockFromController = async (block) => {
+  const projectPreachingBlockFromController = async (block, selectedVerseIndex = 0) => {
     if (!canHandlePastorRequests || !block || !activePreaching?.id) return;
-    if (block.type === 'verse' && block.biblePassage?.verses?.length) {
+    const biblePreview = getPreachingBiblePreview(block);
+    if (biblePreview) {
       await projectBiblePassage({
-        passage: {
-          ...block.biblePassage,
-          bibleId: block.bibleId || '',
-          passageId: block.passageId || '',
-          provider: block.provider || 'local',
-          copyright: block.copyright || '',
-          abbreviation: block.translation || '',
-          translationName: block.translationName || ''
-        },
-        slides: block.biblePassage.slides || [],
-        selectedIndex: 0
+        passage: biblePreview.passage,
+        slides: biblePreview.slides,
+        selectedIndex: selectedVerseIndex
       });
       return;
     }
@@ -851,12 +894,14 @@ const ProyectorController = ({ user }) => {
         sourceActor: 'multimedia',
         previousProjectorState: evento?.projectorState || null
       });
-      await setDoc(doc(db, 'eventos', eventoId), {
+      await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), {
+        announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
         proyectorMedia: null,
         proyectorLogo: false,
         proyectorApagado: false,
+        proyectorFondo: null,
         proyectorFondoMedia: null,
         proyectorSongId: null,
         proyectorSlideIndex: -1,
@@ -864,7 +909,7 @@ const ProyectorController = ({ user }) => {
         proyectorNextSong: null,
         liveState: buildInactiveSongLiveState('preaching', requestLike.title || requestLike.reference || 'Predica'),
         currentSongId: null
-      }, { merge: true });
+      }, { merge: true }));
       notify('Contenido de predica proyectado.', { type: 'success' });
     } catch (error) {
       console.error('Error proyectando bloque de predica:', error);
@@ -885,7 +930,14 @@ const ProyectorController = ({ user }) => {
     try {
       rememberUndoSnapshot();
       const now = Date.now();
-      await setDoc(doc(db, 'eventos', eventoId), {
+      const projectionActionId = `${now}-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+      await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
+        const eventRef = doc(db, 'eventos', eventoId);
+        const eventSnapshot = await transaction.get(eventRef);
+        if (!eventSnapshot.exists()) throw new Error('El evento ya no esta disponible.');
+        const previousProjectionFields = capturePreviousProjectionFields(eventSnapshot.data());
+        transaction.set(eventRef, {
+        announcementState: buildInactiveAnnouncementState(),
         projectorState: {
           type: 'preaching',
           preachingType: 'verse',
@@ -914,26 +966,31 @@ const ProyectorController = ({ user }) => {
           background: null,
           backgroundMedia: null,
           previousProjectorState: null,
+          previousProjectionFields,
           sourceActor: 'multimedia',
           actorUid: user?.uid || null,
           actorName: user?.nombre || user?.email || 'Multimedia',
           actorRole: user?.rol || user?.role || '',
           updatedBy: user?.nombre || user?.email || 'Multimedia',
           updatedAt: now,
-          projectionVersion: now
+          projectionVersion: now,
+          projectionActionId
         },
         proyectorSlide: null,
         proyectorMedia: null,
         proyectorLogo: false,
         proyectorApagado: false,
+        proyectorFondo: null,
         proyectorFondoMedia: null,
         proyectorSongId: null,
         proyectorSlideIndex: -1,
         proyectorNextSlide: null,
         proyectorNextSong: null,
-        liveState: buildInactiveSongLiveState('bible', slide.reference || 'Biblia'),
+        liveState: buildInactiveSongLiveState({ contentType: 'bible', contentTitle: slide.reference || 'Biblia' }),
         currentSongId: null
-      }, { merge: true });
+        }, { merge: true });
+      }));
+      bibleProjectionActiveRef.current = true;
       setLastBiblePassage(passage);
       notify('Pasaje proyectado.', { type: 'success' });
     } catch (error) {
@@ -1002,6 +1059,40 @@ const ProyectorController = ({ user }) => {
     setBiblePreviewOutlineItemId(item.id);
   };
 
+  const clearLocalBibleControl = () => {
+    setBiblePreview(null);
+    setBiblePreviewOutlineItemId(null);
+    setLastBiblePassage(null);
+    preBibleVisualStateRef.current = null;
+    bibleProjectionActiveRef.current = false;
+  };
+
+  const stopPublicBibleProjection = async () => {
+    const projectionActionId = evento?.projectorState?.projectionActionId;
+    if (!isMatchingBibleProjection(evento?.projectorState, projectionActionId)) return;
+    try {
+      const restored = await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
+        const eventRef = doc(db, 'eventos', eventoId);
+        const eventSnapshot = await transaction.get(eventRef);
+        if (!eventSnapshot.exists()) return false;
+        const currentState = eventSnapshot.data()?.projectorState;
+        if (!isMatchingBibleProjection(currentState, projectionActionId)) return false;
+        transaction.set(eventRef, buildStoppedBibleProjectionPayload({
+          previousProjectionFields: currentState.previousProjectionFields,
+          liveState: buildInactiveSongLiveState({ contentType: 'none', contentTitle: 'Sin contenido activo' })
+        }), { merge: true });
+        return true;
+      }));
+      if (!restored) return;
+      preBibleVisualStateRef.current = null;
+      bibleProjectionActiveRef.current = false;
+      notify('Proyeccion biblica detenida.', { type: 'success' });
+    } catch (error) {
+      console.error('Error deteniendo la proyeccion biblica:', error);
+      notify('No se pudo detener la proyeccion biblica.', { type: 'error' });
+    }
+  };
+
   const projectBibleOutlineItem = async (item) => {
     const preview = getBibleOutlinePreview(item);
     if (!preview) return;
@@ -1013,18 +1104,16 @@ const ProyectorController = ({ user }) => {
   const moveBiblePreviewSlide = async (delta) => {
     const slides = Array.isArray(biblePreview?.slides) ? biblePreview.slides : [];
     if (slides.length < 2) return;
-    const projectedItemId = evento?.projectorState?.contentType === 'bible'
-      ? evento?.projectorState?.bible?.outlineItemId
-      : null;
-    const currentIndex = projectedItemId && projectedItemId === biblePreviewOutlineItemId
-      ? Number(evento?.projectorState?.bible?.slideIndex || 0)
-      : Number(biblePreview?.selectedIndex || 0);
+    const currentIndex = Number(biblePreview?.selectedIndex || 0);
     const nextIndex = Math.max(0, Math.min(currentIndex + delta, slides.length - 1));
     if (nextIndex === currentIndex) return;
     setBiblePreview((current) => current ? { ...current, selectedIndex: nextIndex } : current);
-    if (projectedItemId && projectedItemId === biblePreviewOutlineItemId) {
-      await projectBibleDeckSlide(delta);
-    }
+  };
+
+  const selectBiblePreviewSlide = (index) => {
+    const slides = Array.isArray(biblePreview?.slides) ? biblePreview.slides : [];
+    if (!slides[index]) return;
+    setBiblePreview((current) => current ? { ...current, selectedIndex: index } : current);
   };
 
   const moveBibleOutlineItem = async (itemId, delta) => {
@@ -1127,8 +1216,8 @@ const ProyectorController = ({ user }) => {
     }
     const sectionPrimaryMedia = Array.isArray(slide.media) ? slide.media.find(resource => resource?.url) : null;
     const songBackground = resolveSongBackground(activeSong, mediaLibraryItems);
-    const slideBackground = sectionPrimaryMedia?.url || fondoActivo || songBackground?.url || null;
-    const backgroundSourceMedia = sectionPrimaryMedia || (!fondoActivo ? songBackground : null);
+    const backgroundSourceMedia = selectSongProjectionBackground(sectionPrimaryMedia, songBackground);
+    const slideBackground = backgroundSourceMedia?.url || null;
     const slideBackgroundMedia = backgroundSourceMedia?.url ? {
       mediaId: backgroundSourceMedia.mediaId || null,
       title: backgroundSourceMedia.title || backgroundSourceMedia.name || slide.titulo || 'Multimedia de seccion',
@@ -1169,6 +1258,7 @@ const ProyectorController = ({ user }) => {
     }
 
     const updates = {
+      announcementState: buildInactiveAnnouncementState(),
       proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
       projectorState: {
         type: 'lyrics',
@@ -1204,7 +1294,7 @@ const ProyectorController = ({ user }) => {
       proyectorApagado: false,
       proyectorMedia: null, // Limpiar cualquier media activa al proyectar una diapositiva
     };
-    try { await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true }); } 
+    try { await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), updates, { merge: true })); }
     catch (e) { console.error("Error al proyectar diapositiva:", e); }
   };
 
@@ -1232,18 +1322,18 @@ const ProyectorController = ({ user }) => {
     }
   };
 
-  const projectBibleDeckSlide = async (delta) => {
+  const projectBibleDeckSlideAt = async (targetIndex) => {
     const currentState = evento?.projectorState;
     const bible = currentState?.contentType === 'bible' ? currentState.bible : null;
     const slides = Array.isArray(bible?.slides) ? bible.slides : [];
     if (!slides.length) return;
     const currentIndex = Number.isFinite(Number(bible.slideIndex)) ? Number(bible.slideIndex) : 0;
-    const nextIndex = Math.max(0, Math.min(currentIndex + delta, slides.length - 1));
+    const nextIndex = Math.max(0, Math.min(Number(targetIndex) || 0, slides.length - 1));
     if (nextIndex === currentIndex) return;
     const slide = slides[nextIndex];
     const now = Date.now();
     try {
-      await setDoc(doc(db, 'eventos', eventoId), {
+      await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), {
         projectorState: {
           ...currentState,
           title: slide.reference,
@@ -1257,11 +1347,16 @@ const ProyectorController = ({ user }) => {
           updatedAt: now,
           projectionVersion: now
         }
-      }, { merge: true });
+      }, { merge: true }));
     } catch (error) {
       console.error('Error navegando diapositiva biblica:', error);
       notify('No se pudo cambiar la diapositiva.', { type: 'error' });
     }
+  };
+
+  const projectBibleDeckSlide = async (delta) => {
+    const currentIndex = Number(evento?.projectorState?.bible?.slideIndex || 0);
+    await projectBibleDeckSlideAt(currentIndex + delta);
   };
 
   const isTemporarySetlistItem = (item) => String(item?.idLocal || '').startsWith('extra_');
@@ -1299,10 +1394,11 @@ const ProyectorController = ({ user }) => {
       media: mediaObj,
       title: mediaObj.name || mediaObj.title || 'Media',
       timer: evento?.proyectorCountdown || null,
-      background: fondoActivo || null,
       liveState: buildInactiveSongLiveState('media', mediaObj.name || mediaObj.title || 'Multimedia')
     });
-    try { await setDoc(doc(db, 'eventos', eventoId), updates, { merge: true }); } 
+    updates.proyectorFondo = null;
+    updates.proyectorFondoMedia = null;
+    try { await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), updates, { merge: true })); }
     catch (e) { console.error(e); }
   };
 
@@ -1330,6 +1426,7 @@ const ProyectorController = ({ user }) => {
 
   const toggleBlackout = async () => {
     const nextBlackout = !isBlackout;
+    const currentBackground = resolveProjectorBackground(evento);
     rememberUndoSnapshot();
     try {
       await setDoc(doc(db, 'eventos', eventoId), {
@@ -1348,7 +1445,8 @@ const ProyectorController = ({ user }) => {
           content: '',
           media: null,
           timer: evento?.proyectorCountdown || null,
-          background: fondoActivo || null,
+          background: currentBackground.url,
+          backgroundMedia: currentBackground.media,
           updatedAt: Date.now()
         }
       }, { merge: true });
@@ -1364,6 +1462,7 @@ const ProyectorController = ({ user }) => {
 
   const toggleLogo = async () => {
     const nextLogo = !isLogoActive;
+    const currentBackground = resolveProjectorBackground(evento);
     rememberUndoSnapshot();
     try {
       await setDoc(doc(db, 'eventos', eventoId), {
@@ -1383,7 +1482,8 @@ const ProyectorController = ({ user }) => {
           content: '',
           media: null,
           timer: evento?.proyectorCountdown || null,
-          background: fondoActivo || null,
+          background: currentBackground.url,
+          backgroundMedia: currentBackground.media,
           updatedAt: Date.now()
         }
       }, { merge: true });
@@ -1407,12 +1507,22 @@ const ProyectorController = ({ user }) => {
 
   const detenerMedia = async () => {
     rememberUndoSnapshot();
-    await updateDoc(doc(db, 'eventos', eventoId), { proyectorMedia: null });
-    setPreviewMedia(null); // Limpiar también la vista previa local al detener
+    try {
+      const updates = buildStoppedProjectorMediaPayload({
+        eventData: evento,
+        liveState: buildInactiveSongLiveState('none', 'Sin contenido activo')
+      });
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), updates));
+      setPreviewMedia(null); // Limpiar también la vista previa local al detener
+    } catch (error) {
+      console.error('Error deteniendo multimedia:', error);
+      notify('No se pudo detener la multimedia.', { type: 'error' });
+    }
   };
 
   const clearPreachingProjection = async () => {
     if (evento?.projectorState?.type !== 'preaching') return;
+    const currentBackground = resolveProjectorBackground(evento);
     rememberUndoSnapshot();
     try {
       await setDoc(doc(db, 'eventos', eventoId), {
@@ -1422,13 +1532,16 @@ const ProyectorController = ({ user }) => {
           content: '',
           media: null,
           timer: evento?.proyectorCountdown || null,
-          background: fondoActivo || null,
+          background: currentBackground.url,
+          backgroundMedia: currentBackground.media,
           updatedAt: Date.now()
         },
         proyectorSlide: null,
         proyectorMedia: null,
         proyectorApagado: false,
         proyectorLogo: false,
+        proyectorFondo: null,
+        proyectorFondoMedia: null,
         liveState: buildInactiveSongLiveState('none', 'Sin contenido musical'),
         currentSongId: null,
         proyectorSongId: null,
@@ -1446,6 +1559,7 @@ const ProyectorController = ({ user }) => {
   const toggleCountdown = async (active) => {
     const mins = parseInt(countdownMinutes) || 5;
     const endTimestamp = active ? Date.now() + (mins * 60000) : null;
+    const currentBackground = resolveProjectorBackground(evento);
     try {
       await setDoc(doc(db, 'eventos', eventoId), {
         proyectorCountdown: { active, endTimestamp: endTimestamp },
@@ -1455,7 +1569,8 @@ const ProyectorController = ({ user }) => {
           title: evento?.projectorState?.title || 'Cronómetro',
           content: evento?.projectorState?.content || '',
           media: evento?.projectorState?.media || null,
-          background: evento?.projectorState?.background || fondoActivo || null,
+          background: currentBackground.url,
+          backgroundMedia: currentBackground.media,
           timer: { active, endTimestamp: endTimestamp },
           updatedAt: Date.now()
         }
@@ -1465,13 +1580,9 @@ const ProyectorController = ({ user }) => {
 
   const botonPanico = async () => {
     rememberUndoSnapshot();
-    await setDoc(doc(db, 'eventos', eventoId), { 
-      proyectorSlide: null, proyectorMedia: null, proyectorLogo: false, proyectorApagado: true, proyectorAlerta: null, proyectorTicker: null, proyectorFondoMedia: null,
-      proyectorSongId: null, proyectorSlideIndex: -1, proyectorNextSlide: null, proyectorNextSong: null,
-      liveState: buildInactiveSongLiveState('blackout', 'Pantalla negra'),
-      currentSongId: null,
-      projectorState: { type: 'blackout', title: 'Pantalla negra', content: '', media: null, timer: null, background: null, backgroundMedia: null, updatedAt: Date.now() }
-    }, { merge: true });
+    await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), buildPanicProjectorPayload({
+      liveState: buildInactiveSongLiveState('blackout', 'Pantalla negra')
+    }), { merge: true }));
     setPreviewMedia(null);
     setLiveSlide(null);
   };
@@ -1589,7 +1700,7 @@ const ProyectorController = ({ user }) => {
     });
   };
 
-  const handleUploadBackground = async (e) => {
+  const handleUploadBackground = async (e, { applyAsBackground = false } = {}) => {
     const file = e.target.files[0];
     if (!file) return;
     
@@ -1603,7 +1714,13 @@ const ProyectorController = ({ user }) => {
       const url = uploaded.url;
       
       if (url) {
-        rememberUndoSnapshot();
+        const uploadedBackgroundMedia = {
+          title: file.name,
+          name: file.name,
+          type: uploaded.type || fileType,
+          url,
+          source: 'vault'
+        };
         const nuevaLib = [...multimediaLib, { 
           url, 
         type: uploaded.type || fileType, 
@@ -1611,23 +1728,26 @@ const ProyectorController = ({ user }) => {
           folder: currentFolder || 'root'
         }];
 
-        // Actualizamos el fondo del evento actual, pero los archivos a la Bóveda Global
-        await setDoc(doc(db, 'eventos', eventoId), { 
-          proyectorFondo: url,
-          proyectorFondoMedia: {
-            title: file.name,
-            name: file.name,
-            type: uploaded.type || fileType,
-            url,
-            source: 'vault'
-          }
-        }, { merge: true });
         await setDoc(doc(db, 'sistema', 'multimedia'), { 
           multimediaLib: nuevaLib 
         }, { merge: true });
+
+        if (applyAsBackground) {
+          rememberUndoSnapshot();
+          await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), {
+            proyectorFondo: url,
+            proyectorFondoMedia: uploadedBackgroundMedia,
+            projectorState: {
+              ...(evento?.projectorState || {}),
+              background: url,
+              backgroundMedia: uploadedBackgroundMedia,
+              updatedAt: Date.now()
+            }
+          }, { merge: true }));
+        }
         
         // Si es una cancion real (no modo global), guardamos la referencia
-        if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
+        if (applyAsBackground && eventoId !== 'global' && activeSongId && guardarEnCancion) {
           await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: url }, { merge: true });
           setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: url } : c));
         }
@@ -1645,7 +1765,16 @@ const ProyectorController = ({ user }) => {
 
   const quitarFondo = async () => {
     rememberUndoSnapshot();
-    await setDoc(doc(db, 'eventos', eventoId), { proyectorFondo: null, proyectorFondoMedia: null }, { merge: true });
+    await setDoc(doc(db, 'eventos', eventoId), {
+      proyectorFondo: null,
+      proyectorFondoMedia: null,
+      projectorState: {
+        ...(evento?.projectorState || {}),
+        background: null,
+        backgroundMedia: null,
+        updatedAt: Date.now()
+      }
+    }, { merge: true });
     
     if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
       await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: null }, { merge: true });
@@ -1741,12 +1870,58 @@ const ProyectorController = ({ user }) => {
   const isBiblePreviewProjected = Boolean(
     biblePreviewOutlineItemId
     && projectedBibleOutlineItemId === biblePreviewOutlineItemId
+    && Number(biblePreview?.selectedIndex || 0) === Number(evento?.projectorState?.bible?.slideIndex || 0)
   );
   const biblePreviewSlides = Array.isArray(biblePreview?.slides) ? biblePreview.slides : [];
-  const biblePreviewIndex = isBiblePreviewProjected
-    ? Math.max(0, Math.min(Number(evento?.projectorState?.bible?.slideIndex || 0), Math.max(biblePreviewSlides.length - 1, 0)))
-    : Math.max(0, Math.min(Number(biblePreview?.selectedIndex || 0), Math.max(biblePreviewSlides.length - 1, 0)));
+  const biblePreviewIndex = Math.max(0, Math.min(Number(biblePreview?.selectedIndex || 0), Math.max(biblePreviewSlides.length - 1, 0)));
   const biblePreviewSlide = biblePreviewSlides[biblePreviewIndex] || null;
+  const preachingSelectionPanel = (
+    <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+      <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Seleccion local</p>
+      <select value={selectedPreachingBlock?.id || ''} onChange={event => selectPreachingBlock(event.target.value)} className="w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2 text-xs font-bold text-white">
+        {publicProjectableBlocks.map((block, index) => <option key={block.id || index} value={block.id}>{index + 1}. {block.reference || block.title || block.type}</option>)}
+      </select>
+
+      {selectedPreachingBibleSlide ? (
+        <div className="mt-3 rounded-xl border border-blue-400/20 bg-blue-500/10 p-3">
+          <p className="text-xs font-black text-blue-50">{selectedPreachingBibleSlide.reference}</p>
+          <p className="mt-2 whitespace-pre-wrap text-xs font-bold leading-relaxed text-blue-50/85">{selectedPreachingBibleSlide.text}</p>
+          <div className="mt-3 grid grid-cols-[auto_1fr_auto] items-center gap-2">
+            <button type="button" aria-label="Versiculo anterior" disabled={safePreachingBiblePreviewIndex === 0} onClick={() => setPreachingBiblePreviewIndex(index => normalizePreachingBiblePreviewIndex(selectedPreachingBibleSlides, index - 1))} className="rounded-lg border border-white/10 p-2 disabled:opacity-30"><ChevronLeft size={15} /></button>
+            <span className="text-center text-[10px] font-black text-blue-100">{safePreachingBiblePreviewIndex + 1} / {selectedPreachingBibleSlides.length}</span>
+            <button type="button" aria-label="Versiculo siguiente" disabled={safePreachingBiblePreviewIndex >= selectedPreachingBibleSlides.length - 1} onClick={() => setPreachingBiblePreviewIndex(index => normalizePreachingBiblePreviewIndex(selectedPreachingBibleSlides, index + 1))} className="rounded-lg border border-white/10 p-2 disabled:opacity-30"><ChevronRight size={15} /></button>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {selectedPreachingBibleSlides.map((slide, index) => {
+              const projected = evento?.projectorState?.contentType === 'bible'
+                && evento?.projectorState?.passageId === selectedPreachingBiblePreview?.passage?.passageId
+                && Number(evento?.projectorState?.bible?.slideIndex || 0) === index;
+              return (
+                <button key={`${slide.reference}-${index}`} type="button" onClick={() => setPreachingBiblePreviewIndex(normalizePreachingBiblePreviewIndex(selectedPreachingBibleSlides, index))} aria-pressed={safePreachingBiblePreviewIndex === index} className={`min-h-9 min-w-9 rounded-lg border px-2 text-[10px] font-black ${safePreachingBiblePreviewIndex === index ? 'border-blue-200 bg-blue-600 text-white' : projected ? 'border-emerald-300 bg-emerald-500/20 text-emerald-100' : 'border-white/10 bg-black/20 text-zinc-300'}`}>
+                  {slide.verseNumber ?? index + 1}
+                </button>
+              );
+            })}
+          </div>
+          <button type="button" onClick={() => projectPreachingBlockFromController(selectedPreachingBlock, safePreachingBiblePreviewIndex)} className="mt-3 w-full rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-black uppercase text-white hover:bg-blue-500">Proyectar</button>
+        </div>
+      ) : (
+        <>
+          <p className="mt-2 line-clamp-2 text-xs font-bold text-zinc-300">{selectedPreachingBlock?.content || selectedPreachingBlock?.text || selectedPreachingBlock?.title || 'Sin bloque seleccionado'}</p>
+          <div className="mt-3 grid grid-cols-[auto_1fr_auto] gap-2">
+            <button type="button" aria-label="Elemento anterior" disabled={selectedPreachingBlockIndex <= 0} onClick={() => selectPreachingBlock(publicProjectableBlocks[selectedPreachingBlockIndex - 1]?.id)} className="rounded-xl border border-white/10 px-3 py-2 disabled:opacity-30"><ChevronLeft size={15} /></button>
+            <button type="button" disabled={!selectedPreachingBlock} onClick={() => projectPreachingBlockFromController(selectedPreachingBlock)} className="rounded-xl bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase text-white hover:bg-emerald-500 disabled:opacity-40">Proyectar</button>
+            <button type="button" aria-label="Elemento siguiente" disabled={selectedPreachingBlockIndex >= publicProjectableBlocks.length - 1} onClick={() => selectPreachingBlock(publicProjectableBlocks[selectedPreachingBlockIndex + 1]?.id)} className="rounded-xl border border-white/10 px-3 py-2 disabled:opacity-30"><ChevronRight size={15} /></button>
+          </div>
+        </>
+      )}
+      {evento?.projectorState?.contentType === 'bible' && (
+        <button type="button" onClick={stopPublicBibleProjection} className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[10px] font-black uppercase text-amber-100 hover:bg-amber-500/20">
+          <PowerOff size={15} /> Dejar de proyectar Biblia
+        </button>
+      )}
+    </div>
+  );
   const bibleOutlinePanel = (
     <div className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4">
@@ -1755,14 +1930,26 @@ const ProyectorController = ({ user }) => {
           <h2 className="mt-1 text-lg font-black text-white">Pasajes preparados</h2>
           <p className="mt-1 text-xs font-bold text-blue-100/65">Preparar no cambia la pantalla publica.</p>
         </div>
-        {canManageBibleOutline && eventoId !== 'global' && (
-          <button type="button" onClick={() => openBibleOutlinePicker()} disabled={isSavingBibleOutline} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-blue-500 disabled:opacity-50">
-            <Plus size={15} /> Agregar pasaje
-          </button>
-        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          {(biblePreview || lastBiblePassage) && (
+            <button type="button" onClick={clearLocalBibleControl} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/15 bg-black/25 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-blue-100 hover:bg-white/10">
+              <X size={15} /> Cerrar preview
+            </button>
+          )}
+          {evento?.projectorState?.contentType === 'bible' && (
+            <button type="button" onClick={stopPublicBibleProjection} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-amber-100 hover:bg-amber-500/20">
+              <PowerOff size={15} /> Dejar de proyectar Biblia
+            </button>
+          )}
+          {canManageBibleOutline && eventoId !== 'global' && (
+            <button type="button" onClick={() => openBibleOutlinePicker()} disabled={isSavingBibleOutline} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-wide text-white hover:bg-blue-500 disabled:opacity-50">
+              <Plus size={15} /> Agregar pasaje
+            </button>
+          )}
+        </div>
       </div>
       {biblePreviewSlide && (
-        <section className="rounded-2xl border border-blue-400/25 bg-blue-500/10 p-4 md:hidden">
+        <section className="rounded-2xl border border-blue-400/25 bg-blue-500/10 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-blue-200">Preview</p>
@@ -1775,10 +1962,24 @@ const ProyectorController = ({ user }) => {
           {biblePreviewSlide.heading && <p className="mb-2 text-xs font-black uppercase tracking-wide text-blue-100">{biblePreviewSlide.heading}</p>}
           <p className="whitespace-pre-wrap text-sm font-black leading-relaxed text-white">{biblePreviewSlide.text}</p>
           {biblePreviewSlides.length > 1 && (
-            <div className="mt-4 flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/20 p-1">
-              <button type="button" onClick={() => moveBiblePreviewSlide(-1)} disabled={biblePreviewIndex === 0} className="inline-flex min-h-10 items-center gap-1 rounded-lg px-3 text-[10px] font-black uppercase text-blue-100 disabled:opacity-30"><ChevronLeft size={16} /> Anterior</button>
-              <span className="text-[10px] font-black text-blue-100">{biblePreviewIndex + 1} / {biblePreviewSlides.length}</span>
-              <button type="button" onClick={() => moveBiblePreviewSlide(1)} disabled={biblePreviewIndex >= biblePreviewSlides.length - 1} className="inline-flex min-h-10 items-center gap-1 rounded-lg px-3 text-[10px] font-black uppercase text-blue-100 disabled:opacity-30">Siguiente <ChevronRight size={16} /></button>
+            <div className="mt-4 space-y-2 rounded-xl border border-white/10 bg-black/20 p-1">
+              <div className="flex items-center justify-between gap-2">
+                <button type="button" onClick={() => moveBiblePreviewSlide(-1)} disabled={biblePreviewIndex === 0} className="inline-flex min-h-10 items-center gap-1 rounded-lg px-3 text-[10px] font-black uppercase text-blue-100 disabled:opacity-30"><ChevronLeft size={16} /> Anterior</button>
+                <span className="text-[10px] font-black text-blue-100">{biblePreviewIndex + 1} / {biblePreviewSlides.length}</span>
+                <button type="button" onClick={() => moveBiblePreviewSlide(1)} disabled={biblePreviewIndex >= biblePreviewSlides.length - 1} className="inline-flex min-h-10 items-center gap-1 rounded-lg px-3 text-[10px] font-black uppercase text-blue-100 disabled:opacity-30">Siguiente <ChevronRight size={16} /></button>
+              </div>
+              <div className="grid grid-cols-5 gap-1 px-1 pb-1 sm:grid-cols-8 xl:grid-cols-10">
+                {biblePreviewSlides.map((slide, index) => {
+                  const isSelected = biblePreviewIndex === index;
+                  const isProjected = projectedBibleOutlineItemId === biblePreviewOutlineItemId
+                    && Number(evento?.projectorState?.bible?.slideIndex || 0) === index;
+                  return (
+                    <button key={`${slide.reference || 'biblia'}-${index}`} type="button" onClick={() => selectBiblePreviewSlide(index)} aria-pressed={isSelected} title={isProjected ? `${slide.reference} - En proyeccion` : slide.reference} className={`min-h-10 rounded-lg border text-xs font-black ${isSelected ? 'border-blue-200 bg-blue-600 text-white' : isProjected ? 'border-emerald-300/70 bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-300/60' : 'border-white/10 bg-black/20 text-zinc-400 hover:bg-white/10 hover:text-white'}`}>
+                      {slide.verseNumber ?? index + 1}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
           <button type="button" onClick={() => projectBiblePassage({ ...biblePreview, selectedIndex: biblePreviewIndex, outlineItemId: biblePreviewOutlineItemId })} className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-wide text-white hover:bg-blue-500"><Monitor size={16} /> Proyectar Biblia</button>
@@ -2229,15 +2430,7 @@ const ProyectorController = ({ user }) => {
                   <p className="rounded-2xl border border-white/10 bg-black/25 p-4 text-sm font-bold text-zinc-500">Asocia una predica al evento para controlar versiculos y puntos desde aqui.</p>
                 ) : (
                   <div className="grid gap-3 xl:grid-cols-[0.85fr_1.15fr]">
-                    <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                      <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Punto actual</p>
-                      <p className="text-sm font-black text-white">{preachingStatus?.currentTitle || currentPublicPoint?.title || 'Sin punto activo'}</p>
-                      {currentPublicPoint && (
-                        <button type="button" onClick={() => projectPreachingBlockFromController(currentPublicPoint)} className="mt-3 rounded-xl bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase text-white hover:bg-emerald-500">
-                          Proyectar punto
-                        </button>
-                      )}
-                    </div>
+                    {preachingSelectionPanel}
                     <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 p-3">
                       <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-blue-200">Versiculos</p>
                       <div className="max-h-40 space-y-2 overflow-y-auto pr-1">
@@ -2249,8 +2442,8 @@ const ProyectorController = ({ user }) => {
                               <p className="truncate text-xs font-black text-blue-50">{[verse.reference, verse.translation].filter(Boolean).join(' · ') || 'Referencia sin definir'}</p>
                               {verse.text && <p className="line-clamp-1 text-[10px] font-semibold text-blue-100/60">{verse.text}</p>}
                             </div>
-                            <button type="button" onClick={() => projectPreachingBlockFromController(verse)} className="shrink-0 rounded-lg bg-blue-600 px-2 py-1.5 text-[9px] font-black uppercase text-white hover:bg-blue-500">
-                              Proyectar
+                            <button type="button" onClick={() => selectPreachingBlock(verse.id)} className="shrink-0 rounded-lg bg-blue-600 px-2 py-1.5 text-[9px] font-black uppercase text-white hover:bg-blue-500">
+                              Previsualizar
                             </button>
                           </div>
                         ))}
@@ -2915,15 +3108,7 @@ const ProyectorController = ({ user }) => {
               <p className="rounded-2xl border border-white/10 bg-black/25 p-4 text-sm font-bold text-zinc-500">Asocia una predica al evento para controlar versiculos y puntos desde aqui.</p>
             ) : (
               <>
-                <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                  <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Punto actual</p>
-                  <p className="text-sm font-black text-white">{preachingStatus?.currentTitle || currentPublicPoint?.title || 'Sin punto activo'}</p>
-                  {currentPublicPoint && (
-                    <button type="button" onClick={() => projectPreachingBlockFromController(currentPublicPoint)} className="mt-3 w-full rounded-xl bg-emerald-600 px-3 py-3 text-[10px] font-black uppercase text-white hover:bg-emerald-500">
-                      Proyectar punto
-                    </button>
-                  )}
-                </div>
+                {preachingSelectionPanel}
                 <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4">
                   <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-blue-200">Versiculos publicos</p>
                   <div className="space-y-2">
@@ -2933,8 +3118,8 @@ const ProyectorController = ({ user }) => {
                       <div key={verse.id || index} className="rounded-xl bg-black/25 p-3">
                         <p className="text-xs font-black text-blue-50">{[verse.reference, verse.translation].filter(Boolean).join(' - ') || 'Referencia sin definir'}</p>
                         {verse.text && <p className="mt-1 line-clamp-2 text-[10px] font-semibold text-blue-100/60">{verse.text}</p>}
-                        <button type="button" onClick={() => projectPreachingBlockFromController(verse)} className="mt-2 w-full rounded-lg bg-blue-600 px-2 py-2 text-[9px] font-black uppercase text-white hover:bg-blue-500">
-                          Proyectar
+                        <button type="button" onClick={() => selectPreachingBlock(verse.id)} className="mt-2 w-full rounded-lg bg-blue-600 px-2 py-2 text-[9px] font-black uppercase text-white hover:bg-blue-500">
+                          Previsualizar
                         </button>
                       </div>
                     ))}
@@ -3346,7 +3531,7 @@ const ProyectorController = ({ user }) => {
                 <label className={`w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-colors cursor-pointer ${isUploadingFondo ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 hover:border-indigo-500'}`}>
                   {isUploadingFondo ? <Loader2 size={24} className="text-indigo-500 animate-spin" /> : <Upload size={24} className="text-zinc-400" />}
                   <span className="text-sm font-bold text-zinc-300">{isUploadingFondo ? 'Subiendo archivo...' : 'Seleccionar Archivo'}</span>
-                  <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo} onChange={handleUploadBackground} />
+                  <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo} onChange={(event) => handleUploadBackground(event, { applyAsBackground: true })} />
                 </label>
               </div>
 

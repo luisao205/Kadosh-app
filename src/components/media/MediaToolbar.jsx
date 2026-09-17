@@ -1,7 +1,7 @@
-import React from 'react';
-import { Plus, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
+import MediaLibraryUploadButton from './MediaLibraryUploadButton';
 
-const MediaToolbar = ({ total = 0, query, onQueryChange, onAdd, sortBy = 'recent', onSortChange }) => (
+const MediaToolbar = ({ total = 0, query, onQueryChange, user, onUploaded, onUploadError, sortBy = 'recent', onSortChange }) => (
   <div className="flex flex-col gap-4 border-b border-white/10 bg-zinc-950/70 p-4 sm:p-5 xl:flex-row xl:items-center xl:justify-between">
     <div className="min-w-0">
       <h1 className="text-2xl font-black tracking-tight text-white">Biblioteca Multimedia</h1>
@@ -28,16 +28,13 @@ const MediaToolbar = ({ total = 0, query, onQueryChange, onAdd, sortBy = 'recent
         <option value="favorites">Favoritos primero</option>
         <option value="name">Nombre</option>
       </select>
-      <button
-        type="button"
-        onClick={onAdd}
+      <MediaLibraryUploadButton
+        user={user}
+        onUploaded={onUploaded}
+        onError={onUploadError}
+        options={{ folder: 'general', category: 'General', sourceContext: 'library' }}
         className="inline-flex items-center justify-center gap-2 rounded-2xl bg-violet-600 px-4 py-3 text-xs font-black uppercase tracking-wide text-white shadow-lg shadow-violet-950/25 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-        disabled
-        title="Disponible en una fase futura"
-      >
-        <Plus size={16} />
-        Agregar Multimedia
-      </button>
+      />
     </div>
   </div>
 );

@@ -28,6 +28,8 @@ const MediaCenter = ({ user }) => {
   const [query, setQuery] = useState('');
   const [activeType, setActiveType] = useState('all');
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [libraryScope, setLibraryScope] = useState('all');
+  const [selectedPreachingId, setSelectedPreachingId] = useState('all');
   const [selectedTags, setSelectedTags] = useState([]);
   const [usageFilter, setUsageFilter] = useState('all');
   const [favoritesOnly, setFavoritesOnly] = useState(false);
@@ -122,6 +124,15 @@ const MediaCenter = ({ user }) => {
       .sort((a, b) => a.localeCompare(b))
   ), [mediaItems]);
 
+  const preachingFolders = useMemo(() => {
+    const byId = new Map();
+    mediaItems.forEach(item => {
+      const id = item.metadata?.preachingId;
+      if (id) byId.set(id, item.metadata?.preachingTitle || id);
+    });
+    return [...byId.entries()].map(([id, title]) => ({ id, title })).sort((a, b) => a.title.localeCompare(b.title));
+  }, [mediaItems]);
+
   const availableTags = useMemo(() => (
     [...new Set(mediaItems.flatMap(item => Array.isArray(item.tags) ? item.tags : []).map(tag => String(tag).trim()).filter(Boolean))]
       .sort((a, b) => a.localeCompare(b))
@@ -131,6 +142,8 @@ const MediaCenter = ({ user }) => {
     const search = normalizeMediaText(query);
 
     const nextItems = mediaItems
+      .filter(item => libraryScope === 'all' || (libraryScope === 'preaching' ? Boolean(item.metadata?.preachingId) : !item.metadata?.preachingId))
+      .filter(item => selectedPreachingId === 'all' || item.metadata?.preachingId === selectedPreachingId)
       .filter(item => activeType === 'all' || item.type === activeType)
       .filter(item => !favoritesOnly || (item.favorite ?? false))
       .filter(item => {
@@ -179,7 +192,7 @@ const MediaCenter = ({ user }) => {
       const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
       return bTime - aTime;
     });
-  }, [activeType, favoritesOnly, mediaItems, query, selectedCategory, selectedTags, sortBy, usageFilter]);
+  }, [activeType, favoritesOnly, libraryScope, mediaItems, query, selectedCategory, selectedPreachingId, selectedTags, sortBy, usageFilter]);
 
   const activeFilterChips = useMemo(() => {
     const chips = [];
@@ -293,6 +306,8 @@ const MediaCenter = ({ user }) => {
     setSelectedTags([]);
     setUsageFilter('all');
     setFavoritesOnly(false);
+    setLibraryScope('all');
+    setSelectedPreachingId('all');
     setSortBy('recent');
   };
 
@@ -502,7 +517,9 @@ const MediaCenter = ({ user }) => {
 
   return (
     <div className="min-h-full overflow-hidden rounded-[2rem] border border-white/10 bg-zinc-950/65 text-white shadow-2xl shadow-black/20">
-      <MediaToolbar total={filteredItems.length} query={query} onQueryChange={setQuery} sortBy={sortBy} onSortChange={setSortBy} />
+      <MediaToolbar total={filteredItems.length} query={query} onQueryChange={setQuery} sortBy={sortBy} onSortChange={setSortBy} user={user}
+        onUploaded={(media) => { setSelectedMedia(media); setActionMessage({ type: 'success', area: 'upload', text: 'Recurso agregado a Biblioteca Multimedia.' }); }}
+        onUploadError={(err) => { console.error('Error subiendo a Biblioteca:', err); setActionMessage({ type: 'error', area: 'upload', text: err?.message === 'media_file_type_not_allowed' ? 'Selecciona una imagen o video compatible.' : 'No se pudo subir el recurso.' }); }} />
 
       <div className="grid grid-cols-1 lg:grid-cols-[15rem_1fr] xl:h-[calc(100dvh-12rem)] xl:min-h-[34rem] xl:grid-cols-[15rem_minmax(0,1fr)_22rem] xl:overflow-hidden">
         <MediaFilters
@@ -520,6 +537,11 @@ const MediaCenter = ({ user }) => {
           favoritesOnly={favoritesOnly}
           onFavoritesOnlyChange={setFavoritesOnly}
           onClearFilters={clearFilters}
+          libraryScope={libraryScope}
+          onLibraryScopeChange={(scope) => { setLibraryScope(scope); if (scope !== 'preaching') setSelectedPreachingId('all'); }}
+          preachingFolders={preachingFolders}
+          selectedPreachingId={selectedPreachingId}
+          onPreachingChange={setSelectedPreachingId}
         />
 
         <main className="min-w-0 border-white/10 p-4 lg:border-r lg:p-5 xl:overflow-y-auto">
@@ -718,14 +740,7 @@ const MediaCenter = ({ user }) => {
               <div className="max-w-sm px-4">
                 <p className="text-xl font-black text-white">Aun no existen recursos multimedia.</p>
                 <p className="mt-2 text-sm text-zinc-500">Cuando agregues o sincronices recursos apareceran aqui.</p>
-                <button
-                  type="button"
-                  disabled
-                  className="mt-5 rounded-2xl bg-violet-600 px-5 py-3 text-xs font-black uppercase tracking-wide text-white opacity-50"
-                  title="Disponible en una fase futura"
-                >
-                  Agregar Multimedia
-                </button>
+                <p className="mt-4 text-xs font-bold text-violet-200">Usa Agregar Multimedia en la barra superior para subir el primer recurso.</p>
               </div>
             </div>
           ) : filteredItems.length === 0 ? (

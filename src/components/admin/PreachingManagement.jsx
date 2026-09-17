@@ -12,8 +12,11 @@ import { calculateMediaUsageFields } from '../../utils/mediaLibraryFirestoreSync
 import { useFeedback } from '../ui/FeedbackProvider';
 import BiblePicker from '../bible/BiblePicker';
 import MediaPicker from '../media/MediaPicker';
+import MediaLibraryUploadButton from '../media/MediaLibraryUploadButton';
+import { MEDIA_LIBRARY_ACTIONS, canPerformMediaLibraryAction } from '../../utils/mediaLibraryPermissions';
 import { getMediaTypeLabel } from '../media/mediaDisplay';
 import { splitPassageIntoSlides } from '../../utils/bibleService';
+import useMediaLibrary from '../../hooks/useMediaLibrary';
 
 const EXTERNAL_PREACHER_VALUE = '__external__';
 
@@ -220,6 +223,8 @@ const PreachingManagement = ({ user }) => {
   const canEditShared = canManageShared || isAssignedPastor;
   const canEditCurrent = canEditShared && !isReadOnlyAdmin;
   const canUseMediaInPreaching = canUsePreachingMedia(user, form);
+  const canUploadMediaLibrary = canPerformMediaLibraryAction(user, MEDIA_LIBRARY_ACTIONS.ADD);
+  const { items: preachingMediaItems, loading: preachingMediaLoading } = useMediaLibrary({ enabled: canUseMediaInPreaching, activeOnly: true });
   const isLimitedPreachingMediaUser = canUseMediaInPreaching && !canManageShared;
   const canUsePrivateNotes = isAssignedPastor;
   const canManageEventAssociation = isOwner(user);
@@ -753,6 +758,8 @@ const PreachingManagement = ({ user }) => {
     const Icon = meta.icon;
     const isPrivate = block.type === 'note' && block.visibility === 'preacher_only';
     const disabled = !canEditCurrent;
+    const mediaUnavailable = block.type === 'mediaInstruction' && block.mediaId && !preachingMediaLoading
+      && !preachingMediaItems.some(item => (item.id || item.mediaId) === block.mediaId);
 
     return (
       <div key={block.id} className="rounded-3xl border border-white/10 bg-zinc-950/55 p-4 shadow-[0_18px_45px_rgba(0,0,0,0.18)]">
@@ -856,6 +863,7 @@ const PreachingManagement = ({ user }) => {
                       Biblioteca Multimedia {block.mediaType ? `- ${getMediaTypeLabel(block.mediaType)}` : ''}
                     </p>
                     <p className="mt-1 truncate text-[11px] font-bold text-zinc-500">mediaId: {block.mediaId}</p>
+                    {mediaUnavailable && <p className="mt-2 text-xs font-black text-amber-200">Recurso no disponible en Biblioteca</p>}
                   </div>
                   {canEditCurrent && canUseMediaInPreaching && (
                     <div className="flex shrink-0 gap-2">
@@ -865,6 +873,11 @@ const PreachingManagement = ({ user }) => {
                       <button type="button" onClick={() => removeMediaInstructionResource(block.id)} className="rounded-xl border border-red-500/20 bg-red-500/10 p-2 text-red-200 hover:bg-red-500/20" aria-label="Quitar recurso multimedia">
                         <X size={15} />
                       </button>
+                      {canUploadMediaLibrary && <MediaLibraryUploadButton user={user} label="Subir para esta predica" disabled={!selectedId}
+                        options={{ folder: `preaching/${selectedId}/media`, category: `Predicas / ${form.title || 'Sin titulo'}`, sourceContext: 'preaching', preachingId: selectedId, preachingTitle: form.title || 'Predica sin titulo' }}
+                        onUploaded={(media) => { updateBlock(block.id, createPreachingMediaReference(media)); notify('Recurso subido y seleccionado. Guarda la predica para confirmar la referencia.', { type: 'success' }); }}
+                        onError={(err) => { console.error('Error subiendo recurso de predica:', err); notify(err?.message === 'media_file_type_not_allowed' ? 'Selecciona una imagen o video compatible.' : 'No se pudo subir el recurso a Biblioteca.', { type: 'error' }); }}
+                        className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/25 bg-cyan-500/10 px-3 py-2 text-[10px] font-black uppercase text-cyan-100 disabled:opacity-40" />}
                     </div>
                   )}
                 </div>
@@ -875,10 +888,16 @@ const PreachingManagement = ({ user }) => {
                     <p className="mt-1 text-xs font-bold text-zinc-500">Puedes conservar solo la instruccion textual para compatibilidad.</p>
                   </div>
                   {canEditCurrent && canUseMediaInPreaching && (
-                    <button type="button" onClick={() => setMediaPickerBlockId(block.id)} className="rounded-xl border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-[10px] font-black uppercase text-violet-100 hover:bg-violet-500/20">
-                      Biblioteca
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => setMediaPickerBlockId(block.id)} className="rounded-xl border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-[10px] font-black uppercase text-violet-100 hover:bg-violet-500/20">Seleccionar de Biblioteca</button>
+                      {canUploadMediaLibrary && <MediaLibraryUploadButton user={user} label="Subir para esta predica" disabled={!selectedId}
+                        options={{ folder: `preaching/${selectedId}/media`, category: `Predicas / ${form.title || 'Sin titulo'}`, sourceContext: 'preaching', preachingId: selectedId, preachingTitle: form.title || 'Predica sin titulo' }}
+                        onUploaded={(media) => { updateBlock(block.id, createPreachingMediaReference(media)); notify('Recurso subido y seleccionado. Guarda la predica para confirmar la referencia.', { type: 'success' }); }}
+                        onError={(err) => { console.error('Error subiendo recurso de predica:', err); notify(err?.message === 'media_file_type_not_allowed' ? 'Selecciona una imagen o video compatible.' : 'No se pudo subir el recurso a Biblioteca.', { type: 'error' }); }}
+                        className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/25 bg-cyan-500/10 px-3 py-2 text-[10px] font-black uppercase text-cyan-100 disabled:opacity-40" />}
+                    </div>
                   )}
+                  {canUploadMediaLibrary && !selectedId && <p className="text-[11px] font-bold text-amber-200">Guarda la predica antes de subir archivos para crear su carpeta vinculada.</p>}
                 </div>
               )}
               {canEditCurrent && !canUseMediaInPreaching && (

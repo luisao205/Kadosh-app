@@ -1,4 +1,3 @@
-import React from 'react';
 import { Boxes, FilterX, Star } from 'lucide-react';
 import { MEDIA_TYPES } from '../../utils/mediaLibrary';
 import { getMediaTypeIcon, getMediaTypeLabel } from './mediaDisplay';
@@ -26,7 +25,12 @@ const MediaFilters = ({
   onUsageFilterChange,
   favoritesOnly = false,
   onFavoritesOnlyChange,
-  onClearFilters
+  onClearFilters,
+  libraryScope = 'all',
+  onLibraryScopeChange,
+  preachingFolders = [],
+  selectedPreachingId = 'all',
+  onPreachingChange
 }) => (
   <aside className="border-b border-white/10 bg-zinc-950/60 p-4 lg:border-b-0 lg:border-r lg:p-5">
     <p className="mb-3 text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500">Filtros rapidos</p>
@@ -60,6 +64,15 @@ const MediaFilters = ({
     </div>
 
     <div className="mt-5 space-y-4">
+      <div>
+        <p className="mb-2 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-500">Seccion</p>
+        <select value={libraryScope} onChange={event => onLibraryScopeChange?.(event.target.value)} className="w-full rounded-2xl border border-white/10 bg-zinc-900 px-3 py-2.5 text-xs font-bold text-white outline-none">
+          <option value="all">Toda la biblioteca</option><option value="general">General</option><option value="preaching">Predicas</option>
+        </select>
+        {libraryScope === 'preaching' && <select value={selectedPreachingId} onChange={event => onPreachingChange?.(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-zinc-900 px-3 py-2.5 text-xs font-bold text-white outline-none">
+          <option value="all">Todas las predicas</option>{preachingFolders.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
+        </select>}
+      </div>
       <button
         type="button"
         onClick={() => onFavoritesOnlyChange?.(!favoritesOnly)}

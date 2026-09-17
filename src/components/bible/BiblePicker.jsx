@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, Check, ChevronLeft, ChevronRight, Loader2, Search, X } from 'lucide-react';
 import { DEFAULT_TRANSLATION_ID, getBooks, getChapter, getChapters, getPassage, getPreferredTranslationId, getTranslations, searchText, setPreferredTranslationId, splitPassageIntoSlides } from '../../utils/bibleService';
+import { commitBibleSelectionField, createBibleSelection, normalizeBibleSelection, selectBibleVerse, updateBibleSelectionDraft } from '../../utils/bibleSelection';
 
 const BiblePicker = ({ open = true, onClose, onUse, onProject, onPrimaryAction, primaryActionLabel = 'Proyectar Biblia', onPreviewChange, onProjectedSlideChange, preparedPreview, projectedPassageId, projectedSlideIndex, title = 'Biblia Kadosh', embedded = false }) => {
   const [translations, setTranslations] = useState({ available: [], future: [] });
@@ -10,8 +11,7 @@ const BiblePicker = ({ open = true, onClose, onUse, onProject, onPrimaryAction, 
   const [chapters, setChapters] = useState([]);
   const [chapter, setChapter] = useState(3);
   const [chapterData, setChapterData] = useState(null);
-  const [rangeStart, setRangeStart] = useState(16);
-  const [rangeEnd, setRangeEnd] = useState(16);
+  const [verseSelection, setVerseSelection] = useState(() => createBibleSelection(16));
   const [referenceQuery, setReferenceQuery] = useState('Juan 3:16');
   const [textQuery, setTextQuery] = useState('');
   const [textResults, setTextResults] = useState([]);
@@ -83,8 +83,12 @@ const BiblePicker = ({ open = true, onClose, onUse, onProject, onPrimaryAction, 
       if (!active) return;
       setChapterData(data);
       const first = data.verses?.[0]?.number || 1;
-      setRangeStart(value => data.verses?.some(item => item.number === value) ? value : first);
-      setRangeEnd(value => data.verses?.some(item => item.number === value) ? value : first);
+      setVerseSelection((selection) => {
+        const normalized = normalizeBibleSelection(selection, data.verses?.at(-1)?.number || first);
+        const isAvailable = data.verses?.some(item => item.number === normalized.start)
+          && data.verses?.some(item => item.number === normalized.end);
+        return isAvailable ? createBibleSelection(normalized.start, normalized.end, selection.active) : createBibleSelection(first);
+      });
     }).catch(() => setChapterData(null));
     return () => { active = false; };
   }, [bookCode, chapter, open, translationId]);
@@ -103,8 +107,7 @@ const BiblePicker = ({ open = true, onClose, onUse, onProject, onPrimaryAction, 
     setBookCode(passage.bookCode);
     setChapter(passage.chapter);
     if (passage.translationId) setTranslationId(passage.translationId);
-    setRangeStart(passage.verses?.[0]?.number || 1);
-    setRangeEnd(passage.verses?.at(-1)?.number || 1);
+    setVerseSelection(createBibleSelection(passage.verses?.[0]?.number || 1, passage.verses?.at(-1)?.number || 1, true));
     setReferenceQuery(passage.reference || '');
   }, [open, preparedPreview?.passage?.passageId, preparedPreview?.selectedIndex]);
 
@@ -114,19 +117,23 @@ const BiblePicker = ({ open = true, onClose, onUse, onProject, onPrimaryAction, 
       const passage = await getPassage({ reference, translationId });
       publishPreview(passage);
       setBookCode(passage.bookCode); setChapter(passage.chapter);
-      setRangeStart(passage.verses?.[0]?.number || 1);
-      setRangeEnd(passage.verses?.at(-1)?.number || 1);
+      setVerseSelection(createBibleSelection(passage.verses?.[0]?.number || 1, passage.verses?.at(-1)?.number || 1, true));
       setReferenceQuery(passage.reference);
     } catch (err) { setError(err.message || 'No se pudo cargar el pasaje.'); }
     finally { setLoading(false); }
   };
   const clearPreview = () => { setResult(null); setSelectedSlideIndex(0); onPreviewChange?.(null); };
-  const selectBook = (book) => { clearPreview(); setBookCode(book.code); setChapter(book.chapterNumbers?.[0] || 1); setRangeStart(1); setRangeEnd(1); setShowBookPicker(false); };
-  const selectChapter = (nextChapter) => { clearPreview(); setChapter(nextChapter); setRangeStart(1); setRangeEnd(1); };
+  const selectBook = (book) => { clearPreview(); setBookCode(book.code); setChapter(book.chapterNumbers?.[0] || 1); setVerseSelection(createBibleSelection(1)); setShowBookPicker(false); };
+  const selectChapter = (nextChapter) => { clearPreview(); setChapter(nextChapter); setVerseSelection(createBibleSelection(1)); };
   const maxVerseNumber = verses.at(-1)?.number || 1;
-  const normalizeVerse = (value) => Math.max(1, Math.min(Number(value) || 1, maxVerseNumber));
-  const selectVerse = (number) => { setRangeStart(Math.min(rangeStart, number)); setRangeEnd(Math.max(rangeStart, number)); };
-  const previewRange = () => selectedBook && loadPassage(`${selectedBook.name} ${chapter}:${Math.min(rangeStart, rangeEnd)}${rangeStart !== rangeEnd ? `-${Math.max(rangeStart, rangeEnd)}` : ''}`);
+  const selectedRange = normalizeBibleSelection(verseSelection, maxVerseNumber);
+  const selectVerse = (number) => setVerseSelection(selection => selectBibleVerse(selection, number, maxVerseNumber));
+  const commitSelectionField = (field) => setVerseSelection(selection => commitBibleSelectionField(selection, field, maxVerseNumber));
+  const previewRange = () => {
+    if (!selectedBook) return;
+    setVerseSelection(createBibleSelection(selectedRange.start, selectedRange.end, true));
+    loadPassage(`${selectedBook.name} ${chapter}:${selectedRange.start}${selectedRange.start !== selectedRange.end ? `-${selectedRange.end}` : ''}`);
+  };
   const chooseSlide = (index) => { setSelectedSlideIndex(index); if (result) onPreviewChange?.({ passage: result, slides, selectedIndex: index }); };
   const moveSlide = (delta) => {
     const currentIndex = isPreparedDeckProjected ? displayedSlideIndex : selectedSlideIndex;
@@ -135,7 +142,7 @@ const BiblePicker = ({ open = true, onClose, onUse, onProject, onPrimaryAction, 
     chooseSlide(nextIndex);
     if (isPreparedDeckProjected) onProjectedSlideChange(delta);
   };
-  const rangeReference = selectedBook ? `${selectedBook.name} ${chapter}:${Math.min(rangeStart, rangeEnd)}${rangeStart !== rangeEnd ? `-${Math.max(rangeStart, rangeEnd)}` : ''}` : '';
+  const rangeReference = selectedBook ? `${selectedBook.name} ${chapter}:${selectedRange.start}${selectedRange.start !== selectedRange.end ? `-${selectedRange.end}` : ''}` : '';
 
   if (!open) return null;
   const content = (
@@ -145,7 +152,7 @@ const BiblePicker = ({ open = true, onClose, onUse, onProject, onPrimaryAction, 
           <div className="space-y-3 sm:space-y-4">
           <select value={translationId} onChange={e => { clearPreview(); setTranslationId(e.target.value); }} className="kp-input w-full rounded-2xl px-4 py-3 text-sm">{translations.available.map(item => <option key={item.translationId} value={item.translationId} className="bg-zinc-900">{item.abbreviation} — {item.translationName}</option>)}</select>
           <form className="space-y-2" onSubmit={event => { event.preventDefault(); loadPassage(referenceQuery); }}><p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Buscar referencia</p><div className="flex gap-2"><input value={referenceQuery} onChange={e => setReferenceQuery(e.target.value)} className="kp-input min-w-0 flex-1 rounded-2xl px-4 py-3 text-sm" placeholder="Juan 3:16-18" /><button type="submit" disabled={loading} className="kp-button-primary rounded-2xl px-4 py-3">{loading ? <Loader2 className="animate-spin" size={16} /> : <Search size={16} />}</button></div></form>
-          <div className="space-y-3 rounded-2xl border border-white/10 bg-black/25 p-3"><button type="button" onClick={() => setShowBookPicker(true)} className="w-full rounded-xl border border-blue-400/25 bg-blue-500/10 px-3 py-3 text-left text-sm font-black text-blue-50">Seleccionar libro <span className="float-right max-w-[55%] truncate text-blue-300">{selectedBook?.name || '...'}</span></button><div><p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Capitulo</p><div className="grid max-h-40 grid-cols-5 gap-1 overflow-y-auto pr-1 sm:grid-cols-6 lg:max-h-32 lg:grid-cols-8">{chapters.map(item => <button key={item} type="button" onClick={() => selectChapter(item)} className={`min-h-10 rounded-lg py-2 text-sm font-black sm:text-xs ${chapter === item ? 'bg-blue-600 text-white' : 'bg-zinc-900 text-zinc-400'}`}>{item}</button>)}</div></div><div><p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Versiculos</p><div className="grid max-h-40 grid-cols-5 gap-1 overflow-y-auto pr-1 sm:grid-cols-6 lg:max-h-32 lg:grid-cols-8">{verses.map(item => <button key={item.number} type="button" onClick={() => selectVerse(item.number)} className={`min-h-10 rounded-lg py-2 text-sm font-black sm:text-xs ${item.number >= Math.min(rangeStart, rangeEnd) && item.number <= Math.max(rangeStart, rangeEnd) ? 'bg-violet-600 text-white' : 'bg-zinc-900 text-zinc-400'}`}>{item.number}</button>)}</div></div><div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2"><label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Desde<input type="number" min="1" max={maxVerseNumber} value={rangeStart} onChange={e => setRangeStart(normalizeVerse(e.target.value))} className="kp-input mt-1 w-full rounded-xl px-3 py-2 text-sm" /></label><span className="pb-2 text-zinc-500">a</span><label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Hasta<input type="number" min="1" max={maxVerseNumber} value={rangeEnd} onChange={e => setRangeEnd(normalizeVerse(e.target.value))} className="kp-input mt-1 w-full rounded-xl px-3 py-2 text-sm" /></label></div><p className="text-center text-xs font-black uppercase tracking-wide text-violet-200">{rangeReference}</p><button type="button" onClick={previewRange} disabled={loading || !verses.length} className="w-full rounded-xl border border-violet-400/25 bg-violet-500/10 py-2.5 text-xs font-black uppercase text-violet-100">Previsualizar rango</button></div>
+          <div className="space-y-3 rounded-2xl border border-white/10 bg-black/25 p-3"><button type="button" onClick={() => setShowBookPicker(true)} className="w-full rounded-xl border border-blue-400/25 bg-blue-500/10 px-3 py-3 text-left text-sm font-black text-blue-50">Seleccionar libro <span className="float-right max-w-[55%] truncate text-blue-300">{selectedBook?.name || '...'}</span></button><div><p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Capitulo</p><div className="grid max-h-40 grid-cols-5 gap-1 overflow-y-auto pr-1 sm:grid-cols-6 lg:max-h-32 lg:grid-cols-8">{chapters.map(item => <button key={item} type="button" onClick={() => selectChapter(item)} className={`min-h-10 rounded-lg py-2 text-sm font-black ${chapter === item ? 'bg-blue-600 text-white' : 'bg-zinc-900 text-zinc-400'}`}>{item}</button>)}</div></div><div><p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">Versiculos</p><div className="grid max-h-52 grid-cols-5 gap-1 overflow-y-auto pr-1 min-[420px]:grid-cols-6 sm:grid-cols-8 lg:max-h-44 lg:grid-cols-8 xl:grid-cols-10">{verses.map(item => { const isSelected = verseSelection.active && item.number >= selectedRange.start && item.number <= selectedRange.end; const isStart = isSelected && item.number === selectedRange.start; const isEnd = isSelected && item.number === selectedRange.end; return <button key={item.number} type="button" onClick={() => selectVerse(item.number)} aria-pressed={isSelected} className={`min-h-10 rounded-lg border py-2 text-sm font-black ${isStart || isEnd ? 'border-violet-200 bg-violet-600 text-white ring-2 ring-violet-300/60' : isSelected ? 'border-violet-500/30 bg-violet-500/25 text-violet-50' : 'border-transparent bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}>{item.number}</button>; })}</div></div><div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2"><label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Desde<input type="text" inputMode="numeric" pattern="[0-9]*" value={verseSelection.start} onChange={e => setVerseSelection(selection => updateBibleSelectionDraft(selection, 'start', e.target.value))} onBlur={() => commitSelectionField('start')} className="kp-input mt-1 w-full rounded-xl px-3 py-2 text-sm" /></label><span className="pb-2 text-zinc-500">a</span><label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Hasta<input type="text" inputMode="numeric" pattern="[0-9]*" value={verseSelection.end} onChange={e => setVerseSelection(selection => updateBibleSelectionDraft(selection, 'end', e.target.value))} onBlur={() => commitSelectionField('end')} className="kp-input mt-1 w-full rounded-xl px-3 py-2 text-sm" /></label></div><p className="text-center text-xs font-black uppercase tracking-wide text-violet-200">{rangeReference}</p><button type="button" onClick={previewRange} disabled={loading || !verses.length} className="w-full rounded-xl border border-violet-400/25 bg-violet-500/10 py-2.5 text-xs font-black uppercase text-violet-100">Previsualizar rango</button></div>
           <div className="space-y-2"><p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Buscar por palabras</p><div className="flex gap-2"><input value={textQuery} onChange={e => setTextQuery(e.target.value)} className="kp-input min-w-0 flex-1 rounded-2xl px-4 py-3 text-sm" placeholder="gracia" /><button type="button" onClick={async () => { setLoading(true); setError(''); try { setTextResults(await searchText({ query: textQuery, translationId, limit: 18 })); } catch (err) { setTextResults([]); setError(err.message || 'No se pudo buscar por palabras.'); } finally { setLoading(false); } }} disabled={!textQuery.trim() || loading} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs font-black">Buscar</button></div>{textResults.map(item => <button key={item.passageId} type="button" onClick={() => loadPassage(item.reference)} className="w-full rounded-xl border border-white/10 bg-white/5 p-3 text-left"><p className="text-xs font-black text-white">{item.reference}</p><p className="line-clamp-2 text-[11px] text-zinc-400">{item.text}</p></button>)}</div>
         </div>
       </section>

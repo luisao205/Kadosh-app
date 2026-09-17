@@ -30,6 +30,7 @@ export const canManageSongs = (user = {}) => isOwner(user) || isAdmin(user) || i
 export const canAccessMultimediaTools = (user = {}) => isOwner(user) || isAdmin(user) || isMultimedia(user);
 
 export const canAccessController = (user = {}) => canAccessMultimediaTools(user);
+export const canManageAnnouncements = (user = {}) => isOwner(user);
 
 export const canViewEventsAndSetlists = (user = {}) => hasAnyRole(user, [
   'dueño',

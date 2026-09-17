@@ -141,7 +141,7 @@ const OutputRouter = ({ user }) => {
           </div>
         </div>
       )}
-      {type === 'proyector' && <Proyector eventoIdOverride={eventoId} />}
+      {type === 'proyector' && <Proyector user={user} eventoIdOverride={eventoId} />}
       {type === 'retorno' && <StageDisplay eventoIdOverride={eventoId} />}
       {type === 'musicos' && <StageDisplayMusicos eventoIdOverride={eventoId} />}
       {type === 'preacher' && <PreacherDisplay eventoIdOverride={eventoId} user={user} />}

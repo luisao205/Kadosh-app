@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isVideoMediaUrl } from '../../utils/mediaUtils';
 
 const TRANSITION_MS = 500;
@@ -63,6 +63,16 @@ const preloadVideo = (url, tokenRef, token) => new Promise((resolve, reject) => 
 });
 
 const BackgroundLayer = ({ layer, visible, reduceMotion }) => {
+  const videoRef = useRef(null);
+
+  useEffect(() => () => {
+    const element = videoRef.current;
+    if (!element) return;
+    element.pause();
+    element.removeAttribute('src');
+    element.load();
+  }, []);
+
   if (!layer?.url) return null;
   const video = isVideoBackground(layer.url, layer.media);
 
@@ -73,6 +83,7 @@ const BackgroundLayer = ({ layer, visible, reduceMotion }) => {
     >
       {video ? (
         <video
+          ref={videoRef}
           key={layer.id}
           src={layer.url}
           autoPlay
@@ -100,8 +111,8 @@ const BackgroundLayer = ({ layer, visible, reduceMotion }) => {
   );
 };
 
-const ProjectorMediaBackground = ({ url, media, disabled = false }) => {
-  const reduceMotion = useMemo(supportsReducedMotion, []);
+const ProjectorMediaBackground = ({ url, media, disabled = false, suspended = false }) => {
+  const reduceMotion = useMemo(() => supportsReducedMotion(), []);
   const [currentLayer, setCurrentLayer] = useState(null);
   const [previousLayer, setPreviousLayer] = useState(null);
   const [nextVisible, setNextVisible] = useState(true);
@@ -109,10 +120,12 @@ const ProjectorMediaBackground = ({ url, media, disabled = false }) => {
   const timerRef = useRef(null);
   const currentLayerRef = useRef(null);
 
-  useEffect(() => {
-    currentLayerRef.current = currentLayer;
-  }, [currentLayer]);
+  const commitCurrentLayer = useCallback((layer) => {
+    currentLayerRef.current = layer;
+    setCurrentLayer(layer);
+  }, []);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- prop changes drive this visual transition state machine. */
   useEffect(() => {
     const token = tokenRef.current + 1;
     tokenRef.current = token;
@@ -123,15 +136,20 @@ const ProjectorMediaBackground = ({ url, media, disabled = false }) => {
     }
 
     if (disabled) {
-      setCurrentLayer(null);
+      commitCurrentLayer(null);
       setPreviousLayer(null);
+      setNextVisible(false);
+      return undefined;
+    }
+
+    if (suspended) {
       setNextVisible(false);
       return undefined;
     }
 
     if (!url) {
       setPreviousLayer(currentLayerRef.current);
-      setCurrentLayer(null);
+      commitCurrentLayer(null);
       setNextVisible(false);
       timerRef.current = setTimeout(() => {
         if (tokenRef.current !== token) return;
@@ -148,8 +166,12 @@ const ProjectorMediaBackground = ({ url, media, disabled = false }) => {
     };
 
     if (currentLayerRef.current?.id === nextLayer.id) {
+      setPreviousLayer(null);
+      setNextVisible(true);
       return undefined;
     }
+
+    if (currentLayerRef.current) setNextVisible(true);
 
     const preload = isVideoBackground(url, media)
       ? preloadVideo(url, tokenRef, token)
@@ -165,7 +187,7 @@ const ProjectorMediaBackground = ({ url, media, disabled = false }) => {
       .then(() => {
         if (tokenRef.current !== token) return;
         setPreviousLayer(currentLayerRef.current);
-        setCurrentLayer(nextLayer);
+        commitCurrentLayer(nextLayer);
         setNextVisible(false);
         requestAnimationFrame(() => {
           if (tokenRef.current === token) setNextVisible(true);
@@ -180,7 +202,7 @@ const ProjectorMediaBackground = ({ url, media, disabled = false }) => {
       .catch(() => {
         if (tokenRef.current !== token) return;
         if (!currentLayerRef.current) {
-          setCurrentLayer(null);
+          commitCurrentLayer(null);
           setPreviousLayer(null);
         }
       });
@@ -191,7 +213,8 @@ const ProjectorMediaBackground = ({ url, media, disabled = false }) => {
         timerRef.current = null;
       }
     };
-  }, [disabled, media, reduceMotion, url]);
+  }, [commitCurrentLayer, disabled, media, reduceMotion, suspended, url]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => () => {
     tokenRef.current += 1;
@@ -201,7 +224,7 @@ const ProjectorMediaBackground = ({ url, media, disabled = false }) => {
   if (disabled || (!currentLayer && !previousLayer)) return null;
 
   return (
-    <div className="absolute inset-0 z-0 pointer-events-none bg-black overflow-hidden">
+    <div className={`absolute inset-0 z-0 pointer-events-none bg-black overflow-hidden ${suspended ? 'invisible' : 'visible'}`}>
       <BackgroundLayer layer={previousLayer} visible={!nextVisible} reduceMotion={reduceMotion} />
       <BackgroundLayer layer={currentLayer} visible={nextVisible} reduceMotion={reduceMotion} />
     </div>

@@ -7,6 +7,10 @@ import { transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 import { resolveEffectiveLiveState } from '../../utils/liveState';
 import useFitReturnContent from '../../hooks/useFitReturnContent';
+import InternalScreenMedia from './InternalScreenMedia';
+import InternalScreenBible from './InternalScreenBible';
+import InternalScreenBlackout from './InternalScreenBlackout';
+import InternalScreenPreaching from './InternalScreenPreaching';
 
 const readLocal = (key, fallback) => {
   if (typeof window === 'undefined') return fallback;
@@ -87,7 +91,11 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
       setNextSong(data.proyectorNextSong || null);
       setAlerta(data.proyectorAlerta || null);
       setShowLogo(data.proyectorLogo || false);
-      setMedia(data.proyectorMedia || null);
+      const isProjectedMedia = !data.proyectorApagado && (
+        data.projectorState?.type === 'media'
+        || ['media', 'preaching-media'].includes(nextLiveState.activeContentType)
+      );
+      setMedia(isProjectedMedia ? (data.proyectorMedia || null) : null);
       setOffset(data.proyectorOffset || 0);
       if (data.preferencias?.formatoAcordes) setFormato(data.preferencias.formatoAcordes);
       if (data.preferencias?.notacion) setNotacion(data.preferencias.notacion);
@@ -216,13 +224,10 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
         </div>
       )}
 
-      {media && media.url && !currentSection && (
-        <div className="fixed right-4 top-24 z-30 w-44 overflow-hidden rounded-2xl border border-white/20 shadow-2xl sm:w-64">
-          <div className="aspect-video bg-black">
-            {media.type === 'video' ? <video src={media.url} autoPlay loop muted className="h-full w-full object-cover" /> : <img src={media.url} alt="" className="h-full w-full object-cover" />}
-          </div>
-        </div>
-      )}
+      {media?.url && <InternalScreenMedia media={media} label="Multimedia en retorno de cantantes" />}
+      <InternalScreenBible eventData={evento} />
+      <InternalScreenPreaching eventData={evento} />
+      <InternalScreenBlackout active={evento?.proyectorApagado === true} />
 
       <div className="relative z-10 flex h-full min-h-0 flex-col">
         <header className="shrink-0 border-b border-white/10 bg-zinc-950/82 backdrop-blur-md">

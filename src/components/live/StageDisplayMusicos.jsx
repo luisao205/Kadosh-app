@@ -8,6 +8,10 @@ import { parsearCancion } from '../../utils/songParser';
 import { getEventSingerForSong, getSingerTone } from '../../utils/songAssignments';
 import { resolveEffectiveLiveState } from '../../utils/liveState';
 import useFitReturnContent from '../../hooks/useFitReturnContent';
+import InternalScreenMedia from './InternalScreenMedia';
+import InternalScreenBible from './InternalScreenBible';
+import InternalScreenBlackout from './InternalScreenBlackout';
+import InternalScreenPreaching from './InternalScreenPreaching';
 
 const getSongIdsFromEvent = (evento) => {
   const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
@@ -157,7 +161,11 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
       if (!manualMode) setSongId(nextSongId);
       if (!songId && nextSongId) setSongId(nextSongId);
       setCurrentIndex(nextLiveState.activeSectionIndex);
-      setMedia(data.proyectorMedia || null);
+      const isProjectedMedia = !data.proyectorApagado && (
+        data.projectorState?.type === 'media'
+        || ['media', 'preaching-media'].includes(nextLiveState.activeContentType)
+      );
+      setMedia(isProjectedMedia ? (data.proyectorMedia || null) : null);
       setNextSlide(data.proyectorNextSlide || null);
       setAlerta(data.proyectorAlerta || null);
       setNextSong(data.proyectorNextSong || null);
@@ -245,7 +253,6 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
     setFontScale(prev => Math.min(1.45, Math.max(0.78, Number((prev + delta).toFixed(2)))));
   };
 
-  const hasLyrics = (secciones && secciones.length > 0) || (slide && slide.texto && slide.texto.trim() !== '');
   const alertaData = typeof alerta === 'string' ? { text: alerta, priority: 'urgente', target: 'all' } : alerta;
   const alertIsActive = alertaData && alertaData.active !== false && (!alertaData.expiresAt || alertaData.expiresAt > Date.now());
   const shouldShowAlert = alertIsActive && (!alertaData.target || alertaData.target === 'all' || alertaData.target === 'musicos');
@@ -304,14 +311,10 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
         </div>
       )}
 
-      {media && media.url && !hasLyrics && (
-        <div className="fixed right-3 top-24 z-50 w-44 overflow-hidden rounded-2xl border border-white/20 shadow-2xl sm:right-6 sm:w-64" style={{ opacity: previewOpacity }}>
-          <div className="aspect-video bg-black">
-            {media.type === 'video' ? <video src={media.url} autoPlay loop muted className="h-full w-full object-cover" /> : <img src={media.url} className="h-full w-full object-cover" alt="" />}
-          </div>
-          <div className="absolute left-0 top-0 bg-violet-600 px-2 py-1 text-[8px] font-black uppercase">En proyeccion</div>
-        </div>
-      )}
+      {media?.url && <InternalScreenMedia media={media} label="Multimedia en retorno de musicos" opacity={previewOpacity} />}
+      <InternalScreenBible eventData={evento} />
+      <InternalScreenPreaching eventData={evento} />
+      <InternalScreenBlackout active={evento?.proyectorApagado === true} />
 
       <header className="relative z-10 shrink-0 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-sm">
         <div className={`mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-3 sm:px-5 lg:px-8 ${isMobileLandscape ? 'gap-2 px-2 py-px' : 'py-2 lg:py-4'}`}>

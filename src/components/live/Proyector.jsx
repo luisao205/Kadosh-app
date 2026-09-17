@@ -6,8 +6,13 @@ import { Minimize, RefreshCw } from 'lucide-react';
 import AutoFitText from './AutoFitText';
 import BibleAmbientBackground from './BibleAmbientBackground';
 import ProjectorMediaBackground from './ProjectorMediaBackground';
+import { resolveProjectorBackground } from '../../utils/projectorMediaState';
+import AnnouncementPresentation from '../announcements/AnnouncementPresentation';
+import { resolveActiveBibleProjectorState, resolveActiveBibleSlide } from '../../utils/bibleProjectionState';
+import { resolveActivePreachingProjectorState, resolvePreachingProjectionContent } from '../../utils/preachingProjectionState';
+import { PreachingPresentation } from './InternalScreenPreaching';
 
-const Proyector = ({ eventoIdOverride }) => {
+const Proyector = ({ eventoIdOverride, user }) => {
   const { eventoId: routeEventoId } = useParams();
   const eventoId = eventoIdOverride || routeEventoId;
   const [slide, setSlide] = useState(null);
@@ -21,6 +26,7 @@ const Proyector = ({ eventoIdOverride }) => {
   const [media, setMedia] = useState(null); // { url, type, playing, volume, mode }
   const [countdown, setCountdown] = useState(null); // { endTimestamp, active }
   const [projectorState, setProjectorState] = useState(null);
+  const [announcementState, setAnnouncementState] = useState(null);
   const [showControls, setShowControls] = useState(false);
   const controlsTimerRef = useRef(null);
   const videoRef = useRef(null);
@@ -36,9 +42,10 @@ const Proyector = ({ eventoIdOverride }) => {
       if (snap.exists()) {
         const data = snap.data();
         
-        const nextFondo = data.proyectorFondo || null;
-        setFondoUrl(nextFondo);
-        setFondoMedia(data.proyectorFondoMedia || null);
+        const resolvedBackground = resolveProjectorBackground(data);
+        setFondoUrl(resolvedBackground.url);
+        setFondoMedia(resolvedBackground.media);
+        const nextFondo = resolvedBackground.url;
         lastFondoRef.current = nextFondo;
 
         setSlide(data.proyectorSlide || null);
@@ -50,6 +57,7 @@ const Proyector = ({ eventoIdOverride }) => {
         setTicker(data.proyectorTicker || null);
         setCountdown(data.proyectorCountdown || null);
         setProjectorState(data.projectorState || null);
+        setAnnouncementState(data.announcementState || null);
       }
     });
     return () => unsub();
@@ -91,6 +99,14 @@ const Proyector = ({ eventoIdOverride }) => {
       playPromise.then(() => setAutoplayBlocked(false)).catch(() => setAutoplayBlocked(true));
     }
   }, [media]); // Dependencia en 'media' completo para reaccionar a todos los cambios
+
+  useEffect(() => () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }, [media?.url]);
 
   // Efecto maestro para controlar la salida y entrada de la letra de forma sincronizada
   useEffect(() => {
@@ -184,17 +200,22 @@ const Proyector = ({ eventoIdOverride }) => {
 
   // Permitir renderizar si hay video principal, aunque no haya letras
   if (apagar) return <div className="fixed inset-0 bg-black animate-in fade-in duration-700"></div>;
+  if (projectorState?.type === 'announcement' && announcementState?.presentationActive) {
+    return <AnnouncementPresentation user={user} state={announcementState} />;
+  }
 
   // Si no hay absolutamente nada (ni fondo), mostrar standby. Si hay fondo, dejar que siga al render principal.
     // Solo mostramos Standby si REALMENTE no hay nada activo (ni fondo, ni reloj, ni media, ni letras)
-  const isPreachingContent = projectorState?.type === 'preaching';
-  const isBibleContent = isPreachingContent && projectorState?.contentType === 'bible';
-  const activeBibleSlide = isBibleContent
-    ? projectorState?.bible?.slides?.[Number(projectorState?.bibleSlideIndex || 0)]
-    : null;
+  const activePreachingState = resolveActivePreachingProjectorState({ projectorState, proyectorApagado: apagar });
+  const preachingContent = resolvePreachingProjectionContent(activePreachingState);
+  const isPreachingContent = Boolean(preachingContent);
+  const activeBibleState = resolveActiveBibleProjectorState({ projectorState, proyectorApagado: apagar });
+  const isBibleContent = Boolean(activeBibleState);
+  const activeBibleSlide = resolveActiveBibleSlide(activeBibleState);
   const bibleHeading = activeBibleSlide?.heading || null;
+  const hasProjectedTextContent = isBibleContent || isPreachingContent;
 
-  if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !isPreachingContent) {
+  if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !hasProjectedTextContent) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="text-zinc-900 font-black text-8xl tracking-tighter select-none opacity-20 text-center px-4">
@@ -243,7 +264,12 @@ const Proyector = ({ eventoIdOverride }) => {
         </button>
       </div>
 
-      <ProjectorMediaBackground url={fondoUrl} media={fondoMedia} disabled={modoTransmision || apagar} />
+      <ProjectorMediaBackground
+        url={fondoUrl}
+        media={fondoMedia}
+        disabled={modoTransmision || apagar}
+        suspended={Boolean(media?.url && media.mode === 'foreground')}
+      />
 
       {/* Capa de Video Principal (Foreground) - Tapa todo lo dem?s */}
       {media?.url && media.mode === 'foreground' && (
@@ -321,40 +347,7 @@ const Proyector = ({ eventoIdOverride }) => {
           </div>
         </div>
       ) : isPreachingContent ? (
-        <div className="relative z-20 flex h-full w-full items-center justify-center px-4 py-8 text-center">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.16),transparent_34%),linear-gradient(135deg,rgba(24,24,27,0.88),rgba(0,0,0,0.96))]" />
-          <div className="relative mx-auto flex h-full w-full max-w-6xl flex-col items-center justify-center rounded-[2.5rem] border border-white/10 bg-black/35 px-[5vw] py-[5vh] shadow-[0_40px_120px_rgba(0,0,0,0.55)]">
-            {projectorState.reference && (
-              <p className={`${isBibleContent ? 'mb-3 text-[clamp(1rem,2vw,2.2rem)] tracking-[0.12em]' : 'mb-6 text-[clamp(1.4rem,4vw,4.6rem)] tracking-tight'} shrink-0 font-black uppercase text-amber-100 drop-shadow-2xl`}>
-                {projectorState.reference}
-              </p>
-            )}
-            {isBibleContent && projectorState.content ? (
-              <div className="min-h-0 w-full flex-1">
-                <AutoFitText
-                  text={projectorState.content}
-                  minFontSize={36}
-                  maxFontSize={220}
-                  safeMaxWidth="92%"
-                  safeMaxHeight="94%"
-                  variant="projector"
-                  className="font-black leading-[1.08] text-white drop-shadow-[0_10px_45px_rgba(0,0,0,0.85)]"
-                />
-              </div>
-            ) : projectorState.content ? (
-              <p className="whitespace-pre-wrap text-[clamp(2rem,5.6vw,7rem)] font-black leading-[1.08] text-white drop-shadow-[0_10px_45px_rgba(0,0,0,0.85)]">
-                {projectorState.content}
-              </p>
-            ) : (
-              <p className="text-[clamp(1.6rem,4vw,4rem)] font-black text-zinc-300">Texto no guardado.</p>
-            )}
-            {projectorState.translation && (
-              <p className={`${isBibleContent ? 'mt-3 text-[clamp(0.8rem,1.4vw,1.4rem)]' : 'mt-8 text-[clamp(1rem,2vw,2rem)]'} shrink-0 rounded-full border border-white/10 bg-white/10 px-6 py-2 font-black uppercase tracking-[0.18em] text-zinc-100`}>
-                {projectorState.translation}
-              </p>
-            )}
-          </div>
-        </div>
+        <PreachingPresentation content={preachingContent} layerClassName="z-20" />
       ) : displaySlide ? (
         <div className={`relative z-10 w-full max-w-none flex flex-col ${modoTransmision ? 'justify-end items-start pl-8 md:pl-16' : 'justify-center items-center h-full mx-auto text-center'}`}>
           <div 

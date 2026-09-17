@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, Routes, Route } from 'react-router-dom';
 import LiveModeUI from './components/live/LiveModeUI';
 import Proyector from './components/live/Proyector';
 import ProyectorController from './components/live/ProyectorController';
@@ -21,6 +21,7 @@ import TeamPinGate from './components/admin/TeamPinGate';
 import EventManagement from './components/admin/EventManagement';
 import SetlistViewer from './components/admin/SetlistViewer';
 import UserProfile from './components/admin/UserProfile';
+import AnnouncementManagement from './components/admin/AnnouncementManagement';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
@@ -30,7 +31,7 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { App as CapacitorApp } from '@capacitor/app';
 import { ACCOUNT_STATUSES, getAccountStatusLabel, isAccountAllowed, normalizeAccountStatus } from './utils/accountStatus';
 import { canAccessMediaLibrary } from './utils/mediaLibraryPermissions';
-import { canAccessController, canAccessMultimediaTools, canAccessPreachings, canManageSongs, canManageTeam, canViewEventsAndSetlists } from './utils/rolePermissions';
+import { canAccessController, canAccessMultimediaTools, canAccessPreachings, canManageAnnouncements, canManageSongs, canManageTeam, canViewEventsAndSetlists } from './utils/rolePermissions';
 import { clearTeamPinAccessState } from './utils/teamPinAccess';
 import { FeedbackProvider, notifyFeedback } from './components/ui/FeedbackProvider';
 
@@ -327,6 +328,7 @@ function App() {
         <Route path="/predicas" element={<ProtectedAdminRoute user={user} allowed={canAccessPreachings(user)} message="Tu rol no tiene acceso al módulo de Predicas."><PreachingManagement user={user} /></ProtectedAdminRoute>} />
         <Route path="/biblioteca-multimedia" element={<ProtectedAdminRoute user={user} allowed={canAccessMediaLibrary(user)} message="La Biblioteca Multimedia esta disponible para dueno, administradores y multimedia."><MediaCenter user={user} /></ProtectedAdminRoute>} />
         <Route path="/multimedia-hub" element={<ProtectedAdminRoute user={user} allowed={canAccessMultimediaTools(user)} message="Central Multimedia esta disponible para dueno, administradores y multimedia."><MultimediaHub user={user} /></ProtectedAdminRoute>} />
+        <Route path="/anuncios" element={canManageAnnouncements(user) ? <AdminLayout user={user}><AnnouncementManagement user={user} /></AdminLayout> : <Navigate to="/" replace />} />
         <Route path="/setlist/:id" element={<ProtectedAdminRoute user={user} allowed={canViewEventsAndSetlists(user)} message="Tu rol no tiene acceso a este setlist."><SetlistViewer user={user} /></ProtectedAdminRoute>} />
         <Route path="/perfil" element={<AdminLayout user={user}><UserProfile user={user} /></AdminLayout>} />
         
@@ -336,7 +338,7 @@ function App() {
         } />
         
         {/* Ruta Pública del Proyector para la Congregación */}
-        <Route path="/proyector/:eventoId" element={<Proyector />} />
+        <Route path="/proyector/:eventoId" element={<Proyector user={user} />} />
         <Route path="/predicador/:eventoId" element={<PreacherDisplay user={user} />} />
         <Route path="/output/:eventoId/:outputId" element={<OutputRouter user={user} />} />
         

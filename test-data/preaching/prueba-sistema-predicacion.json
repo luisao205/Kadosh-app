@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "ids": {
+    "eventId": "prueba_sistema_evento_predicacion",
+    "preachingId": "prueba_sistema_predicacion"
+  },
+  "event": {
+    "titulo": "PRUEBA SISTEMA - Evento de Predicacion",
+    "fecha": "2026-09-21",
+    "fechaEnsayo": "2026-09-20",
+    "tipoEvento": "Culto de prueba",
+    "lugar": "Entorno de prueba",
+    "notas": "Evento creado exclusivamente para validar el modulo de Predicas.",
+    "setlist": [],
+    "canciones": [],
+    "equipo": [],
+    "estadoAsistencia": {},
+    "cantantesPorCancion": {},
+    "corosPorCancion": {},
+    "responsables": {
+      "Predicacion": ""
+    },
+    "predicadorId": "",
+    "predicadorNombre": "Predicador de Prueba",
+    "predicaId": "prueba_sistema_predicacion",
+    "predicaTitle": "PRUEBA SISTEMA - Predicacion de Prueba",
+    "ensayoChecklist": {},
+    "estado": "programado",
+    "completado": false,
+    "creadoPor": "PRUEBA SISTEMA"
+  },
+  "preaching": {
+    "title": "PRUEBA SISTEMA - Predicacion de Prueba",
+    "topic": "Probando el sistema de proyeccion Kadosh",
+    "preacherId": null,
+    "preacherName": "Predicador de Prueba",
+    "preacherType": "external",
+    "eventId": "prueba_sistema_evento_predicacion",
+    "mainReference": "Romanos 10:17",
+    "targetDurationMinutes": 35,
+    "status": "ready",
+    "blocks": [
+      { "id": "test_intro", "type": "point", "order": 0, "title": "INTRODUCCION", "content": "Bienvenida y presentacion del objetivo de esta predicacion de prueba." },
+      { "id": "test_intro_welcome", "type": "subpoint", "order": 1, "title": "Bienvenida", "content": "Saludar a la congregacion y explicar que este contenido valida el flujo completo de Kadosh." },
+      { "id": "test_intro_verse", "type": "verse", "order": 2, "reference": "2 Timoteo 3:16", "translation": "RVR1960", "text": "Toda la Escritura es inspirada por Dios, y util para ensenar, para redarguir, para corregir, para instruir en justicia;", "bibleId": "RVR1960", "passageId": "2TI.3.16" },
+      { "id": "test_intro_goal", "type": "subpoint", "order": 3, "title": "Objetivo", "content": "Comprobar bosquejo, navegacion, Biblia, proyeccion y salidas internas." },
+      { "id": "test_description", "type": "note", "order": 4, "visibility": "shared", "content": "Predicacion creada exclusivamente para probar el modulo de Predicas, sus bosquejos, proyeccion, navegacion y salidas." },
+
+      { "id": "test_faith", "type": "point", "order": 5, "title": "PUNTO 1 - LA FE", "content": "La fe nace al escuchar la Palabra y nos permite caminar confiando en Dios." },
+      { "id": "test_rom_10_17", "type": "verse", "order": 6, "reference": "Romanos 10:17", "translation": "RVR1960", "text": "Asi que la fe es por el oir, y el oir, por la palabra de Dios.", "bibleId": "RVR1960", "passageId": "ROM.10.17" },
+      { "id": "test_heb_11_1", "type": "verse", "order": 7, "reference": "Hebreos 11:1", "translation": "RVR1960", "text": "Es, pues, la fe la certeza de lo que se espera, la conviccion de lo que no se ve.", "bibleId": "RVR1960", "passageId": "HEB.11.1" },
+      { "id": "test_2co_5_7", "type": "verse", "order": 8, "reference": "2 Corintios 5:7", "translation": "RVR1960", "text": "porque por fe andamos, no por vista;", "bibleId": "RVR1960", "passageId": "2CO.5.7" },
+
+      { "id": "test_trust", "type": "point", "order": 9, "title": "PUNTO 2 - LA CONFIANZA", "content": "Confiamos en el cuidado, la direccion y la presencia de Dios." },
+      { "id": "test_psa_23_1", "type": "verse", "order": 10, "reference": "Salmos 23:1", "translation": "RVR1960", "text": "Jehova es mi pastor; nada me faltara.", "bibleId": "RVR1960", "passageId": "PSA.23.1" },
+      { "id": "test_pro_3_5_6", "type": "verse", "order": 11, "reference": "Proverbios 3:5-6", "translation": "RVR1960", "text": "Fiate de Jehova de todo tu corazon, y no te apoyes en tu propia prudencia. Reconocelo en todos tus caminos, y el enderezara tus veredas.", "bibleId": "RVR1960", "passageId": "PRO.3.5-PRO.3.6" },
+      { "id": "test_isa_41_10", "type": "verse", "order": 12, "reference": "Isaias 41:10", "translation": "RVR1960", "text": "No temas, porque yo estoy contigo; no desmayes, porque yo soy tu Dios que te esfuerzo; siempre te ayudare, siempre te sustentare con la diestra de mi justicia.", "bibleId": "RVR1960", "passageId": "ISA.41.10" },
+      { "id": "test_media_instruction", "type": "mediaInstruction", "order": 13, "instruction": "PRUEBA: cambiar temporalmente a Multimedia y regresar a esta predica." },
+
+      { "id": "test_victory", "type": "point", "order": 14, "title": "PUNTO 3 - LA VICTORIA", "content": "En Cristo caminamos con fortaleza, ayuda y victoria." },
+      { "id": "test_rom_8_37", "type": "verse", "order": 15, "reference": "Romanos 8:37", "translation": "RVR1960", "text": "Antes, en todas estas cosas somos mas que vencedores por medio de aquel que nos amo.", "bibleId": "RVR1960", "passageId": "ROM.8.37" },
+      { "id": "test_php_4_13", "type": "verse", "order": 16, "reference": "Filipenses 4:13", "translation": "RVR1960", "text": "Todo lo puedo en Cristo que me fortalece.", "bibleId": "RVR1960", "passageId": "PHP.4.13" },
+      { "id": "test_psa_46_1", "type": "verse", "order": 17, "reference": "Salmos 46:1", "translation": "RVR1960", "text": "Dios es nuestro amparo y fortaleza, nuestro pronto auxilio en las tribulaciones.", "bibleId": "RVR1960", "passageId": "PSA.46.1" },
+
+      { "id": "test_conclusion", "type": "point", "order": 18, "title": "CONCLUSION", "content": "Recordar que la fe, la confianza y la victoria descansan en Dios." },
+      { "id": "test_final_call", "type": "subpoint", "order": 19, "title": "Llamado final", "content": "Invitar a responder con fe y confianza." },
+      { "id": "test_prayer", "type": "subpoint", "order": 20, "title": "Oracion", "content": "Orar por fe, direccion y fortaleza para la congregacion." }
+    ]
+  }
+}

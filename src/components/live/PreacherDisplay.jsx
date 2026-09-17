@@ -8,6 +8,9 @@ import { useFeedback } from '../ui/FeedbackProvider';
 import useMediaLibrary from '../../hooks/useMediaLibrary';
 import { MEDIA_TYPES } from '../../utils/mediaLibrary';
 import { getMediaTypeLabel, getMediaStatusClassName, getMediaStatusLabel } from '../media/mediaDisplay';
+import InternalScreenBlackout from './InternalScreenBlackout';
+import InternalMessageOverlay from './InternalMessageOverlay';
+import { resolveActiveBibleProjectorState, resolveActiveBibleSlide } from '../../utils/bibleProjectionState';
 import { buildProjectorMediaPayload } from '../../utils/projectorMediaState';
 import {
   PREACHER_QUICK_ALERTS,
@@ -689,7 +692,6 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
         media: mediaPayload,
         title: media.title,
         timer: eventSnapshot?.proyectorCountdown || null,
-        background: eventSnapshot?.proyectorFondo || null,
         liveState: createInactiveSongLiveState({
           contentType: 'preaching-media',
           contentTitle: media.title || item.instruction || 'Multimedia de predica',
@@ -870,9 +872,18 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
     );
   }
 
+  if (eventData?.proyectorApagado) {
+    return <InternalScreenBlackout active />;
+  }
+
+  const internalMessageOverlay = <InternalMessageOverlay alert={eventData?.proyectorAlerta} audience="pastor" currentTime={now} />;
+  const activeProjectedBibleState = resolveActiveBibleProjectorState(eventData);
+  const activeProjectedBibleSlide = resolveActiveBibleSlide(activeProjectedBibleState);
+
   if (isV2) {
     return (
       <div className="fixed inset-0 overflow-hidden bg-[#06070b] text-white">
+        {internalMessageOverlay}
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.14),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(124,58,237,0.16),transparent_30%)] pointer-events-none" />
         <div className="relative flex h-dvh flex-col gap-3 overflow-hidden px-4 pb-4 pt-[calc(env(safe-area-inset-top)+14px)] sm:px-6 sm:pb-6 lg:px-8">
           <header className="shrink-0 rounded-[1.6rem] border border-white/10 bg-zinc-950/70 p-4 shadow-2xl shadow-black/30 backdrop-blur-xl">
@@ -969,6 +980,20 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
                       {projectorState?.actorName && (
                         <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Enviado por: {projectorState.actorName}</p>
                       )}
+                      {activeProjectedBibleSlide?.text && (
+                        <div className="mt-3 rounded-xl border border-blue-400/20 bg-blue-500/10 p-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-blue-200">Biblia en proyeccion</p>
+                          <p className="mt-1 text-sm font-black text-white">{activeProjectedBibleSlide.reference || activeProjectedBibleState?.reference}</p>
+                          <p className="mt-2 whitespace-pre-wrap text-sm font-bold leading-relaxed text-blue-50/90">{activeProjectedBibleSlide.text}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {!canOperateLive && activeProjectedBibleSlide?.text && (
+                    <div className="mb-4 rounded-2xl border border-blue-400/20 bg-blue-500/10 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-blue-200">Biblia en proyeccion</p>
+                      <p className="mt-1 text-sm font-black text-white">{activeProjectedBibleSlide.reference || activeProjectedBibleState?.reference}</p>
+                      <p className="mt-2 whitespace-pre-wrap text-sm font-bold leading-relaxed text-blue-50/90">{activeProjectedBibleSlide.text}</p>
                     </div>
                   )}
                   <h2 className="text-4xl font-black leading-tight tracking-tight sm:text-6xl lg:text-7xl">{currentStep.title}</h2>
@@ -1237,6 +1262,7 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
 
   return (
     <div className="fixed inset-0 bg-[#080a0f] text-white overflow-hidden p-5 md:p-8">
+      {internalMessageOverlay}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.12),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(14,165,233,0.10),transparent_28%)] pointer-events-none" />
       <div className="relative h-full grid grid-rows-[auto_1fr_auto] gap-5">
         <header className="flex items-start justify-between gap-5 border-b border-white/10 pb-5">

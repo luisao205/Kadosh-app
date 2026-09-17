@@ -332,6 +332,7 @@ const MultimediaHub = ({ user }) => {
         proyectorMedia: null,
         proyectorLogo: false,
         proyectorApagado: false,
+        proyectorFondo: null,
         proyectorFondoMedia: null,
         proyectorSongId: null,
         proyectorSlideIndex: -1,

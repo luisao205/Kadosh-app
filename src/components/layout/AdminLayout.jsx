@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell, Monitor, Images, Camera, BookOpen } from 'lucide-react';
+import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell, Monitor, Images, Camera, BookOpen, Megaphone } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, signOut } from 'firebase/auth';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { canAccessMediaLibrary } from '../../utils/mediaLibraryPermissions';
-import { canAccessMultimediaTools, canAccessPreachings, canManageTeam } from '../../utils/rolePermissions';
+import { canAccessMultimediaTools, canAccessPreachings, canManageAnnouncements, canManageTeam } from '../../utils/rolePermissions';
 import { cancelTeamPinExitInvalidation, clearTeamPinAccessState, scheduleTeamPinExitInvalidation } from '../../utils/teamPinAccess';
 import { NavigationGuardProvider, useNavigationGuard } from '../../utils/navigationGuard';
 
@@ -28,6 +28,7 @@ const AdminLayoutShell = ({ children, user }) => {
         { name: 'Inicio', path: '/', section: 'dashboard', icon: <Home size={20} /> },
         { name: 'Eventos y Setlists', path: '/eventos', section: 'events', icon: <Calendar size={20} /> },
         canAccessPreachings(user) ? { name: 'Prédicas', path: '/predicas', section: 'preachings', icon: <BookOpen size={20} className="text-amber-400" /> } : null,
+        canManageAnnouncements(user) ? { name: 'Anuncios', path: '/anuncios', section: 'announcements', icon: <Megaphone size={20} className="text-amber-400" /> } : null,
         { name: 'Canciones / Repertorio', path: '/canciones', section: 'songs', icon: <Music size={20} /> },
         canAccessMediaLibrary(user) ? { name: 'Biblioteca Multimedia', path: '/biblioteca-multimedia', section: 'media-library', icon: <Images size={20} className="text-violet-400" /> } : null,
       ].filter(Boolean)
@@ -51,6 +52,7 @@ const AdminLayoutShell = ({ children, user }) => {
     if (pathname === '/') return 'dashboard';
     if (pathname === '/eventos' || pathname.startsWith('/setlist/')) return 'events';
     if (pathname === '/predicas') return 'preachings';
+    if (pathname === '/anuncios') return 'announcements';
     if (pathname === '/canciones' || pathname === '/añadir' || pathname.startsWith('/editar/')) return 'songs';
     if (pathname === '/biblioteca-multimedia') return 'media-library';
     if (pathname === '/equipo') return 'team';
