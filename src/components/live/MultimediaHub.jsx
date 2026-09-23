@@ -345,7 +345,7 @@ const MultimediaHub = ({ user }) => {
         }),
         currentSongId: null
       };
-      await setDoc(doc(db, 'eventos', request.eventId), updates, { merge: true });
+      await updateDoc(doc(db, 'eventos', request.eventId), updates);
       await updateDoc(doc(db, 'eventos', request.eventId, 'preacherRequests', request.id), {
         status: PREACHER_REQUEST_STATUS.PROJECTED,
         handledAt: serverTimestamp(),

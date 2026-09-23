@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
+  buildCanonicalBibleProjectorState,
   buildStoppedBibleProjectionPayload,
   capturePreviousProjectionFields,
   isMatchingBibleProjection,
   resolveActiveBibleProjectorState,
   resolveActiveBibleSlide
 } from '../src/utils/bibleProjectionState.js';
+import { createInactiveSongLiveState } from '../src/utils/liveState.js';
+
+const applyProjectionUpdate = (eventData, updates) => ({ ...eventData, ...updates });
 import { commitBibleSelectionField, createBibleSelection, getBibleVerseNumbers, normalizeBibleSelection, selectBibleVerse, updateBibleSelectionDraft } from '../src/utils/bibleSelection.js';
 
 let selection = selectBibleVerse(createBibleSelection(1), 1, 23);
@@ -55,6 +59,22 @@ const bibleState = {
   bible: { slides, slideIndex: 9, slideCount: slides.length, outlineItemId: 'outline-1' }
 };
 
+const legacyQuickMessageHybrid = {
+  type: 'preaching', contentType: 'quickMessage', preachingType: 'verse',
+  presentationType: 'theme', alignment: 'center',
+  segments: [{ text: 'Punto rapido', color: 'red', bold: true }],
+  bible: { slides: [{ reference: 'Juan 3:35', text: 'Texto anterior' }] },
+  bibleId: 'rvr1960', translation: 'RVR1960'
+};
+const canonicalBibleFromHybrid = buildCanonicalBibleProjectorState({
+  ...legacyQuickMessageHybrid,
+  contentType: 'bible', title: 'Juan 3:35', content: 'El Padre ama al Hijo.'
+});
+assert.equal(canonicalBibleFromHybrid.contentType, 'bible');
+assert.equal('segments' in canonicalBibleFromHybrid, false);
+assert.equal('presentationType' in canonicalBibleFromHybrid, false);
+assert.equal('alignment' in canonicalBibleFromHybrid, false);
+
 assert.equal(resolveActiveBibleProjectorState(null), null);
 assert.equal(resolveActiveBibleProjectorState(undefined), null);
 assert.equal(resolveActiveBibleProjectorState('loading'), null);
@@ -78,7 +98,18 @@ const bibleTransitions = [
 assert.deepEqual(bibleTransitions.map(state => Boolean(resolveActiveBibleProjectorState(state))), [false, true, false, false, false, false, false, true]);
 
 const controller = await readFile(new URL('../src/components/live/ProyectorController.jsx', import.meta.url), 'utf8');
+const multimediaHub = await readFile(new URL('../src/components/live/MultimediaHub.jsx', import.meta.url), 'utf8');
+const directProjectorStateMerge = /setDoc\([\s\S]{0,500}?projectorState[\s\S]{0,500}?\{\s*merge:\s*true\s*\}/;
+assert.doesNotMatch(controller, directProjectorStateMerge);
+assert.doesNotMatch(multimediaHub, directProjectorStateMerge);
 assert.match(controller, /const projectBiblePassage = async/);
+const bibleLiveState = createInactiveSongLiveState({ contentType: 'bible', contentTitle: 'Juan 11:35' });
+assert.equal(bibleLiveState.activeContentType, 'bible');
+assert.equal(bibleLiveState.activeContentTitle, 'Juan 11:35');
+assert.equal(typeof bibleLiveState.activeContentType, 'string');
+assert.match(controller, /buildInactiveSongLiveState\('bible', slide\.reference \|\| 'Biblia'\)/);
+assert.match(controller, /buildInactiveSongLiveState\('none', 'Sin contenido activo'\)/);
+assert.doesNotMatch(controller, /buildInactiveSongLiveState\(\{\s*contentType:/);
 assert.match(controller, /announcementState: buildInactiveAnnouncementState\(\),\s*projectorState:/);
 assert.match(controller, /const projectBibleDeckSlideAt = async \(targetIndex\)/);
 assert.match(controller, /const projectBibleDeckSlide = async \(delta\)/);
@@ -86,6 +117,8 @@ assert.match(controller, /await projectBibleDeckSlideAt\(currentIndex \+ delta\)
 assert.match(controller, /setBiblePreview\(null\);\s*setBiblePreviewOutlineItemId\(null\);/);
 assert.match(controller, /const clearLocalBibleControl = \(\) =>/);
 assert.match(controller, /capturePreviousProjectionFields\(eventSnapshot\.data\(\)\)/);
+assert.match(controller, /transaction\.update\(eventRef, \{/);
+assert.match(controller, /projectorState: buildCanonicalBibleProjectorState/);
 assert.match(controller, /projectionActionId/);
 assert.match(controller, /runTransaction\(db, async \(transaction\) =>/);
 assert.match(controller, /bibleProjectionActiveRef\.current = true/);
@@ -98,7 +131,7 @@ assert.match(stopPublicHandler, /isMatchingBibleProjection/);
 assert.match(stopPublicHandler, /buildStoppedBibleProjectionPayload/);
 assert.match(stopPublicHandler, /enqueueProjectionWrite/);
 assert.match(stopPublicHandler, /currentState\.previousProjectionFields/);
-assert.match(stopPublicHandler, /transaction\.set/);
+assert.match(stopPublicHandler, /transaction\.update/);
 assert.doesNotMatch(stopPublicHandler, /buildRestorePayload|setTimeout/);
 assert.match(controller, /onClick=\{stopPublicBibleProjection\}[\s\S]*Dejar de proyectar Biblia/);
 assert.match(controller, /projectedBibleOutlineItemId === biblePreviewOutlineItemId\s*&& Number\(biblePreview\?\.selectedIndex \|\| 0\) === Number\(evento\?\.projectorState\?\.bible\?\.slideIndex \|\| 0\)/);
@@ -179,6 +212,22 @@ for (const kind of ['song', 'preaching', 'media']) {
   assert.equal(leaveBible(panic(), `bible-${kind}`).projectorState.type, 'blackout');
 }
 
+const songBeforeQuickMessage = structuredClone(contentStates.song);
+const quickMessageState = {
+  type: 'preaching', contentType: 'quickMessage', preachingType: 'quickMessage',
+  segments: [{ text: 'Punto', color: 'white', bold: true }], presentationType: 'point', alignment: 'center'
+};
+const quickMessageEvent = applyProjectionUpdate(songBeforeQuickMessage, { projectorState: quickMessageState });
+const restoredSong = applyProjectionUpdate(quickMessageEvent, songBeforeQuickMessage);
+assert.deepEqual(restoredSong.projectorState, songBeforeQuickMessage.projectorState);
+
+const bibleBeforeQuickMessage = structuredClone(enterBible(contentStates.song, 'bible-before-quick'));
+const restoredBible = applyProjectionUpdate(
+  applyProjectionUpdate(bibleBeforeQuickMessage, { projectorState: quickMessageState }),
+  bibleBeforeQuickMessage
+);
+assert.deepEqual(restoredBible.projectorState, bibleBeforeQuickMessage.projectorState);
+
 const firstBible = enterBible(contentStates.song, 'bible-1');
 const secondBible = enterBible(firstBible, 'bible-2');
 assert.deepEqual(leaveBible(secondBible, 'bible-2'), contentStates.song);
@@ -225,9 +274,10 @@ assert.match(internalBible, /AutoFitText/);
 
 const rules = await readFile(new URL('../firestore.rules', import.meta.url), 'utf8');
 assert.match(rules, /function projectorEventFields\(\)[\s\S]*'announcementState'/);
+assert.match(rules, /function bibleProjectionFields\(\)[\s\S]*'announcementState'/);
 assert.match(rules, /function canUpdateEventAsMedia\(\)[\s\S]*validInactiveAnnouncementState\(\)/);
 assert.match(rules, /function validInactiveAnnouncementState\(\)[\s\S]*announcementId == ''[\s\S]*currentSlide == null[\s\S]*presentationActive == false[\s\S]*autoAdvance\.enabled == false/);
-assert.match(rules, /function canUpdateEventAnnouncement\(\) \{\s*return isOwnerOnly\(\)/);
-assert.match(rules, /match \/anuncios\/\{announcementId\} \{\s*allow read, create, update, delete: if isOwnerOnly\(\);/);
+assert.match(rules, /function canUpdateEventAnnouncement\(\) \{\s*return hasPermission\('announcements\.project'\)/);
+assert.match(rules, /match \/anuncios\/\{announcementId\} \{[\s\S]*allow create: if hasPermission\('announcements\.create'\)/);
 
 console.log('bible projection state and internal outputs: OK');

@@ -570,7 +570,7 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
         stepIndex: safeIndex,
         previousProjectorState
       });
-      await setDoc(eventRef, {
+      await updateDoc(eventRef, {
         projectorState: nextState,
         proyectorSlide: null,
         proyectorMedia: null,
@@ -587,7 +587,7 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
           contentTitle: nextState.title || nextState.reference || 'Predica',
           updatedBy: user?.nombre || user?.displayName || user?.email || 'Pastor'
         })
-      }, { merge: true });
+      });
       notify('Contenido proyectado.', { type: 'success' });
     } catch (error) {
       console.error('Error proyectando desde Pastor:', error);
@@ -708,7 +708,7 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
         actorName: user?.nombre || user?.displayName || user?.email || 'Pastor',
         previousProjectorState: eventSnapshot?.projectorState || null
       };
-      await setDoc(eventRef, updates, { merge: true });
+      await updateDoc(eventRef, updates);
       notify('Multimedia enviada a pantalla.', { type: 'success' });
     } catch (error) {
       console.error('Error proyectando multimedia de predica:', error);
@@ -730,7 +730,7 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
         return;
       }
       const previous = current?.previousProjectorState || null;
-      await setDoc(eventRef, {
+      await updateDoc(eventRef, {
         projectorState: previous || {
           type: 'clearPreaching',
           title: 'Predica quitada',
@@ -753,7 +753,7 @@ const PreacherDisplay = ({ eventoIdOverride, user }) => {
           contentTitle: previous?.title || '',
           updatedBy: user?.nombre || user?.displayName || user?.email || 'Pastor'
         })
-      }, { merge: true });
+      });
       notify(previous ? 'Contenido anterior restaurado.' : 'Contenido de predica quitado.', { type: 'success' });
     } catch (error) {
       console.error('Error quitando proyeccion del Pastor:', error);

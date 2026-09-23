@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildAnnouncementProjectionPayload, buildFinishedAnnouncementPayload } from '../src/utils/announcementState.js';
 import { buildPanicProjectorPayload, buildProjectorMediaPayload } from '../src/utils/projectorMediaState.js';
-import { canDeleteAnnouncements, canManageAnnouncements } from '../src/utils/announcementPermissions.js';
+import { canDeleteAnnouncements, canManageAnnouncements, canProjectAnnouncements } from '../src/utils/announcementPermissions.js';
+import { PERMISSIONS } from '../src/utils/permissions.js';
 
 for (const role of ['dueño', 'dueno']) {
   assert.equal(canManageAnnouncements({ rol: role }), true);
@@ -12,6 +13,10 @@ for (const role of ['admin', 'multimedia', 'pastor', 'predicador', 'musico', 'ca
   assert.equal(canManageAnnouncements({ rol: role }), false);
   assert.equal(canDeleteAnnouncements({ rol: role }), false);
 }
+const projector = { rol: 'musico', permissionOverrides: { [PERMISSIONS.ANNOUNCEMENTS_PROJECT]: true } };
+assert.equal(canManageAnnouncements(projector), true);
+assert.equal(canProjectAnnouncements(projector), true);
+assert.equal(canDeleteAnnouncements(projector), false);
 
 const songBackground = { url: 'song.jpg', mediaId: 'song-bg' };
 const announcement = { id: 'a1', title: 'Culto', slides: [
@@ -42,6 +47,8 @@ assert.match(layout,/canManageAnnouncements\(user\).*name: 'Anuncios'/);
 const app=await readFile(new URL('../src/App.jsx',import.meta.url),'utf8');
 assert.match(app,/path="\/anuncios".*canManageAnnouncements\(user\).*<Navigate to="\/" replace/);
 const rules=await readFile(new URL('../firestore.rules',import.meta.url),'utf8');
-assert.match(rules,/function canUpdateEventAnnouncement\(\) \{\s*return isOwnerOnly\(\)/);
-assert.match(rules,/match \/anuncios\/\{announcementId\} \{\s*allow read, create, update, delete: if isOwnerOnly\(\);/);
+assert.match(rules,/function canUpdateEventAnnouncement\(\) \{\s*return hasPermission\('announcements\.project'\)/);
+assert.match(rules,/allow create: if hasPermission\('announcements\.create'\)/);
+assert.match(rules,/allow update: if hasPermission\('announcements\.edit'\)/);
+assert.match(rules,/allow delete: if hasPermission\('announcements\.delete'\)/);
 console.log('announcement state and isolation: OK');

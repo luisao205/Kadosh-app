@@ -1,6 +1,6 @@
 // src/config/firebase.js
 // Añade esta importación arriba
-import { getMessaging } from 'firebase/messaging';
+import { getMessaging, isSupported } from 'firebase/messaging';
 import { initializeApp } from "firebase/app";
 import { 
   getFirestore, 
@@ -35,4 +35,13 @@ const functions = getFunctions(app);
 export { db, auth, functions };
 
 // Añade esta línea al final del archivo
-export const messaging = getMessaging(app);
+let messagingPromise = null;
+
+export const getMessagingIfSupported = () => {
+  if (!messagingPromise) {
+    messagingPromise = isSupported()
+      .then((supported) => (supported ? getMessaging(app) : null))
+      .catch(() => null);
+  }
+  return messagingPromise;
+};

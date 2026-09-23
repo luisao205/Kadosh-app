@@ -25,13 +25,14 @@ import AnnouncementManagement from './components/admin/AnnouncementManagement';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
-import { db, messaging } from './config/firebase';
+import { db, getMessagingIfSupported } from './config/firebase';
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { App as CapacitorApp } from '@capacitor/app';
 import { ACCOUNT_STATUSES, getAccountStatusLabel, isAccountAllowed, normalizeAccountStatus } from './utils/accountStatus';
 import { canAccessMediaLibrary } from './utils/mediaLibraryPermissions';
 import { canAccessController, canAccessMultimediaTools, canAccessPreachings, canManageAnnouncements, canManageSongs, canManageTeam, canViewEventsAndSetlists } from './utils/rolePermissions';
+import { PERMISSIONS, hasPermission } from './utils/permissions';
 import { clearTeamPinAccessState } from './utils/teamPinAccess';
 import { FeedbackProvider, notifyFeedback } from './components/ui/FeedbackProvider';
 
@@ -118,6 +119,16 @@ function App() {
   const [loadingAuth, setLoadingAuth] = useState(true);
   const userAccessRef = useRef(true);
   const notificationsStartedRef = useRef(false);
+  const permissionRoleDefaultsRef = useRef({});
+
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    return onSnapshot(doc(db, 'sistema', 'permissionRoles'), (snapshot) => {
+      const nextDefaults = snapshot.exists() ? snapshot.data()?.roleDefaults || {} : {};
+      permissionRoleDefaultsRef.current = nextDefaults;
+      setUser((current) => current ? { ...current, permissionRoleDefaults: nextDefaults } : current);
+    }, (error) => console.warn('No se pudieron cargar los defaults de permisos:', error));
+  }, [user?.uid]);
 
   useEffect(() => {
     const auth = getAuth();
@@ -166,7 +177,8 @@ function App() {
           }
         } else {
           // 💻 MODO WEB
-          if (!('Notification' in window)) return;
+          const messaging = await getMessagingIfSupported();
+          if (!messaging || !('Notification' in window)) return;
           
           const permission = await Notification.requestPermission();
           let registration = await navigator.serviceWorker.ready;
@@ -236,7 +248,7 @@ function App() {
               updateDoc(docRef, { 'preferencias.fontSize': 16 }).catch(e => console.error(e));
               userData.preferencias.fontSize = 16;
             }
-            setUser({ uid: firebaseUser.uid, email: firebaseUser.email, accountStatus: normalizedStatus, ...userData });
+            setUser({ uid: firebaseUser.uid, email: firebaseUser.email, accountStatus: normalizedStatus, permissionRoleDefaults: permissionRoleDefaultsRef.current, ...userData });
           }
           setLoadingAuth(false);
         });
@@ -321,7 +333,7 @@ function App() {
         {/* Rutas de Administración (Envueltas en el Layout) */}
         <Route path="/" element={<AdminLayout user={user}><AdminDashboard user={user} /></AdminLayout>} />
         <Route path="/canciones" element={<AdminLayout user={user}><SongList user={user} /></AdminLayout>} />
-        <Route path="/añadir" element={<ProtectedAdminRoute user={user} allowed={canManageSongs(user)} message="Solo el equipo autorizado puede agregar canciones."><AddSongAI user={user} /></ProtectedAdminRoute>} />
+        <Route path="/añadir" element={<ProtectedAdminRoute user={user} allowed={hasPermission(user, PERMISSIONS.SONGS_CREATE)} message="Solo el equipo autorizado puede agregar canciones."><AddSongAI user={user} /></ProtectedAdminRoute>} />
         <Route path="/editar/:id" element={<ProtectedAdminRoute user={user} allowed={canManageSongs(user)} message="Solo el equipo autorizado puede editar canciones."><EditSong user={user} /></ProtectedAdminRoute>} />
         <Route path="/equipo" element={<ProtectedAdminRoute user={user} allowed={canManageTeam(user)} message="Solo el dueno puede gestionar integrantes y roles."><TeamPinGate user={user}><UserManagement user={user} /></TeamPinGate></ProtectedAdminRoute>} />
         <Route path="/eventos" element={<ProtectedAdminRoute user={user} allowed={canViewEventsAndSetlists(user)} message="Tu rol no tiene acceso a Eventos y Setlists."><EventManagement user={user} /></ProtectedAdminRoute>} />
@@ -341,6 +353,7 @@ function App() {
         <Route path="/proyector/:eventoId" element={<Proyector user={user} />} />
         <Route path="/predicador/:eventoId" element={<PreacherDisplay user={user} />} />
         <Route path="/output/:eventoId/:outputId" element={<OutputRouter user={user} />} />
+        <Route path="/output/global/:outputId" element={<OutputRouter user={user} />} />
         
         {/* Ruta Privada de Retorno para los Másicos en Tarima */}
         <Route path="/retorno/:eventoId" element={<StageDisplay />} />

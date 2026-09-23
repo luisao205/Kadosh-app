@@ -148,3 +148,116 @@
     color: #6ee7b7;
   }
 }
+
+@keyframes quick-message-ambient-drift-a {
+  from { transform: translate(-50%, -50%) scale(0.98); opacity: 0.84; }
+  to { transform: translate(-43%, -55%) scale(1.1); opacity: 1; }
+}
+
+@keyframes quick-message-ambient-drift-b {
+  from { transform: translate(-50%, -50%) scale(1.06); opacity: 0.82; }
+  to { transform: translate(-57%, -43%) scale(0.96); opacity: 1; }
+}
+
+@keyframes quick-message-ambient-drift-c {
+  from { transform: translate(-50%, -50%) scale(0.96); opacity: 0.8; }
+  to { transform: translate(-45%, -46%) scale(1.08); opacity: 0.98; }
+}
+
+@keyframes quick-message-ambient-drift-d {
+  from { transform: translate(-50%, -50%) scale(1.08); opacity: 0.8; }
+  to { transform: translate(-54%, -56%) scale(0.96); opacity: 1; }
+}
+
+.quick-message-ambient-glow {
+  animation: quick-message-ambient-drift-a 12s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+
+.quick-message-ambient-glow-1 { animation-name: quick-message-ambient-drift-b; animation-duration: 16s; }
+.quick-message-ambient-glow-2 { animation-name: quick-message-ambient-drift-c; animation-duration: 10s; }
+.quick-message-ambient-glow-3 { animation-name: quick-message-ambient-drift-d; animation-duration: 14s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-message-ambient-glow,
+  .quick-message-dynamic-glow,
+  .quick-message-dynamic-text { animation: none; }
+  .quick-message-particle { display: none; }
+}
+
+@property --quick-glow-active {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(255, 255, 255, 0.04);
+}
+
+@property --quick-particle-active {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(255, 255, 255, 0.24);
+}
+
+@keyframes quick-message-text-color {
+  0%, 100% { color: var(--quick-text-base); }
+  48% { color: var(--quick-text-bright); }
+  76% { color: var(--quick-text-deep); }
+}
+
+@keyframes quick-message-glow-color {
+  0%, 100% { --quick-glow-active: var(--quick-glow-base); }
+  48% { --quick-glow-active: var(--quick-glow-bright); }
+  76% { --quick-glow-active: var(--quick-glow-deep); }
+}
+
+@keyframes quick-message-particle-color {
+  0%, 100% { --quick-particle-active: var(--quick-particle-base); }
+  48% { --quick-particle-active: var(--quick-particle-bright); }
+  76% { --quick-particle-active: var(--quick-particle-deep); }
+}
+
+@keyframes quick-message-particle-drift-a {
+  from { transform: translate3d(-10%, 12%, 0) scale(0.82); opacity: 0; }
+  38% { opacity: 0.85; }
+  to { transform: translate3d(16%, -28%, 0) scale(1.12); opacity: 0; }
+}
+
+@keyframes quick-message-particle-drift-b {
+  from { transform: translate3d(8%, 18%, 0) scale(1.08); opacity: 0; }
+  42% { opacity: 0.72; }
+  to { transform: translate3d(-18%, -24%, 0) scale(0.76); opacity: 0; }
+}
+
+@keyframes quick-message-particle-drift-c {
+  from { transform: translate3d(-14%, -8%, 0) scale(0.75); opacity: 0; }
+  50% { opacity: 0.78; }
+  to { transform: translate3d(22%, 20%, 0) scale(1.04); opacity: 0; }
+}
+
+@keyframes quick-message-particle-drift-d {
+  from { transform: translate3d(16%, -14%, 0) scale(1); opacity: 0; }
+  46% { opacity: 0.68; }
+  to { transform: translate3d(-10%, 26%, 0) scale(0.8); opacity: 0; }
+}
+
+.quick-message-dynamic-text {
+  color: var(--quick-text-base);
+  animation: quick-message-text-color 11s ease-in-out var(--quick-phase-delay) infinite;
+}
+
+.quick-message-dynamic-glow {
+  background: radial-gradient(ellipse at center, var(--quick-glow-active) 0%, transparent 72%);
+  animation: quick-message-glow-color 11s ease-in-out var(--quick-phase-delay) infinite;
+}
+
+.quick-message-particle {
+  background: var(--quick-particle-active);
+  box-shadow: 0 0 10px var(--quick-particle-active);
+  animation:
+    quick-message-particle-drift-a var(--quick-particle-duration) ease-in-out var(--quick-particle-delay) infinite alternate,
+    quick-message-particle-color 11s ease-in-out var(--quick-phase-delay) infinite;
+  will-change: transform, opacity;
+}
+
+.quick-message-particle-1 { animation-name: quick-message-particle-drift-b, quick-message-particle-color; }
+.quick-message-particle-2 { animation-name: quick-message-particle-drift-c, quick-message-particle-color; }
+.quick-message-particle-3 { animation-name: quick-message-particle-drift-d, quick-message-particle-color; }

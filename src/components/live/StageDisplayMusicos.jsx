@@ -12,6 +12,7 @@ import InternalScreenMedia from './InternalScreenMedia';
 import InternalScreenBible from './InternalScreenBible';
 import InternalScreenBlackout from './InternalScreenBlackout';
 import InternalScreenPreaching from './InternalScreenPreaching';
+import QuickMessagePresentation from './QuickMessagePresentation';
 
 const getSongIdsFromEvent = (evento) => {
   const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
@@ -312,6 +313,7 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
       )}
 
       {media?.url && <InternalScreenMedia media={media} label="Multimedia en retorno de musicos" opacity={previewOpacity} />}
+      <QuickMessagePresentation eventData={evento} layerClassName="z-[75]" />
       <InternalScreenBible eventData={evento} />
       <InternalScreenPreaching eventData={evento} />
       <InternalScreenBlackout active={evento?.proyectorApagado === true} />

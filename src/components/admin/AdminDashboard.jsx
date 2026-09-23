@@ -8,6 +8,8 @@ import { traducirAcorde } from '../../utils/musicCore';
 import { canAccessController, canAccessMultimediaTools, canViewEventsAndSetlists, normalizeRole } from '../../utils/rolePermissions';
 import confetti from 'canvas-confetti';
 import { useFeedback } from '../ui/FeedbackProvider';
+import DesktopUpdateStatus from './DesktopUpdateStatus';
+import DesktopOutputManager from './DesktopOutputManager';
 
 const isOperationalEvent = (event = {}) => !event.completado && event.estado !== 'cancelado';
 
@@ -740,6 +742,10 @@ const AdminDashboard = ({ user }) => {
 
   return (
     <div className="max-w-6xl mx-auto animate-in fade-in duration-500">
+      <div className="mb-6">
+        <DesktopUpdateStatus />
+      </div>
+      <DesktopOutputManager eventId={proximoEvento?.id || ''} />
       <header className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 md:p-6 backdrop-blur-sm">
         <div>
           <h1 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">

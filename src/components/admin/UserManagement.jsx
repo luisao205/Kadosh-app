@@ -2,9 +2,11 @@
 import { collection, onSnapshot, deleteDoc, doc, addDoc, updateDoc, getDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { crearUsuarioPorAdmin, actualizarUsuarioPorAdmin, crearPerfilSinAcceso, habilitarAccesoWeb } from '../../utils/authUtils';
-import { Users, UserPlus, Shield, Music, Trash2, Edit, AlertCircle, Key, MonitorPlay, Eye, EyeOff, Search } from 'lucide-react';
+import { Users, UserPlus, Shield, Music, Trash2, Edit, AlertCircle, Key, MonitorPlay, Eye, EyeOff, Search, SlidersHorizontal } from 'lucide-react';
 import { ACCOUNT_STATUSES, ACCOUNT_STATUS_OPTIONS, SUSPENSION_TYPES, SUSPENSION_TYPE_OPTIONS, getAccountStatusLabel, normalizeAccountStatus } from '../../utils/accountStatus';
 import { useFeedback } from '../ui/FeedbackProvider';
+import PermissionManagementPanel from './PermissionManagementPanel';
+import { overrideCount } from '../../utils/permissions';
 
 const INSTRUMENTOS_DISPONIBLES = [
   "Voz Principal", "Coros", "Bateria", "Piano",
@@ -55,6 +57,7 @@ const UserManagement = ({ user }) => {
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [permissionUser, setPermissionUser] = useState(null);
   const isOwner = isOwnerRole(user?.rol || user?.role);
   const showToast = (message, type = 'error') => notify(message, { type });
 
@@ -135,6 +138,10 @@ const UserManagement = ({ user }) => {
       }
       if (editingUserId === user?.uid && accountStatus !== ACCOUNT_STATUSES.ACTIVE) {
         showToast("No puedes suspender o desactivar tu propia cuenta.");
+        return;
+      }
+      if (editingUserId === user?.uid && isOwnerRole(user?.rol || user?.role) && !isOwnerRole(rol)) {
+        showToast("El dueño no puede quitarse su propio acceso total.");
         return;
       }
       if (accountStatus === ACCOUNT_STATUSES.SUSPENDED && !suspensiónReason.trim()) {
@@ -290,6 +297,11 @@ const UserManagement = ({ user }) => {
 
   const confirmarEliminacion = async () => {
     if (!userToDelete) return;
+    if (userToDelete.id === user?.uid && isOwnerRole(userToDelete.rol)) {
+      showToast("El dueño no puede eliminar su propia cuenta.");
+      setUserToDelete(null);
+      return;
+    }
     try {
       await deleteDoc(doc(db, 'usuarios', userToDelete.id));
       showToast("Usuario eliminado exitosamente.", "success");
@@ -519,6 +531,9 @@ const UserManagement = ({ user }) => {
                   )}
                   
                   <div className="absolute top-3 right-3 flex gap-2">
+                    <button type="button" onClick={() => setPermissionUser(user)} className="p-1.5 text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors" title="Permisos del integrante">
+                      <SlidersHorizontal size={16} />
+                    </button>
                     <button onClick={() => handleEditClick(user)} className="p-1.5 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded-lg transition-colors" title="Editar integrante">
                       <Edit size={16} />
                     </button>
@@ -546,6 +561,7 @@ const UserManagement = ({ user }) => {
                     }`}>
                       {getAccountStatusLabel(user.accountStatus)}
                     </span>
+                    {overrideCount(user) > 0 && <p className="mt-2 text-[10px] font-black uppercase tracking-wide text-emerald-300">+{overrideCount(user)} permisos personalizados</p>}
                   </div>
                   
                   {user.instrumentos && user.instrumentos.length > 0 && (
@@ -563,6 +579,13 @@ const UserManagement = ({ user }) => {
           )}
         </div>
       </div>
+      {permissionUser && (
+        <div className="fixed inset-0 z-[80] flex items-start justify-center bg-black/70 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-[max(env(safe-area-inset-top),0.75rem)] backdrop-blur-md sm:items-center" onClick={() => setPermissionUser(null)}>
+          <div className="max-h-[calc(100dvh-max(env(safe-area-inset-top),0.75rem)-max(env(safe-area-inset-bottom),0.75rem))] w-full max-w-6xl overflow-y-auto overscroll-contain rounded-[2rem] border border-white/10 bg-zinc-950 p-3 shadow-2xl sm:p-5" onClick={(event) => event.stopPropagation()}>
+            <PermissionManagementPanel key={permissionUser.id} currentUser={user} usuarios={usuarios} configuredDefaults={user?.permissionRoleDefaults} selectedUser={permissionUser} onClose={() => setPermissionUser(null)} />
+          </div>
+        </div>
+      )}
 
       {/* Modal de Confirmacion de Eliminacion */}
       {userToDelete && (

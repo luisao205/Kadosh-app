@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const mainSource = await readFile(new URL('../desktop/main.cjs', import.meta.url), 'utf8');
+const preloadSource = await readFile(new URL('../desktop/preload.cjs', import.meta.url), 'utf8');
+const builderConfig = await readFile(new URL('../electron-builder.yml', import.meta.url), 'utf8');
+
+assert.equal(packageJson.main, 'desktop/main.cjs');
+assert.equal(packageJson.version, '0.1.1');
+assert.match(packageJson.scripts['desktop:dev'], /vite --host 127\.0\.0\.1/);
+assert.match(packageJson.scripts['desktop:dev'], /wait-on tcp:127\.0\.0\.1:5173/);
+assert.match(packageJson.scripts['desktop:dev'], /electron \./);
+assert.match(packageJson.scripts['desktop:dev'], /set ELECTRON_RUN_AS_NODE=/);
+assert.match(packageJson.scripts['desktop:start'], /set ELECTRON_RUN_AS_NODE=/);
+assert.match(packageJson.scripts['desktop:build'], /build:desktop/);
+assert.match(packageJson.scripts['desktop:build'], /electron-builder --win nsis/);
+
+assert.match(mainSource, /contextIsolation: true/);
+assert.match(mainSource, /nodeIntegration: false/);
+assert.match(mainSource, /sandbox: true/);
+assert.match(mainSource, /protocol\.registerSchemesAsPrivileged/);
+assert.match(mainSource, /standard: true/);
+assert.match(mainSource, /secure: true/);
+assert.match(mainSource, /supportFetchAPI: true/);
+assert.match(mainSource, /protocol\.handle\(APP_SCHEME/);
+assert.match(mainSource, /initializeWindowsStartup\(\{ app \}\)/);
+assert.match(mainSource, /app\.on\('web-contents-created'/);
+assert.match(mainSource, /attachNativeWindowBehavior\(webContents, BrowserWindow\)/);
+assert.match(mainSource, /setWindowOpenHandler/);
+assert.match(mainSource, /openerUrl: webContents\.getURL\(\)/);
+assert.match(mainSource, /Menu\.setApplicationMenu\(null\)/);
+assert.match(mainSource, /autoHideMenuBar: true/);
+assert.match(mainSource, /mainWindow\.setMenuBarVisibility\(false\)/);
+assert.match(mainSource, /mainWindow\.loadURL\(developmentServerUrl\)/);
+assert.match(mainSource, /mainWindow\.loadURL\(APP_ORIGIN\)/);
+assert.doesNotMatch(mainSource, /mainWindow\.loadFile\(/);
+assert.match(mainSource, /path\.join\(process\.resourcesPath, 'logo\.ico'\)/);
+assert.doesNotMatch(mainSource, /kiosk:\s*true/);
+assert.doesNotMatch(mainSource, /fullscreen:\s*true/);
+assert.doesNotMatch(mainSource, /globalShortcut/);
+assert.match(preloadSource, /contextBridge\.exposeInMainWorld\('kadoshDesktop'/);
+assert.match(preloadSource, /getUpdateState/);
+assert.match(preloadSource, /checkForUpdates/);
+assert.match(preloadSource, /installUpdate/);
+assert.match(preloadSource, /outputs:/);
+assert.match(preloadSource, /getDisplays/);
+assert.match(preloadSource, /setDisplay/);
+assert.match(preloadSource, /setFullscreen/);
+assert.doesNotMatch(preloadSource, /ipcRenderer:\s*ipcRenderer/);
+assert.doesNotMatch(preloadSource, /send:\s*ipcRenderer\.send/);
+
+assert.match(builderConfig, /from: public\/logo\.ico/);
+assert.match(builderConfig, /icon: public\/logo\.ico/);
+assert.match(builderConfig, /appId: com\.kadosh\.app/);
+assert.match(builderConfig, /productName: Kadosh App/);
+assert.match(builderConfig, /target: nsis/);
+assert.match(builderConfig, /oneClick: false/);
+assert.match(builderConfig, /perMachine: false/);
+assert.match(builderConfig, /artifactName: Kadosh-App-Setup-\$\{version\}\.\$\{ext\}/);
+assert.doesNotMatch(builderConfig, /delete(User)?Data|deleteAppDataOnUninstall/i);
+
+console.log('electron wrapper configuration: OK');

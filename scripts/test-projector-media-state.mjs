@@ -237,6 +237,9 @@ const projectorSource = await readFile(
   'utf8'
 );
 assert.match(projectorSource, /suspended=\{Boolean\(media\?\.url && media\.mode === 'foreground'\)\}/);
+assert.match(projectorSource, /loop=\{true\}/);
+assert.doesNotMatch(projectorSource, /onEnded=/);
+assert.doesNotMatch(projectorSource, /\.loop\s*=\s*false/);
 
 const internalMediaSource = await readFile(
   new URL('../src/components/live/InternalScreenMedia.jsx', import.meta.url),

@@ -9,6 +9,7 @@ import { calcularOffsetSemitonos, traducirAcorde } from '../../utils/musicCore';
 import { getEventSingerForSong, getSingerTone, getSongBaseKey } from '../../utils/songAssignments';
 import { formatEventDate, parseAppDate } from '../../utils/dateUtils';
 import { getSongSearchMatch } from '../../utils/songSearch';
+import { getEventSetlistItems, getEventSongIds } from '../../utils/setlistUtils';
 import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
 import { isVideoMediaUrl } from '../../utils/mediaUtils';
 import AutoFitText from './AutoFitText';
@@ -18,14 +19,19 @@ import { resolveSectionMediaForKey, resolveSongBackground } from '../../utils/me
 import { createInactiveSongLiveState } from '../../utils/liveState';
 import { buildPanicProjectorPayload, buildProjectorMediaPayload, buildStoppedProjectorMediaPayload, createProjectionWriteQueue, resolveProjectorBackground, selectSongProjectionBackground } from '../../utils/projectorMediaState';
 import { agregarCancionEnVivo, quitarCancionEnVivo } from '../../utils/liveSetlistFunctions';
+import { updateSongMetadata } from '../../utils/songFunctions';
 import { buildInactiveAnnouncementState } from '../../utils/announcementState';
 import { useFeedback } from '../ui/FeedbackProvider';
 import { PREACHER_REQUEST_STATUS, PREACHER_REQUEST_TYPES, MULTIMEDIA_TO_PASTOR_PRESETS, buildPreachingProjectorState } from '../../utils/preachingLive';
 import { isAdmin, isMultimedia, isOwner } from '../../utils/rolePermissions';
 import BiblePicker from '../bible/BiblePicker';
 import { assertBibleOutlineSize, buildBibleOutlineUpdate, createBibleOutlineItem, getBibleOutlinePreview, normalizeBibleOutlineItems } from '../../utils/bibleOutline';
-import { buildStoppedBibleProjectionPayload, capturePreviousProjectionFields, isMatchingBibleProjection } from '../../utils/bibleProjectionState';
+import { buildCanonicalBibleProjectorState, buildStoppedBibleProjectionPayload, capturePreviousProjectionFields, isMatchingBibleProjection } from '../../utils/bibleProjectionState';
 import { getPreachingBiblePreview, normalizePreachingBiblePreviewIndex } from '../../utils/preachingProjectionState';
+import { hasPermission } from '../../utils/permissions';
+import { createQuickMessage, isMatchingQuickMessageProjection } from '../../utils/quickMessageProjectionState';
+import { clearQuickMessageProjection as requestQuickMessageClear, projectQuickMessage as requestQuickMessageProjection, updateQuickMessageHistory as requestQuickMessageHistoryUpdate } from '../../utils/quickMessageFunctions';
+import QuickMessagePanel from './QuickMessagePanel';
 
 
 const ProyectorController = ({ user }) => {
@@ -140,6 +146,7 @@ const ProyectorController = ({ user }) => {
   const canHandlePastorRequests = isOwner(user) || isMultimedia(user);
   const canReadPastorRequests = canHandlePastorRequests || isAdmin(user);
   const canManageBibleOutline = isOwner(user) || isAdmin(user) || isMultimedia(user);
+  const canQuickProject = hasPermission(user, 'bible.quickProjection');
   const controllerScreens = [
     { id: 'projector', label: 'Proyector General', detail: 'Pantalla de congregacion', Icon: Monitor, path: `/proyector/${eventoId}` },
     { id: 'singers', label: 'Retorno Cantantes', detail: 'Letras e indicaciones', Icon: Type, path: `/retorno/${eventoId}` },
@@ -404,7 +411,7 @@ const ProyectorController = ({ user }) => {
           
           // Cargar canciones (solo si no es modo global)
           if (eventoId !== 'global') {
-            const songIds = evData.setlist ? evData.setlist.filter(i => i.type === 'song').map(i => i.value) : (evData.canciones || []);
+            const songIds = getEventSongIds(evData);
             const uniqueIds = [...new Set(songIds)];
             if (uniqueIds.length > 0) {
               const snaps = await Promise.all(uniqueIds.map(id => getDoc(doc(db, 'canciones', id))));
@@ -595,7 +602,7 @@ const ProyectorController = ({ user }) => {
   const secciones = activeSong ? parsearCancion(activeSong.letraRaw) : [];
 
   const getSetlistSongItems = () => {
-    const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
+    const setlistItems = getEventSetlistItems(evento);
     return setlistItems.filter(item => item.type === 'song');
   };
 
@@ -678,16 +685,6 @@ const ProyectorController = ({ user }) => {
       payload[field] = value === undefined ? deleteField() : cloneLiveValue(value);
     });
 
-    const restoredProjectorState = snapshot?.projectorState;
-    if (restoredProjectorState) {
-      payload.projectorState = {
-        ...restoredProjectorState,
-        timer: evento?.proyectorCountdown || restoredProjectorState.timer || null,
-        restoredAt: Date.now(),
-        restoredBy: user?.nombre || user?.email || 'Multimedia'
-      };
-    }
-
     return payload;
   };
 
@@ -697,7 +694,7 @@ const ProyectorController = ({ user }) => {
 
     setIsUndoingLastSend(true);
     try {
-      await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), buildRestorePayload(snapshot), { merge: true }));
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), buildRestorePayload(snapshot)));
       undoSnapshotRef.current = null;
       setCanUndoLastSend(false);
       setPreviewMedia(null);
@@ -825,7 +822,7 @@ const ProyectorController = ({ user }) => {
         sourceActor: 'multimedia',
         previousProjectorState: evento?.projectorState || null
       });
-      await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), {
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
         announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
@@ -840,7 +837,7 @@ const ProyectorController = ({ user }) => {
         proyectorNextSong: null,
         liveState: buildInactiveSongLiveState('preaching', request.title || request.reference || 'Predica'),
         currentSongId: null
-      }, { merge: true }));
+      }));
       await updateDoc(doc(db, 'eventos', eventoId, 'preacherRequests', request.id), {
         status: PREACHER_REQUEST_STATUS.PROJECTED,
         handledAt: serverTimestamp(),
@@ -894,7 +891,7 @@ const ProyectorController = ({ user }) => {
         sourceActor: 'multimedia',
         previousProjectorState: evento?.projectorState || null
       });
-      await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), {
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
         announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
@@ -909,7 +906,7 @@ const ProyectorController = ({ user }) => {
         proyectorNextSong: null,
         liveState: buildInactiveSongLiveState('preaching', requestLike.title || requestLike.reference || 'Predica'),
         currentSongId: null
-      }, { merge: true }));
+      }));
       notify('Contenido de predica proyectado.', { type: 'success' });
     } catch (error) {
       console.error('Error proyectando bloque de predica:', error);
@@ -936,9 +933,9 @@ const ProyectorController = ({ user }) => {
         const eventSnapshot = await transaction.get(eventRef);
         if (!eventSnapshot.exists()) throw new Error('El evento ya no esta disponible.');
         const previousProjectionFields = capturePreviousProjectionFields(eventSnapshot.data());
-        transaction.set(eventRef, {
+        transaction.update(eventRef, {
         announcementState: buildInactiveAnnouncementState(),
-        projectorState: {
+        projectorState: buildCanonicalBibleProjectorState({
           type: 'preaching',
           preachingType: 'verse',
           contentType: 'bible',
@@ -975,7 +972,7 @@ const ProyectorController = ({ user }) => {
           updatedAt: now,
           projectionVersion: now,
           projectionActionId
-        },
+        }),
         proyectorSlide: null,
         proyectorMedia: null,
         proyectorLogo: false,
@@ -986,9 +983,9 @@ const ProyectorController = ({ user }) => {
         proyectorSlideIndex: -1,
         proyectorNextSlide: null,
         proyectorNextSong: null,
-        liveState: buildInactiveSongLiveState({ contentType: 'bible', contentTitle: slide.reference || 'Biblia' }),
+        liveState: buildInactiveSongLiveState('bible', slide.reference || 'Biblia'),
         currentSongId: null
-        }, { merge: true });
+        });
       }));
       bibleProjectionActiveRef.current = true;
       setLastBiblePassage(passage);
@@ -1077,10 +1074,10 @@ const ProyectorController = ({ user }) => {
         if (!eventSnapshot.exists()) return false;
         const currentState = eventSnapshot.data()?.projectorState;
         if (!isMatchingBibleProjection(currentState, projectionActionId)) return false;
-        transaction.set(eventRef, buildStoppedBibleProjectionPayload({
+        transaction.update(eventRef, buildStoppedBibleProjectionPayload({
           previousProjectionFields: currentState.previousProjectionFields,
-          liveState: buildInactiveSongLiveState({ contentType: 'none', contentTitle: 'Sin contenido activo' })
-        }), { merge: true });
+          liveState: buildInactiveSongLiveState('none', 'Sin contenido activo')
+        }));
         return true;
       }));
       if (!restored) return;
@@ -1090,6 +1087,54 @@ const ProyectorController = ({ user }) => {
     } catch (error) {
       console.error('Error deteniendo la proyeccion biblica:', error);
       notify('No se pudo detener la proyeccion biblica.', { type: 'error' });
+    }
+  };
+
+  const projectQuickMessage = async (draft, { historyEntryId = null } = {}) => {
+    if (!canQuickProject) return null;
+    const message = createQuickMessage(draft);
+    if (!message) {
+      notify('El punto debe contener texto valido y no superar el limite permitido.', { type: 'error' });
+      return null;
+    }
+    try {
+      rememberUndoSnapshot();
+      const result = await enqueueProjectionWrite(() => requestQuickMessageProjection({
+        eventoId,
+        presentationType: message.presentationType,
+        segments: message.segments,
+        historyEntryId
+      }));
+      notify('Punto del mensaje proyectado.', { type: 'success' });
+      return result;
+    } catch (error) {
+      console.error('Error proyectando punto rapido:', error);
+      notify('No se pudo proyectar el punto.', { type: 'error' });
+      throw error;
+    }
+  };
+
+  const updateQuickMessageHistory = async ({ operation, entryId = null }) => {
+    if (!canQuickProject) return null;
+    try {
+      return await requestQuickMessageHistoryUpdate({ eventoId, operation, entryId });
+    } catch (error) {
+      console.error('Error actualizando historial de puntos:', error);
+      notify('No se pudo actualizar el historial de puntos.', { type: 'error' });
+      throw error;
+    }
+  };
+
+  const clearQuickMessageProjection = async () => {
+    const projectionActionId = evento?.projectorState?.projectionActionId;
+    if (!isMatchingQuickMessageProjection(evento?.projectorState, projectionActionId)) return;
+    try {
+      await enqueueProjectionWrite(() => requestQuickMessageClear({ eventoId, projectionActionId }));
+      notify('Punto del mensaje retirado.', { type: 'success' });
+    } catch (error) {
+      console.error('Error limpiando punto rapido:', error);
+      notify('No se pudo limpiar el punto.', { type: 'error' });
+      throw error;
     }
   };
 
@@ -1232,7 +1277,7 @@ const ProyectorController = ({ user }) => {
     let offset = 0;
     let nextSongInfo = null;
     if (evento && activeSongId) {
-      const setlistItems = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
+      const setlistItems = getEventSetlistItems(evento);
       const activeIdx = setlistItems.findIndex(i => i.type === 'song' && i.value === activeSongId);
       if (activeIdx !== -1 && activeIdx < setlistItems.length - 1) {
         const nextElement = setlistItems[activeIdx + 1];
@@ -1294,7 +1339,7 @@ const ProyectorController = ({ user }) => {
       proyectorApagado: false,
       proyectorMedia: null, // Limpiar cualquier media activa al proyectar una diapositiva
     };
-    try { await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), updates, { merge: true })); }
+    try { await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), updates)); }
     catch (e) { console.error("Error al proyectar diapositiva:", e); }
   };
 
@@ -1333,8 +1378,8 @@ const ProyectorController = ({ user }) => {
     const slide = slides[nextIndex];
     const now = Date.now();
     try {
-      await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), {
-        projectorState: {
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
+        projectorState: buildCanonicalBibleProjectorState({
           ...currentState,
           title: slide.reference,
           reference: slide.reference,
@@ -1346,8 +1391,8 @@ const ProyectorController = ({ user }) => {
           bible: { ...bible, slideIndex: nextIndex, slideCount: slides.length },
           updatedAt: now,
           projectionVersion: now
-        }
-      }, { merge: true }));
+        })
+      }));
     } catch (error) {
       console.error('Error navegando diapositiva biblica:', error);
       notify('No se pudo cambiar la diapositiva.', { type: 'error' });
@@ -1398,7 +1443,7 @@ const ProyectorController = ({ user }) => {
     });
     updates.proyectorFondo = null;
     updates.proyectorFondoMedia = null;
-    try { await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), updates, { merge: true })); }
+    try { await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), updates)); }
     catch (e) { console.error(e); }
   };
 
@@ -1426,10 +1471,29 @@ const ProyectorController = ({ user }) => {
 
   const toggleBlackout = async () => {
     const nextBlackout = !isBlackout;
+    if (!nextBlackout) {
+      try {
+        await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
+          const eventRef = doc(db, 'eventos', eventoId);
+          const eventSnapshot = await transaction.get(eventRef);
+          const previousProjectionFields = eventSnapshot.data()?.projectorState?.previousProjectionFields;
+          if (!eventSnapshot.exists() || eventSnapshot.data()?.projectorState?.type !== 'blackout' || !previousProjectionFields) {
+            throw new Error('No existe un estado anterior para restaurar.');
+          }
+          transaction.update(eventRef, buildStoppedBibleProjectionPayload({ previousProjectionFields }));
+        }));
+      } catch (error) {
+        console.error('Error restaurando la proyeccion anterior:', error);
+        notify('No se pudo restaurar el estado anterior.', { type: 'error' });
+      }
+      return;
+    }
+
     const currentBackground = resolveProjectorBackground(evento);
+    const previousProjectionFields = capturePreviousProjectionFields(evento);
     rememberUndoSnapshot();
     try {
-      await setDoc(doc(db, 'eventos', eventoId), {
+      await updateDoc(doc(db, 'eventos', eventoId), {
         proyectorApagado: nextBlackout,
         ...(nextBlackout ? {
           liveState: buildInactiveSongLiveState('blackout', 'Pantalla negra'),
@@ -1447,9 +1511,10 @@ const ProyectorController = ({ user }) => {
           timer: evento?.proyectorCountdown || null,
           background: currentBackground.url,
           backgroundMedia: currentBackground.media,
+          previousProjectionFields,
           updatedAt: Date.now()
         }
-      }, { merge: true });
+      });
     } 
     catch (e) { console.error(e); }
   };
@@ -1465,7 +1530,7 @@ const ProyectorController = ({ user }) => {
     const currentBackground = resolveProjectorBackground(evento);
     rememberUndoSnapshot();
     try {
-      await setDoc(doc(db, 'eventos', eventoId), {
+      await updateDoc(doc(db, 'eventos', eventoId), {
         proyectorLogo: nextLogo,
         proyectorApagado: false,
         ...(nextLogo ? {
@@ -1486,7 +1551,7 @@ const ProyectorController = ({ user }) => {
           backgroundMedia: currentBackground.media,
           updatedAt: Date.now()
         }
-      }, { merge: true });
+      });
     } 
     catch (e) { console.error(e); }
   };
@@ -1525,7 +1590,7 @@ const ProyectorController = ({ user }) => {
     const currentBackground = resolveProjectorBackground(evento);
     rememberUndoSnapshot();
     try {
-      await setDoc(doc(db, 'eventos', eventoId), {
+      await updateDoc(doc(db, 'eventos', eventoId), {
         projectorState: {
           type: 'clearPreaching',
           title: 'Predica quitada',
@@ -1548,7 +1613,7 @@ const ProyectorController = ({ user }) => {
         proyectorSlideIndex: -1,
         proyectorNextSlide: null,
         proyectorNextSong: null
-      }, { merge: true });
+      });
       notify('Contenido de predica quitado.', { type: 'success' });
     } catch (error) {
       console.error('Error quitando contenido de predica:', error);
@@ -1559,30 +1624,19 @@ const ProyectorController = ({ user }) => {
   const toggleCountdown = async (active) => {
     const mins = parseInt(countdownMinutes) || 5;
     const endTimestamp = active ? Date.now() + (mins * 60000) : null;
-    const currentBackground = resolveProjectorBackground(evento);
     try {
-      await setDoc(doc(db, 'eventos', eventoId), {
-        proyectorCountdown: { active, endTimestamp: endTimestamp },
-        projectorState: {
-          ...(evento?.projectorState || {}),
-          type: evento?.projectorState?.type || 'timer',
-          title: evento?.projectorState?.title || 'Cronómetro',
-          content: evento?.projectorState?.content || '',
-          media: evento?.projectorState?.media || null,
-          background: currentBackground.url,
-          backgroundMedia: currentBackground.media,
-          timer: { active, endTimestamp: endTimestamp },
-          updatedAt: Date.now()
-        }
-      }, { merge: true });
+      await updateDoc(doc(db, 'eventos', eventoId), {
+        proyectorCountdown: { active, endTimestamp: endTimestamp }
+      });
     } catch (e) { console.error(e); }
   };
 
   const botonPanico = async () => {
     rememberUndoSnapshot();
-    await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), buildPanicProjectorPayload({
-      liveState: buildInactiveSongLiveState('blackout', 'Pantalla negra')
-    }), { merge: true }));
+    await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), buildPanicProjectorPayload({
+      liveState: buildInactiveSongLiveState('blackout', 'Pantalla negra'),
+      previousProjectionFields: captureVisualStateSnapshot()
+    })));
     setPreviewMedia(null);
     setLiveSlide(null);
   };
@@ -1734,7 +1788,7 @@ const ProyectorController = ({ user }) => {
 
         if (applyAsBackground) {
           rememberUndoSnapshot();
-          await enqueueProjectionWrite(() => setDoc(doc(db, 'eventos', eventoId), {
+          await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
             proyectorFondo: url,
             proyectorFondoMedia: uploadedBackgroundMedia,
             projectorState: {
@@ -1743,12 +1797,12 @@ const ProyectorController = ({ user }) => {
               backgroundMedia: uploadedBackgroundMedia,
               updatedAt: Date.now()
             }
-          }, { merge: true }));
+          }));
         }
         
         // Si es una cancion real (no modo global), guardamos la referencia
         if (applyAsBackground && eventoId !== 'global' && activeSongId && guardarEnCancion) {
-          await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: url }, { merge: true });
+          await updateSongMetadata(activeSongId, { fondoUrl: url });
           setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: url } : c));
         }
       }
@@ -1765,7 +1819,7 @@ const ProyectorController = ({ user }) => {
 
   const quitarFondo = async () => {
     rememberUndoSnapshot();
-    await setDoc(doc(db, 'eventos', eventoId), {
+    await updateDoc(doc(db, 'eventos', eventoId), {
       proyectorFondo: null,
       proyectorFondoMedia: null,
       projectorState: {
@@ -1774,10 +1828,10 @@ const ProyectorController = ({ user }) => {
         backgroundMedia: null,
         updatedAt: Date.now()
       }
-    }, { merge: true });
+    });
     
     if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
-      await setDoc(doc(db, 'canciones', activeSongId), { fondoUrl: null }, { merge: true });
+      await updateSongMetadata(activeSongId, { fondoUrl: null });
       setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: null } : c));
     }
     setShowFondosModal(false);
@@ -2029,6 +2083,14 @@ const ProyectorController = ({ user }) => {
           })}
         </div>
       )}
+      <QuickMessagePanel
+        active={canQuickProject}
+        history={evento?.quickMessageHistory}
+        onProject={projectQuickMessage}
+        onClear={clearQuickMessageProjection}
+        onRemoveHistoryEntry={(entryId) => updateQuickMessageHistory({ operation: 'remove', entryId })}
+        onClearHistory={() => updateQuickMessageHistory({ operation: 'clear' })}
+      />
     </div>
   );
   const screensMenu = showScreensMenu && screensMenuPosition && typeof document !== 'undefined'
@@ -2252,7 +2314,7 @@ const ProyectorController = ({ user }) => {
                 ))}
               </div>
             ) : (() => {
-              const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
+              const setlistItems = getEventSetlistItems(evento);
               return setlistItems.filter(i => i.type === 'song').map((item, idx) => {
                 const c = canciones.find(c => c.id === item.value);
                 if (!c) return null;
@@ -3007,7 +3069,7 @@ const ProyectorController = ({ user }) => {
         {/* Barra de Setlist Horizontal */}
         <div className="bg-zinc-950/80 border-b border-white/10 p-3 overflow-x-auto whitespace-nowrap flex gap-2 shrink-0 [&::-webkit-scrollbar]:hidden backdrop-blur-sm">
           {(() => {
-            const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
+            const setlistItems = getEventSetlistItems(evento);
             return setlistItems.filter(i => i.type === 'song').map((item, idx) => {
               const c = canciones.find(c => c.id === item.value);
               if (!c) return null;

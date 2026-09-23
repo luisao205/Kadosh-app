@@ -5,30 +5,30 @@ export const createSetlistSongItem = (songId, prefix = 'song') => ({
 });
 
 export const getEventSetlistItems = (event = {}) => {
-  if (Array.isArray(event?.setlist)) {
-    return event.setlist.map((item, index) => ({
+  const modernItems = Array.isArray(event?.setlist)
+    ? event.setlist.map((item, index) => ({
       ...item,
       idLocal: item?.idLocal || item?.setlistItemId || `${item?.value || item?.songId || item?.id || 'item'}_${index}`,
       type: item?.type || 'song',
       value: item?.value || item?.songId || item?.id
-    })).filter(item => item.value || item.type === 'note');
+    })).filter(item => item.value || item.type === 'note')
+    : [];
+
+  if (modernItems.length || !Array.isArray(event?.canciones) || event.canciones.length === 0) {
+    return modernItems;
   }
 
-  if (Array.isArray(event?.canciones)) {
-    return event.canciones
-      .map((item, index) => {
-        const songId = typeof item === 'string' ? item : item?.id || item?.songId || item?.value;
-        if (!songId) return null;
-        return {
-          idLocal: `legacy_${songId}_${index}`,
-          type: 'song',
-          value: songId
-        };
-      })
-      .filter(Boolean);
-  }
-
-  return [];
+  return event.canciones
+    .map((item, index) => {
+      const songId = typeof item === 'string' ? item : item?.id || item?.songId || item?.value;
+      if (!songId) return null;
+      return {
+        idLocal: `legacy_${songId}_${index}`,
+        type: 'song',
+        value: songId
+      };
+    })
+    .filter(Boolean);
 };
 
 export const getSetlistSongIds = (setlistItems = []) => (

@@ -134,7 +134,7 @@ export const resolveProjectorBackground = (eventData = {}) => {
   };
 };
 
-export const buildPanicProjectorPayload = ({ liveState, updatedAt = Date.now() } = {}) => ({
+export const buildPanicProjectorPayload = ({ liveState, previousProjectionFields, updatedAt = Date.now() } = {}) => ({
   announcementState: buildInactiveAnnouncementState(updatedAt),
   proyectorSlide: null,
   proyectorMedia: null,
@@ -159,6 +159,7 @@ export const buildPanicProjectorPayload = ({ liveState, updatedAt = Date.now() }
     timer: null,
     background: null,
     backgroundMedia: null,
+    previousProjectionFields,
     updatedAt
   }
 });

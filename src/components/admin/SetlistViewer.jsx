@@ -6,6 +6,7 @@ import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Pri
 import { calcularOffsetSemitonos, transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 import { getEventChoirsForSong, getEventSingerForSong, getSingerTone, getSongBaseKey } from '../../utils/songAssignments';
+import { getEventSetlistItems, getEventSongIds } from '../../utils/setlistUtils';
 
 const readMusicianLocal = (key, fallback) => {
   if (typeof window === 'undefined') return fallback;
@@ -86,7 +87,7 @@ const SetlistViewer = ({ user }) => {
         const eventoData = eventoSnap.data();
         setEvento(eventoData);
 
-        const songIds = eventoData.setlist ? eventoData.setlist.filter(i => i.type === 'song').map(i => i.value) : (eventoData.canciones || []);
+        const songIds = getEventSongIds(eventoData);
         const uniqueSongIds = [...new Set(songIds)];
         
         if (uniqueSongIds.length > 0) {
@@ -137,7 +138,7 @@ const SetlistViewer = ({ user }) => {
 
   const playlist = useMemo(() => {
     if (!evento) return [];
-    const items = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
+    const items = getEventSetlistItems(evento);
     const validSongs = [];
     items.forEach(item => {
       if (item.type === 'song') {
@@ -170,7 +171,7 @@ const SetlistViewer = ({ user }) => {
 
   const ensayoSummary = useMemo(() => {
     if (!evento) return { readyCount: 0, total: 0 };
-    const items = evento.setlist || (evento.canciones || []).map(songId => ({ type: 'song', value: songId }));
+    const items = getEventSetlistItems(evento);
     const songItems = items
       .filter(item => item.type === 'song')
       .map((item, index) => ({ ...item, idLocal: item.idLocal || `${item.value}_${index}` }));
@@ -508,12 +509,12 @@ const SetlistViewer = ({ user }) => {
 
           <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-4 flex items-center gap-2"><Music size={20} className="text-blue-600 dark:text-blue-400" /> Repertorio del Día</h2>
           
-          {(!evento.setlist && canciones.length === 0) || (evento.setlist && evento.setlist.length === 0) ? (
+          {getEventSetlistItems(evento).length === 0 ? (
             <p className="text-zinc-500 dark:text-zinc-400 text-sm p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-xl border border-zinc-200 dark:border-zinc-800">El repertorio está vacío.</p>
           ) : (
             <div className="space-y-3">
               {(() => {
-                const setlistItems = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
+                const setlistItems = getEventSetlistItems(evento);
                 let songCounter = 1;
                 
                 return setlistItems.map((item, index) => {
@@ -712,7 +713,7 @@ const SetlistViewer = ({ user }) => {
             <h3 className="font-black text-lg uppercase tracking-widest border-b-2 border-black pb-2 mb-4">Orden del Repertorio</h3>
             <div className="space-y-4">
               {(() => {
-                const setlistItems = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
+                const setlistItems = getEventSetlistItems(evento);
                 let count = 1;
                 return setlistItems.map((item, idx) => {
                   if (item.type === 'note') {
@@ -756,7 +757,7 @@ const SetlistViewer = ({ user }) => {
       {/* Hojas de Canciones Formateadas */}
       <div>
         {(() => {
-          const setlistItems = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
+          const setlistItems = getEventSetlistItems(evento);
            let printSongCounter = 1;
           return setlistItems.filter(i => i.type === 'song').map((item, idx) => {
             const cancion = canciones.find(c => c.id === item.value);

@@ -14,6 +14,8 @@ import { canAccessMediaLibrary } from '../../utils/mediaLibraryPermissions';
 import { calculateMediaUsageFields } from '../../utils/mediaLibraryFirestoreSync';
 import useMediaLibrary from '../../hooks/useMediaLibrary';
 import { useFeedback } from '../ui/FeedbackProvider';
+import { PERMISSIONS, hasAnyPermission, hasPermission } from '../../utils/permissions';
+import { setSongArchiveState } from '../../utils/songFunctions';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 
@@ -36,13 +38,11 @@ const SongList = ({ user }) => {
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
   const notacion = user?.preferencias?.notacion || 'sharps';
   const canReadMediaLibrary = canAccessMediaLibrary(user);
-  const normalizedRole = String(user?.rol || user?.role || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim();
-  const canManageSetlists = ['dueno', 'admin'].includes(normalizedRole);
-  const canPermanentlyDeleteSongs = ['dueno', 'admin'].includes(normalizedRole);
+  const canManageSetlists = hasAnyPermission(user, [PERMISSIONS.SETLISTS_ADD_SONG, PERMISSIONS.SETLISTS_REMOVE_SONG, PERMISSIONS.SETLISTS_REORDER, PERMISSIONS.SETLISTS_MANAGE]);
+  const canPermanentlyDeleteSongs = hasPermission(user, PERMISSIONS.SONGS_DELETE);
+  const canArchiveSongs = hasPermission(user, PERMISSIONS.SONGS_ARCHIVE);
+  const canCreateSongs = hasPermission(user, PERMISSIONS.SONGS_CREATE);
+  const canEditSongs = hasAnyPermission(user, [PERMISSIONS.SONGS_EDIT_LYRICS, PERMISSIONS.SONGS_EDIT_CHORDS, PERMISSIONS.SONGS_EDIT_METADATA]);
   const { items: mediaLibraryItems } = useMediaLibrary({ enabled: canReadMediaLibrary });
   
   // Estados para el Generador de Medleys
@@ -547,13 +547,7 @@ const SongList = ({ user }) => {
     if (!shouldArchive) return;
 
     try {
-      await updateDoc(doc(db, 'canciones', song.id), {
-        estado: 'archived',
-        archived: true,
-        archivedAt: new Date().toISOString(),
-        archivedBy: user?.uid || null,
-        fechaActualizacion: new Date().toISOString()
-      });
+      await setSongArchiveState(song.id, true);
       showToast('Cancion archivada. Puedes restaurarla desde el filtro Archivadas.', 'success');
     } catch (error) {
       console.error('Error archivando cancion:', error);
@@ -565,14 +559,7 @@ const SongList = ({ user }) => {
     if (!song?.id) return;
 
     try {
-      await updateDoc(doc(db, 'canciones', song.id), {
-        estado: 'active',
-        archived: false,
-        archivedAt: null,
-        archivedBy: null,
-        restoredAt: new Date().toISOString(),
-        fechaActualizacion: new Date().toISOString()
-      });
+      await setSongArchiveState(song.id, false);
       showToast('Cancion restaurada al repertorio.', 'success');
     } catch (error) {
       console.error('Error restaurando cancion:', error);
@@ -625,12 +612,12 @@ const SongList = ({ user }) => {
               <Download size={16} />
             </button>
           )}
-          {user?.rol !== 'musico' && (
+          {canCreateSongs && (
             <button onClick={() => setShowMedleyModal(true)} className="kp-button-secondary flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors active:scale-95 w-full sm:w-max">
               <Layers size={16} /> Crear Medley
             </button>
           )}
-          {user?.rol !== 'musico' && (
+          {canCreateSongs && (
             <button onClick={() => navigate('/añadir')} className="kp-button-primary flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors active:scale-95 w-full sm:w-max">
               <Plus size={16} /> Añadir
             </button>
@@ -749,16 +736,16 @@ const SongList = ({ user }) => {
                   )}
                   {user?.rol !== 'musico' && (
                     <>
-                      <button type="button" onClick={() => handleEditSong(cancion)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900">
+                      {canEditSongs && <button type="button" onClick={() => handleEditSong(cancion)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900">
                         <Edit size={16} /> Editar
-                      </button>
-                      <button type="button" onClick={() => { closeSongActions(); handleDuplicateSong(cancion); }} disabled={duplicatingSongId === cancion.id} className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-200 dark:hover:bg-zinc-900">
+                      </button>}
+                      {canCreateSongs && <button type="button" onClick={() => { closeSongActions(); handleDuplicateSong(cancion); }} disabled={duplicatingSongId === cancion.id} className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-200 dark:hover:bg-zinc-900">
                         <Copy size={16} /> Duplicar
-                      </button>
-                      <button type="button" onClick={() => handleToggleArchiveFromCard(cancion)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900">
+                      </button>}
+                      {canArchiveSongs && <button type="button" onClick={() => handleToggleArchiveFromCard(cancion)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-900">
                         {archived ? <RotateCcw size={16} /> : <Archive size={16} />}
                         {archived ? 'Restaurar' : 'Archivar'}
-                      </button>
+                      </button>}
                       {archived && canPermanentlyDeleteSongs && (
                         <button type="button" onClick={() => handleDelete(cancion)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10">
                           <Trash2 size={16} /> Eliminar definitivamente
@@ -779,18 +766,18 @@ const SongList = ({ user }) => {
                   
                   {user?.rol !== 'musico' && (
                     <>
-                      <button onClick={() => handleEditSong(cancion)} className="p-1.5 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors" title="Editar">
+                      {canEditSongs && <button onClick={() => handleEditSong(cancion)} className="p-1.5 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors" title="Editar">
                         <Edit size={16} />
-                      </button>
+                      </button>}
                       {!archived && canManageSetlists && (
                         <button onClick={() => handleAddToSetlist(cancion)} className="p-1.5 text-zinc-400 hover:text-cyan-600 hover:bg-cyan-50 dark:hover:bg-cyan-500/10 rounded-lg transition-colors" title="Agregar a setlist">
                           <ListPlus size={16} />
                         </button>
                       )}
-                      <button onClick={() => handleDuplicateSong(cancion)} disabled={duplicatingSongId === cancion.id} className="p-1.5 text-zinc-400 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-500/10 rounded-lg transition-colors disabled:opacity-50" title="Duplicar cancion">
+                      {canCreateSongs && <button onClick={() => handleDuplicateSong(cancion)} disabled={duplicatingSongId === cancion.id} className="p-1.5 text-zinc-400 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-500/10 rounded-lg transition-colors disabled:opacity-50" title="Duplicar cancion">
                         <Copy size={16} />
-                      </button>
-                      {archived ? (
+                      </button>}
+                      {canArchiveSongs && (archived ? (
                         <>
                           <button onClick={() => handleRestoreSong(cancion)} className="p-1.5 text-zinc-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-lg transition-colors" title="Restaurar al repertorio">
                             <RotateCcw size={16} />
@@ -805,7 +792,7 @@ const SongList = ({ user }) => {
                         <button onClick={() => handleArchiveSong(cancion)} className="p-1.5 text-zinc-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-500/10 rounded-lg transition-colors" title="Archivar cancion">
                           <Archive size={16} />
                         </button>
-                      )}
+                      ))}
                     </>
                   )}
                 </div>

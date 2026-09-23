@@ -51,7 +51,7 @@ export const resolveActivePreachingProjectorState = (eventData = {}) => {
   if (eventData.proyectorApagado) return null;
   const state = eventData.projectorState;
   if (!state || typeof state !== 'object') return null;
-  if (state.type !== 'preaching' || state.contentType === 'bible') return null;
+  if (state.type !== 'preaching' || ['bible', 'quickMessage'].includes(state.contentType)) return null;
   return state;
 };
 

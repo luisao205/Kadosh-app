@@ -2,19 +2,23 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolveActiveBibleProjectorState } from '../src/utils/bibleProjectionState.js';
 import { resolveActivePreachingProjectorState } from '../src/utils/preachingProjectionState.js';
+import { resolveActiveQuickMessageProjectorState } from '../src/utils/quickMessageProjectionState.js';
 
 const bible = { type: 'preaching', contentType: 'bible', content: 'Texto biblico' };
 const preaching = { type: 'preaching', contentType: 'preaching', preachingType: 'point', content: 'Punto' };
+const quickMessage = { type: 'preaching', contentType: 'quickMessage', preachingType: 'quickMessage', content: 'Punto rapido' };
 const song = { type: 'lyrics', contentType: 'song' };
 const media = { type: 'media', contentType: 'media' };
 
-const states = [null, undefined, {}, { projectorState: bible }, { projectorState: preaching }, { projectorState: song }, { projectorState: media }];
-assert.deepEqual(states.map(state => Boolean(resolveActiveBibleProjectorState(state))), [false, false, false, true, false, false, false]);
-assert.deepEqual(states.map(state => Boolean(resolveActivePreachingProjectorState(state))), [false, false, false, false, true, false, false]);
+const states = [null, undefined, {}, { projectorState: bible }, { projectorState: quickMessage }, { projectorState: preaching }, { projectorState: song }, { projectorState: media }];
+assert.deepEqual(states.map(state => Boolean(resolveActiveBibleProjectorState(state))), [false, false, false, true, false, false, false, false]);
+assert.deepEqual(states.map(state => Boolean(resolveActiveQuickMessageProjectorState(state))), [false, false, false, false, true, false, false, false]);
+assert.deepEqual(states.map(state => Boolean(resolveActivePreachingProjectorState(state))), [false, false, false, false, false, true, false, false]);
 
-for (const state of [bible, preaching, song, media]) {
+for (const state of [bible, quickMessage, preaching, song, media]) {
   const eventData = { projectorState: state, proyectorApagado: true };
   assert.equal(resolveActiveBibleProjectorState(eventData), null);
+  assert.equal(resolveActiveQuickMessageProjectorState(eventData), null);
   assert.equal(resolveActivePreachingProjectorState(eventData), null);
 }
 
@@ -40,11 +44,12 @@ assert.match(files['InternalScreenBlackout.jsx'], /z-\[200\]/);
 assert.match(files['InternalScreenPreaching.jsx'], /content\.eyebrow/);
 assert.match(files['InternalScreenPreaching.jsx'], /text=\{content\.body\}/);
 assert.match(files['Proyector.jsx'], /resolvePreachingProjectionContent\(activePreachingState\)/);
-assert.match(files['Proyector.jsx'], /hasProjectedTextContent = isBibleContent \|\| isPreachingContent/);
+assert.match(files['Proyector.jsx'], /hasProjectedTextContent = isBibleContent \|\| isPreachingContent \|\| isQuickMessageContent/);
 assert.match(files['Proyector.jsx'], /<PreachingPresentation content=\{preachingContent\} layerClassName="z-20"/);
 
 for (const file of ['StageDisplayMusicos.jsx', 'StageDisplayCantantes.jsx']) {
   assert.match(files[file], /<InternalScreenMedia/);
+  assert.match(files[file], /<QuickMessagePresentation eventData=\{evento\} layerClassName="z-\[75\]" \/>/);
   assert.match(files[file], /<InternalScreenBible eventData=\{evento\}/);
   assert.match(files[file], /<InternalScreenPreaching eventData=\{evento\}/);
   assert.match(files[file], /<InternalScreenBlackout active=\{evento\?\.proyectorApagado === true\}/);

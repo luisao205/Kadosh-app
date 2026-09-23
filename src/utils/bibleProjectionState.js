@@ -3,14 +3,20 @@ const cloneValue = (value) => {
   return JSON.parse(JSON.stringify(value));
 };
 
-const sanitizeProjectorState = (state) => {
-  if (!state || typeof state !== 'object') return null;
-  const sanitized = cloneValue(state);
-  delete sanitized.previousProjectionFields;
-  delete sanitized.projectionActionId;
-  delete sanitized.previousProjectorState;
-  return sanitized;
-};
+const BIBLE_PROJECTOR_STATE_FIELDS = [
+  'type', 'contentType', 'preachingType', 'title', 'reference', 'translation', 'translationName',
+  'content', 'provider', 'bibleId', 'passageId', 'copyright', 'bible', 'bibleSlideIndex',
+  'bibleSlideCount', 'media', 'background', 'backgroundMedia', 'previousProjectorState',
+  'previousProjectionFields', 'sourceActor', 'actorUid', 'actorName', 'actorRole', 'updatedBy',
+  'updatedAt', 'projectionVersion', 'projectionActionId', 'timer'
+];
+
+export const buildCanonicalBibleProjectorState = (state = {}) => (
+  BIBLE_PROJECTOR_STATE_FIELDS.reduce((canonical, field) => {
+    if (Object.prototype.hasOwnProperty.call(state, field)) canonical[field] = state[field];
+    return canonical;
+  }, {})
+);
 
 export const BIBLE_RESTORABLE_FIELDS = [
   'proyectorSlide', 'proyectorMedia', 'proyectorLogo', 'proyectorApagado',
@@ -35,7 +41,7 @@ export const capturePreviousProjectionFields = (eventData = {}) => {
     return cloneValue(currentState.previousProjectionFields);
   }
 
-  const snapshot = { projectorState: sanitizeProjectorState(currentState) };
+  const snapshot = { projectorState: cloneValue(currentState) };
   BIBLE_RESTORABLE_FIELDS.forEach((field) => {
     snapshot[field] = Object.prototype.hasOwnProperty.call(eventData, field)
       ? cloneValue(eventData[field])

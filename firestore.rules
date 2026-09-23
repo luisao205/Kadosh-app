@@ -22,6 +22,283 @@ service cloud.firestore {
       return signedIn() && currentRole() in roles;
     }
 
+    function permissionConfigPath() {
+      return /databases/$(database)/documents/sistema/permissionRoles;
+    }
+
+    function normalizedRoleKey(role) {
+      return role in ['dueño', 'dueno'] ? 'dueno' : role;
+    }
+
+    // Legacy fallbacks keep existing users operational until an owner saves role defaults.
+    function hasLegacyPermission(permission, role) {
+      return (permission in ['events.create', 'events.edit', 'events.delete', 'songs.delete', 'multimedia.delete']
+          && role in ['dueño', 'dueno', 'admin'])
+        || (permission in ['songs.create', 'songs.editLyrics', 'songs.editChords', 'songs.editMetadata', 'songs.manageMedia', 'songs.archive', 'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.project', 'multimedia.controlOutputs', 'bible.project', 'sermons.project']
+          && role in ['dueño', 'dueno', 'admin', 'multimedia'])
+        || (permission in ['announcements.view', 'announcements.create', 'announcements.edit', 'announcements.delete', 'announcements.project']
+          && role in ['dueño', 'dueno'])
+        || (permission == 'sermons.view' && role in ['dueño', 'dueno', 'multimedia', 'admin'])
+        || (permission in ['sermons.create', 'sermons.edit'] && role in ['dueño', 'dueno', 'multimedia']);
+    }
+
+    function hasPermissionOverride(profile, permission) {
+      return 'permissionOverrides' in profile
+        ? permission in profile.permissionOverrides
+        : false;
+    }
+
+    function permissionOverrideIsEnabled(profile, permission) {
+      return profile.permissionOverrides[permission] == true;
+    }
+
+    function hasConfiguredRolePermission(role, permission) {
+      return exists(permissionConfigPath())
+        ? hasConfiguredRolePermissionFromDocument(role, permission)
+        : false;
+    }
+
+    function hasConfiguredRolePermissionFromDocument(role, permission) {
+      let config = get(permissionConfigPath()).data;
+      return 'roleDefaults' in config
+        ? hasConfiguredRoleDefault(config.roleDefaults, role, permission)
+        : false;
+    }
+
+    function hasConfiguredRoleDefault(defaults, role, permission) {
+      let roleKey = normalizedRoleKey(role);
+      return roleKey in defaults
+        ? hasConfiguredPermissionValue(defaults[roleKey], permission)
+        : false;
+    }
+
+    function hasConfiguredPermissionValue(permissions, permission) {
+      return permission in permissions
+        ? permissions[permission] == true
+        : false;
+    }
+
+    function hasPermission(permission) {
+      let profile = get(userPath(request.auth.uid)).data;
+      let role = profile.rol;
+      return role in ['dueño', 'dueno']
+        || (hasPermissionOverride(profile, permission)
+          ? permissionOverrideIsEnabled(profile, permission)
+          : (hasConfiguredRolePermission(role, permission) || hasLegacyPermission(permission, role)));
+    }
+
+    function sensitiveUserFields() {
+      return ['rol', 'role', 'permissionOverrides', 'permissionAudit', 'ownership', 'owner', 'ownerUid', 'isOwner', 'sinAcceso'];
+    }
+
+    function operationalRoles() {
+      return ['admin', 'multimedia', 'musico', 'cantante', 'pastor', 'predicador'];
+    }
+
+    function userCreateFields() {
+      return [
+        'nombre', 'email', 'rol', 'instrumentos', 'fechaNacimiento', 'accountStatus',
+        'fechaCreacion', 'fechaActualizacion', 'telefono', 'photoURL', 'avatar',
+        'preferencias', 'fcmToken', 'ultimaConexion', 'favoritos', 'avisosCumpleanos'
+      ];
+    }
+
+    function ownerUserCreateFields() {
+      return [
+        'nombre', 'email', 'rol', 'instrumentos', 'fechaNacimiento', 'accountStatus',
+        'fechaCreacion', 'fechaActualizacion', 'telefono', 'photoURL', 'avatar',
+        'preferencias', 'fcmToken', 'ultimaConexion', 'favoritos', 'avisosCumpleanos', 'sinAcceso'
+      ];
+    }
+
+    function isSafeUserCreate() {
+      return request.resource.data.keys().hasOnly(userCreateFields())
+        && request.resource.data.rol in operationalRoles();
+    }
+
+    function projectorStateIs(type, contentType) {
+      return request.resource.data.projectorState is map
+        && request.resource.data.projectorState.type == type
+        && request.resource.data.projectorState.contentType == contentType;
+    }
+
+    function isExactBibleRestore() {
+      return resource.data.projectorState is map
+        && resource.data.projectorState.type == 'preaching'
+        && resource.data.projectorState.contentType == 'bible'
+        && resource.data.projectorState.previousProjectionFields is map
+        && request.resource.data.projectorState == resource.data.projectorState.previousProjectionFields.projectorState
+        && request.resource.data.proyectorSlide == resource.data.projectorState.previousProjectionFields.proyectorSlide
+        && request.resource.data.proyectorMedia == resource.data.projectorState.previousProjectionFields.proyectorMedia
+        && request.resource.data.proyectorLogo == resource.data.projectorState.previousProjectionFields.proyectorLogo
+        && request.resource.data.proyectorApagado == resource.data.projectorState.previousProjectionFields.proyectorApagado
+        && request.resource.data.proyectorFondo == resource.data.projectorState.previousProjectionFields.proyectorFondo
+        && request.resource.data.proyectorFondoMedia == resource.data.projectorState.previousProjectionFields.proyectorFondoMedia
+        && request.resource.data.proyectorSongId == resource.data.projectorState.previousProjectionFields.proyectorSongId
+        && request.resource.data.proyectorSlideIndex == resource.data.projectorState.previousProjectionFields.proyectorSlideIndex
+        && request.resource.data.proyectorNextSlide == resource.data.projectorState.previousProjectionFields.proyectorNextSlide
+        && request.resource.data.proyectorNextSong == resource.data.projectorState.previousProjectionFields.proyectorNextSong
+        && request.resource.data.proyectorOffset == resource.data.projectorState.previousProjectionFields.proyectorOffset
+        && request.resource.data.liveState == resource.data.projectorState.previousProjectionFields.liveState
+        && request.resource.data.currentSongId == resource.data.projectorState.previousProjectionFields.currentSongId;
+    }
+
+    function isExactBlackoutRestore() {
+      return resource.data.projectorState is map
+        && resource.data.projectorState.type == 'blackout'
+        && resource.data.projectorState.previousProjectionFields is map
+        && request.resource.data.projectorState == resource.data.projectorState.previousProjectionFields.projectorState
+        && request.resource.data.proyectorSlide == resource.data.projectorState.previousProjectionFields.proyectorSlide
+        && request.resource.data.proyectorMedia == resource.data.projectorState.previousProjectionFields.proyectorMedia
+        && request.resource.data.proyectorLogo == resource.data.projectorState.previousProjectionFields.proyectorLogo
+        && request.resource.data.proyectorApagado == resource.data.projectorState.previousProjectionFields.proyectorApagado
+        && request.resource.data.proyectorFondo == resource.data.projectorState.previousProjectionFields.proyectorFondo
+        && request.resource.data.proyectorFondoMedia == resource.data.projectorState.previousProjectionFields.proyectorFondoMedia
+        && request.resource.data.proyectorSongId == resource.data.projectorState.previousProjectionFields.proyectorSongId
+        && request.resource.data.proyectorSlideIndex == resource.data.projectorState.previousProjectionFields.proyectorSlideIndex
+        && request.resource.data.proyectorNextSlide == resource.data.projectorState.previousProjectionFields.proyectorNextSlide
+        && request.resource.data.proyectorNextSong == resource.data.projectorState.previousProjectionFields.proyectorNextSong
+        && request.resource.data.proyectorOffset == resource.data.projectorState.previousProjectionFields.proyectorOffset
+        && request.resource.data.liveState == resource.data.projectorState.previousProjectionFields.liveState
+        && request.resource.data.currentSongId == resource.data.projectorState.previousProjectionFields.currentSongId
+        && onlyEventKeys(bibleProjectionFields())
+        && !changedEventKeys().hasAny(['announcementState']);
+    }
+
+    function blackoutPreviousProjectionIsTrusted() {
+      let previous = request.resource.data.projectorState.previousProjectionFields;
+      return previous is map
+        && previous.projectorState == resource.data.projectorState
+        && previous.proyectorSlide == resource.data.proyectorSlide
+        && previous.proyectorMedia == resource.data.proyectorMedia
+        && previous.proyectorLogo == resource.data.proyectorLogo
+        && previous.proyectorApagado == resource.data.proyectorApagado
+        && previous.proyectorFondo == resource.data.proyectorFondo
+        && previous.proyectorFondoMedia == resource.data.proyectorFondoMedia
+        && previous.proyectorSongId == resource.data.proyectorSongId
+        && previous.proyectorSlideIndex == resource.data.proyectorSlideIndex
+        && previous.proyectorNextSlide == resource.data.proyectorNextSlide
+        && previous.proyectorNextSong == resource.data.proyectorNextSong
+        && previous.proyectorOffset == resource.data.proyectorOffset
+        && previous.liveState == resource.data.liveState
+        && previous.currentSongId == resource.data.currentSongId;
+    }
+
+    function hasProjectionPermissionForRequestedState() {
+      let state = request.resource.data.projectorState;
+      return (resource.data.projectorState is map && resource.data.projectorState.contentType == 'bible'
+          && isExactBibleRestore() && hasPermission('bible.project'))
+        || (state is map && (
+          (state.type == 'preaching' && state.contentType == 'bible' && hasPermission('bible.project'))
+          || (state.type == 'preaching' && (!('contentType' in state) || state.contentType == 'preaching') && hasPermission('sermons.project'))
+          || (state.type in ['media', 'lyrics'] && state.contentType in ['media', 'lyrics'] && hasPermission('multimedia.project'))
+          || (state.type == 'announcement' && state.contentType == 'announcement' && hasPermission('announcements.project'))
+          || (state.type in ['blackout', 'resume', 'logo', 'clearLogo', 'clearPreaching', 'timer'] && hasPermission('multimedia.controlOutputs'))
+        ));
+    }
+
+    function bibleProjectionFields() {
+      return ['projectorState', 'proyectorSlide', 'proyectorMedia', 'proyectorLogo', 'proyectorApagado',
+        'proyectorFondo', 'proyectorFondoMedia', 'proyectorSongId', 'proyectorSlideIndex',
+        'proyectorNextSlide', 'proyectorNextSong', 'proyectorOffset', 'liveState', 'currentSongId', 'announcementState'];
+    }
+
+    function biblePreviousProjectionIsTrusted() {
+      return request.resource.data.projectorState.previousProjectionFields is map
+        && (
+          (resource.data.projectorState is map && resource.data.projectorState.contentType == 'bible'
+            && request.resource.data.projectorState.previousProjectionFields == resource.data.projectorState.previousProjectionFields)
+          || (resource.data.projectorState is map && resource.data.projectorState.contentType != 'bible'
+            && request.resource.data.projectorState.previousProjectionFields.projectorState == resource.data.projectorState
+            && request.resource.data.projectorState.previousProjectionFields.proyectorMedia == resource.data.proyectorMedia
+            && request.resource.data.projectorState.previousProjectionFields.proyectorSlide == resource.data.proyectorSlide
+            && request.resource.data.projectorState.previousProjectionFields.proyectorLogo == resource.data.proyectorLogo
+            && request.resource.data.projectorState.previousProjectionFields.proyectorApagado == resource.data.proyectorApagado
+            && request.resource.data.projectorState.previousProjectionFields.proyectorFondo == resource.data.proyectorFondo
+            && request.resource.data.projectorState.previousProjectionFields.proyectorFondoMedia == resource.data.proyectorFondoMedia
+            && request.resource.data.projectorState.previousProjectionFields.proyectorSongId == resource.data.proyectorSongId
+            && request.resource.data.projectorState.previousProjectionFields.proyectorSlideIndex == resource.data.proyectorSlideIndex
+            && request.resource.data.projectorState.previousProjectionFields.proyectorNextSlide == resource.data.proyectorNextSlide
+            && request.resource.data.projectorState.previousProjectionFields.proyectorNextSong == resource.data.proyectorNextSong
+            && request.resource.data.projectorState.previousProjectionFields.proyectorOffset == resource.data.proyectorOffset
+            && request.resource.data.projectorState.previousProjectionFields.liveState == resource.data.liveState
+            && request.resource.data.projectorState.previousProjectionFields.currentSongId == resource.data.currentSongId)
+        );
+    }
+
+    function validBibleProjectorState() {
+      return projectorStateIs('preaching', 'bible')
+        && request.resource.data.projectorState.keys().hasOnly([
+          'type', 'contentType', 'preachingType', 'title', 'reference', 'translation', 'translationName',
+          'content', 'provider', 'bibleId', 'passageId', 'copyright', 'bible', 'bibleSlideIndex',
+          'bibleSlideCount', 'media', 'background', 'backgroundMedia', 'previousProjectorState',
+          'previousProjectionFields', 'sourceActor', 'actorUid', 'actorName', 'actorRole', 'updatedBy',
+          'updatedAt', 'projectionVersion', 'projectionActionId', 'timer', 'segments',
+          'presentationType', 'alignment'
+        ])
+        && preservesLegacyBiblePresentationFields()
+        && request.resource.data.projectorState.media == null
+        && request.resource.data.projectorState.background == null
+        && request.resource.data.projectorState.backgroundMedia == null
+        && request.resource.data.proyectorMedia == null
+        && request.resource.data.proyectorFondo == null
+        && request.resource.data.proyectorFondoMedia == null
+        && onlyEventKeys(bibleProjectionFields())
+        && biblePreviousProjectionIsTrusted();
+    }
+
+    function preservesLegacyBiblePresentationFields() {
+      let state = request.resource.data.projectorState;
+      return (!('segments' in state)
+          || (resource.data.projectorState is map
+            && 'segments' in resource.data.projectorState
+            && state.segments == resource.data.projectorState.segments))
+        && (!('presentationType' in state)
+          || (resource.data.projectorState is map
+            && 'presentationType' in resource.data.projectorState
+            && state.presentationType == resource.data.projectorState.presentationType))
+        && (!('alignment' in state)
+          || (resource.data.projectorState is map
+            && 'alignment' in resource.data.projectorState
+            && state.alignment == resource.data.projectorState.alignment));
+    }
+
+    function validSermonProjectorState() {
+      return request.resource.data.projectorState is map
+        && request.resource.data.projectorState.type == 'preaching'
+        && (!('contentType' in request.resource.data.projectorState)
+          || request.resource.data.projectorState.contentType == 'preaching')
+        && !('bible' in request.resource.data.projectorState)
+        && request.resource.data.proyectorMedia == null;
+    }
+
+    function validMediaProjectorState() {
+      return projectorStateIs('media', 'media')
+        && request.resource.data.projectorState.media is map
+        && request.resource.data.proyectorMedia is map;
+    }
+
+    function validLyricsProjectorState() {
+      return projectorStateIs('lyrics', 'lyrics')
+        && request.resource.data.projectorState.media == null
+        && request.resource.data.proyectorMedia == null;
+    }
+
+    function hasValidProjectionStateForPermission() {
+      let state = request.resource.data.projectorState;
+      return (resource.data.projectorState is map && resource.data.projectorState.contentType == 'bible'
+          && isExactBibleRestore() && onlyEventKeys(bibleProjectionFields()))
+        || (state is map && (
+          (state.type == 'preaching' && state.contentType == 'bible' && validBibleProjectorState())
+          || (state.type == 'preaching' && (!('contentType' in state) || state.contentType == 'preaching') && validSermonProjectorState())
+          || (state.type == 'media' && state.contentType == 'media' && validMediaProjectorState())
+          || (state.type == 'lyrics' && state.contentType == 'lyrics' && validLyricsProjectorState())
+          || (state.type == 'announcement' && state.contentType == 'announcement')
+          || (state.type == 'blackout' && state.contentType == 'none' && blackoutPreviousProjectionIsTrusted())
+          || state.type in ['resume', 'logo', 'clearLogo', 'clearPreaching', 'timer']
+        ));
+    }
+
     function isAdminLike() {
       return hasAnyRole(['dueño', 'dueno', 'admin']);
     }
@@ -57,8 +334,7 @@ service cloud.firestore {
     function canReadPreachingShared() {
       return signedIn()
         && (
-          isOwnerOrMedia()
-          || isAdminReadOnly()
+          hasPermission('sermons.view')
           || ((isPastorRole() || isPastorLegacyRole()) && resource.data.preacherId == request.auth.uid)
         );
     }
@@ -66,7 +342,7 @@ service cloud.firestore {
     function canCreatePreachingShared() {
       return signedIn()
         && (
-          isOwnerOrMedia()
+          hasPermission('sermons.create')
           || (isPastorRole()
             && request.resource.data.preacherType == 'user'
             && request.resource.data.preacherId == request.auth.uid)
@@ -76,7 +352,7 @@ service cloud.firestore {
     function canUpdatePreachingShared() {
       return signedIn()
         && (
-          isOwnerOrMedia()
+          hasPermission('sermons.edit')
           || (isPastorRole()
             && resource.data.preacherId == request.auth.uid
             && request.resource.data.preacherId == request.auth.uid
@@ -293,11 +569,12 @@ service cloud.firestore {
     }
 
     function canUpdateEventAsAdmin() {
-      return isAdminLike() && onlyEventKeys(adminEventFields());
+      return hasPermission('events.edit') && onlyEventKeys(adminEventFields());
     }
 
     function canUpdateEventAsMedia() {
-      return isMediaOrAdmin()
+      return hasProjectionPermissionForRequestedState()
+        && hasValidProjectionStateForPermission()
         && onlyEventKeys(projectorEventFields())
         && (
           !changedEventKeys().hasAny(['announcementState'])
@@ -306,12 +583,17 @@ service cloud.firestore {
     }
 
     function canUpdateEventBibleOutline() {
-      return isMediaOrAdmin()
+      return hasPermission('events.edit')
         && onlyEventKeys(['bibleOutline'])
         && request.resource.data.bibleOutline is map
         && request.resource.data.bibleOutline.keys().hasOnly(['items', 'updatedAt'])
         && request.resource.data.bibleOutline.items is list
         && request.resource.data.bibleOutline.items.size() <= 50;
+    }
+
+    function canUpdateEventSetlist() {
+      return onlyEventKeys(['setlist', 'canciones'])
+        && hasPermission('setlists.manage');
     }
 
     function validAnnouncementState() {
@@ -363,18 +645,50 @@ service cloud.firestore {
     }
 
     function canUpdateEventAnnouncement() {
-      return isOwnerOnly()
+      return hasPermission('announcements.project')
         && onlyEventKeys([
           'announcementState', 'projectorState', 'liveState', 'proyectorMedia',
           'proyectorSlide', 'proyectorFondo', 'proyectorFondoMedia', 'currentSongId',
           'proyectorSongId', 'proyectorSlideIndex', 'proyectorNextSlide',
           'proyectorNextSong', 'proyectorLogo', 'proyectorApagado'
         ])
+        && request.resource.data.projectorState is map
+        && request.resource.data.projectorState.type in ['announcement', 'resume']
+        && request.resource.data.projectorState.keys().hasOnly([
+          'type', 'contentType', 'title', 'content', 'media', 'background', 'backgroundMedia', 'updatedAt'
+        ])
+        && request.resource.data.projectorState.media == null
         && validAnnouncementState();
     }
 
     function canUpdateEventAsParticipant() {
       return signedIn() && onlyEventKeys(sharedEventParticipationFields());
+    }
+
+    function canUpdateEventProjection(eventoId) {
+      let state = request.resource.data.projectorState;
+      return state is map && state.type == 'announcement'
+        ? canUpdateEventAnnouncement()
+        : (state is map && 'sourceActor' in state && state.sourceActor == 'pastor'
+          ? canUpdateEventAsPastorProjection(eventoId)
+          : canUpdateEventAsMedia());
+    }
+
+    function canUpdateEvent(eventoId) {
+      let projectionChange = changedEventKeys().hasAny(['projectorState']);
+      return projectionChange
+        ? (isExactBlackoutRestore()
+          ? hasPermission('multimedia.controlOutputs')
+          : (request.resource.data.projectorState is map
+          && request.resource.data.projectorState.contentType == 'quickMessage'
+          && !isExactBibleRestore()
+          ? false
+          : canUpdateEventProjection(eventoId)))
+        : (canUpdateEventAsAdmin()
+          || canUpdateEventSetlist()
+          || canUpdateEventBibleOutline()
+          || canUpdateEventAsParticipant()
+          || canUpdateEventAsMedia());
     }
 
     function canUpdateEventAsPastorProjection(eventoId) {
@@ -388,6 +702,7 @@ service cloud.firestore {
 
     function isOwnerBootstrap() {
       return signedIn()
+        && 'email' in request.auth.token
         && request.auth.token.email == 'luistorresdrums2024@gmail.com'
         && request.resource.data.rol == 'dueño';
     }
@@ -395,19 +710,36 @@ service cloud.firestore {
     function isSafeSelfProfileUpdate(userId) {
       return signedIn()
         && request.auth.uid == userId
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['rol', 'sinAcceso']);
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(sensitiveUserFields());
+    }
+
+    function preservesOwnOwnerRole(userId) {
+      return !(request.auth.uid == userId && resource.data.rol in ['dueño', 'dueno'])
+        || request.resource.data.rol in ['dueño', 'dueno'];
     }
 
     match /usuarios/{userId} {
       allow read: if signedIn();
-      allow create: if isAdminLike()
-        || (signedIn() && request.auth.uid == userId && request.resource.data.rol == 'musico')
+      allow create: if (isOwnerOnly() && request.resource.data.keys().hasOnly(ownerUserCreateFields()))
+        || ((isAdminLike() || hasPermission('team.edit')) && isSafeUserCreate())
+        || (signedIn() && request.auth.uid == userId && request.resource.data.rol == 'musico' && isSafeUserCreate())
         || (signedIn() && request.auth.uid == userId && isOwnerBootstrap());
-      allow update: if isSafeSelfProfileUpdate(userId) || isAdminLike();
-      allow delete: if isAdminLike();
+      allow update: if (
+        isSafeSelfProfileUpdate(userId)
+        || (isOwnerOnly()
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['permissionOverrides', 'permissionAudit']))
+          || ((isAdminLike() || hasPermission('team.edit'))
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(sensitiveUserFields()))
+      ) && preservesOwnOwnerRole(userId);
+      allow delete: if isOwnerOnly() && request.auth.uid != userId;
 
       match /notas/{noteId} {
         allow read, write: if signedIn() && request.auth.uid == userId;
+      }
+
+      match /permissionAudit/{auditId} {
+        allow read: if isOwnerOnly() || request.auth.uid == userId;
+        allow read, write: if false;
       }
     }
 
@@ -416,14 +748,9 @@ service cloud.firestore {
       // attendance, countdown, media, lyrics, announcements, and controller-free global.
       // Private preacher data must never live here; it belongs in /private/preacher.
       allow read: if signedIn();
-      allow create: if isAdminLike();
-      allow update: if canUpdateEventAsAdmin()
-        || canUpdateEventAsMedia()
-        || canUpdateEventBibleOutline()
-        || canUpdateEventAnnouncement()
-        || canUpdateEventAsPastorProjection(eventoId)
-        || canUpdateEventAsParticipant();
-      allow delete: if isAdminLike();
+      allow create: if hasPermission('events.create');
+      allow update: if canUpdateEvent(eventoId);
+      allow delete: if hasPermission('events.delete');
 
       match /preacherRequests/{requestId} {
         allow read: if isOwnerOrMedia() || isAdminReadOnly() || isAssignedPastorForEventPreaching(eventoId);
@@ -452,18 +779,28 @@ service cloud.firestore {
 
     match /canciones/{songId} {
       allow read: if signedIn();
-      allow create, update: if isMediaOrAdmin();
-      allow delete: if isAdminLike();
+      allow create: if hasPermission('songs.create');
+      allow update: if isOwnerOnly();
+      allow delete: if hasPermission('songs.delete') && resource.data.archived == true;
+
+      match /permissionAudit/{auditId} {
+        allow read: if isOwnerOnly();
+        allow write: if false;
+      }
     }
 
     match /mediaLibrary/{mediaId} {
-      allow read: if isMediaOrAdmin() || (isPastorRole() && isSharedActiveMediaResource());
-      allow create, update: if isMediaOrAdmin();
-      allow delete: if isAdminLike();
+      allow read: if hasPermission('multimedia.libraryView') || (isPastorRole() && isSharedActiveMediaResource());
+      allow create: if hasPermission('multimedia.upload');
+      allow update: if hasPermission('multimedia.edit');
+      allow delete: if hasPermission('multimedia.delete');
     }
 
     match /anuncios/{announcementId} {
-      allow read, create, update, delete: if isOwnerOnly();
+      allow read: if hasPermission('announcements.view') || hasPermission('announcements.project');
+      allow create: if hasPermission('announcements.create');
+      allow update: if hasPermission('announcements.edit');
+      allow delete: if hasPermission('announcements.delete');
     }
 
     match /predicas/{predicaId} {
@@ -487,14 +824,24 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /sistema/permissionRoles {
+      allow read: if signedIn();
+      allow write: if false;
+
+      match /audit/{auditId} {
+        allow read: if isOwnerOnly();
+        allow write: if false;
+      }
+    }
+
     match /sistema/{document} {
       allow read: if document != 'teamAccessPin' && signedIn();
-      allow write: if document != 'teamAccessPin' && isMediaOrAdmin();
+      allow write: if document != 'teamAccessPin' && document != 'permissionRoles' && isMediaOrAdmin();
     }
 
     match /sistema/{document}/{subdocument=**} {
       allow read: if signedIn();
-      allow write: if isMediaOrAdmin();
+      allow write: if document != 'permissionRoles' && isMediaOrAdmin();
     }
 
     match /notificaciones/{notificationId} {

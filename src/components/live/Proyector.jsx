@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useRef } from 'react';
+﻿import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
@@ -7,10 +7,13 @@ import AutoFitText from './AutoFitText';
 import BibleAmbientBackground from './BibleAmbientBackground';
 import ProjectorMediaBackground from './ProjectorMediaBackground';
 import { resolveProjectorBackground } from '../../utils/projectorMediaState';
+import { isVideoMediaUrl } from '../../utils/mediaUtils';
 import AnnouncementPresentation from '../announcements/AnnouncementPresentation';
 import { resolveActiveBibleProjectorState, resolveActiveBibleSlide } from '../../utils/bibleProjectionState';
 import { resolveActivePreachingProjectorState, resolvePreachingProjectionContent } from '../../utils/preachingProjectionState';
 import { PreachingPresentation } from './InternalScreenPreaching';
+import QuickMessagePresentation from './QuickMessagePresentation';
+import { resolveActiveQuickMessageProjectorState } from '../../utils/quickMessageProjectionState';
 
 const Proyector = ({ eventoIdOverride, user }) => {
   const { eventoId: routeEventoId } = useParams();
@@ -30,8 +33,8 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const [showControls, setShowControls] = useState(false);
   const controlsTimerRef = useRef(null);
   const videoRef = useRef(null);
+  const videoPlaybackRef = useRef({ key: null, element: null, fallbackMuted: false, inFlight: false });
   const lastFondoRef = useRef(null);
-  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
 
   // Nuevos estados para la transici?n secuencial (Desvanecer viejo -> Aparecer nuevo)
   const [displaySlide, setDisplaySlide] = useState(null);
@@ -63,49 +66,90 @@ const Proyector = ({ eventoIdOverride, user }) => {
     return () => unsub();
   }, [eventoId]);
 
-  // Sincronizaci?n de Play/Pause y Comandos de Navegaci?n
-  useEffect(() => {
-    if (!videoRef.current || !media || media.type !== 'video') return;
+  const syncProjectedVideoPlayback = useCallback((video) => {
+    const isVideo = media?.type === 'video' || isVideoMediaUrl(media?.url);
+    if (!video || video !== videoRef.current || !media?.url || !isVideo) return;
 
-    // Aplicar volumen directamente desde el controlador
-    // Only update volume if it's different to avoid unnecessary DOM manipulation
-    // and potential issues with browser's internal volume state.
-    if (videoRef.current.volume !== (media.volume ?? 1)) {
-      videoRef.current.volume = media.volume ?? 1;
+    const mediaKey = `${media.mediaId || media.id || ''}|${media.url}`;
+    let attempt = videoPlaybackRef.current;
+    if (attempt.key !== mediaKey || attempt.element !== video) {
+      attempt = { key: mediaKey, element: video, fallbackMuted: false, inFlight: false };
+      videoPlaybackRef.current = attempt;
     }
-    videoRef.current.muted = media.volume === 0; // Mute si el volumen es 0
 
-    // Manejo de Play/Pause
-    if (media.playing) videoRef.current.play().catch(e => console.warn(e));
-    else videoRef.current.pause();
+    const volume = media.volume ?? 1;
+    if (video.volume !== volume) video.volume = volume;
 
-    // Manejo de comandos de b?squeda (Seek)
-    // Only seek if the media is playing or if it's a specific seek command (not just play/pause)
-    // This prevents seeking to 0 when media is paused and then played again.
+    if (media.playing === false) {
+      attempt.inFlight = false;
+      video.pause();
+      return;
+    }
+
+    if (attempt.inFlight) return;
+    attempt.inFlight = true;
+
+    const play = (muted) => {
+      video.muted = muted;
+      let playPromise;
+      try {
+        playPromise = video.play();
+      } catch (error) {
+        playPromise = Promise.reject(error);
+      }
+
+      Promise.resolve(playPromise)
+        .then(() => {
+          if (videoPlaybackRef.current === attempt) attempt.inFlight = false;
+        })
+        .catch((error) => {
+          if (videoPlaybackRef.current !== attempt || video !== videoRef.current) return;
+
+          if (!muted && !attempt.fallbackMuted) {
+            // Browsers block audible autoplay. Retry the same projection muted so the public
+            // screen never waits for a user interaction; audio remains enabled when allowed.
+            attempt.fallbackMuted = true;
+            play(true);
+            return;
+          }
+
+          attempt.inFlight = false;
+          console.warn('No se pudo iniciar el video proyectado:', error);
+        });
+    };
+
+    play(volume === 0 || attempt.fallbackMuted);
+  }, [media]);
+
+  // Sincronizaci?n de Play/Pause y Comandos de Navegaci?n.
+  useEffect(() => {
+    const video = videoRef.current;
+    const isVideo = media?.type === 'video' || isVideoMediaUrl(media?.url);
+    if (!video || !media || !isVideo) return;
+
     if (media.seekRequest && (media.playing || media.seekRequest.type !== 'play')) {
       const { type, time } = media.seekRequest;
-      // Solo procesamos si es una petici?n con un timestamp nuevo para evitar bucles
-      if (videoRef.current._lastSeekTime !== time) {
-        videoRef.current._lastSeekTime = time;
-        if (type === 'start') videoRef.current.currentTime = 0;
-        if (type === 'back10') videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10);
-        if (type === 'fwd10') videoRef.current.currentTime = Math.min(videoRef.current.duration, videoRef.current.currentTime + 10);
+      if (video._lastSeekTime !== time) {
+        video._lastSeekTime = time;
+        if (type === 'start') video.currentTime = 0;
+        if (type === 'back10') video.currentTime = Math.max(0, video.currentTime - 10);
+        if (type === 'fwd10' && Number.isFinite(video.duration)) {
+          video.currentTime = Math.min(video.duration, video.currentTime + 10);
+        }
       }
     }
 
-    // Handle autoplay promise to detect if it was blocked
-    const playPromise = videoRef.current.play();
-    if (playPromise !== undefined) {
-      playPromise.then(() => setAutoplayBlocked(false)).catch(() => setAutoplayBlocked(true));
-    }
-  }, [media]); // Dependencia en 'media' completo para reaccionar a todos los cambios
+    syncProjectedVideoPlayback(video);
+  }, [media, syncProjectedVideoPlayback]);
 
-  useEffect(() => () => {
+  useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
-    video.pause();
-    video.removeAttribute('src');
-    video.load();
+    return () => {
+      if (!video) return;
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    };
   }, [media?.url]);
 
   // Efecto maestro para controlar la salida y entrada de la letra de forma sincronizada
@@ -212,8 +256,10 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const activeBibleState = resolveActiveBibleProjectorState({ projectorState, proyectorApagado: apagar });
   const isBibleContent = Boolean(activeBibleState);
   const activeBibleSlide = resolveActiveBibleSlide(activeBibleState);
+  const activeQuickMessageState = resolveActiveQuickMessageProjectorState({ projectorState, proyectorApagado: apagar });
+  const isQuickMessageContent = Boolean(activeQuickMessageState);
   const bibleHeading = activeBibleSlide?.heading || null;
-  const hasProjectedTextContent = isBibleContent || isPreachingContent;
+  const hasProjectedTextContent = isBibleContent || isPreachingContent || isQuickMessageContent;
 
   if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !hasProjectedTextContent) {
     return (
@@ -274,7 +320,7 @@ const Proyector = ({ eventoIdOverride, user }) => {
       {/* Capa de Video Principal (Foreground) - Tapa todo lo dem?s */}
       {media?.url && media.mode === 'foreground' && (
         <div key={media.url} className="absolute inset-0 z-40 bg-black animate-in fade-in duration-500 overflow-hidden block">
-          {media.type === 'video' || media.url.includes('video/upload') ? (
+          {media.type === 'video' || isVideoMediaUrl(media.url) ? (
             <video 
               ref={videoRef}
               src={media.url} 
@@ -282,17 +328,13 @@ const Proyector = ({ eventoIdOverride, user }) => {
               className="w-full h-full object-contain"
               playsInline 
               autoPlay
-              muted={false}
-              onPlay={() => setAutoplayBlocked(false)}
-              onError={() => setAutoplayBlocked(false)} // Clear block message if error occurs
+              loop={true}
+              preload="auto"
+              onLoadedMetadata={(event) => syncProjectedVideoPlayback(event.currentTarget)}
+              onLoadedData={(event) => syncProjectedVideoPlayback(event.currentTarget)}
+              onCanPlay={(event) => syncProjectedVideoPlayback(event.currentTarget)}
             />
           ) : <img src={media.url} className="w-full h-full object-contain" />}
-
-          {autoplayBlocked && (
-            <div className="absolute inset-0 bg-black/70 flex items-center justify-center text-white text-xl font-bold z-50">
-              <p>Haz clic para reproducir el video</p>
-            </div>
-          )}
         </div>
       )}
 
@@ -314,6 +356,8 @@ const Proyector = ({ eventoIdOverride, user }) => {
           <img src="/KADOSH_APP.jpg" alt="Logo Kadosh" className="w-48 h-48 md:w-64 md:h-64 lg:w-80 lg:h-80 rounded-full shadow-[0_0_80px_rgba(255,255,255,0.2)] object-cover ring-8 ring-white/10" />
           <h1 className="mt-8 text-5xl md:text-7xl font-black tracking-tighter text-white drop-shadow-2xl">KADOSH</h1>
         </div>
+      ) : isQuickMessageContent ? (
+        <QuickMessagePresentation eventData={{ projectorState, proyectorApagado: apagar }} layerClassName="z-20" />
       ) : isBibleContent ? (
         <div className="absolute inset-0 z-20 flex min-h-0 w-full items-center justify-center px-[5vw] py-[5vh] text-center">
           <BibleAmbientBackground />

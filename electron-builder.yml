@@ -1,0 +1,26 @@
+appId: com.kadosh.app
+productName: Kadosh App
+publish:
+  provider: github
+  owner: luisao205
+  repo: Kadosh-app
+directories:
+  output: release
+files:
+  - dist/**/*
+  - desktop/**/*
+  - package.json
+extraResources:
+  - from: public/logo.ico
+    to: logo.ico
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: public/logo.ico
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: Kadosh-App-Setup-${version}.${ext}

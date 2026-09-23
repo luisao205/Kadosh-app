@@ -15,6 +15,7 @@ import SectionMediaManager from './SectionMediaManager';
 import SongMetadataForm from './SongMetadataForm';
 import SongResourcesPanel from './SongResourcesPanel';
 import { useFeedback } from '../ui/FeedbackProvider';
+import { updateSongContent, updateSongMetadata } from '../../utils/songFunctions';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const INSTRUMENTOS_RECURSOS = ['General', 'Voz Principal', 'Coros', 'Batería', 'Piano', 'Bajo', 'Guitarra Acústica', 'Guitarra Eléctrica', 'Percusión'];
@@ -100,6 +101,7 @@ const EditSong = ({ user }) => {
 
   const audioRef = useRef(null);
   const initialSongStateRef = useRef(null);
+  const initialServerSongRef = useRef(null);
   const pendingMediaUsageRef = useRef([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -150,6 +152,7 @@ const EditSong = ({ user }) => {
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const data = docSnap.data();
+          initialServerSongRef.current = data;
           setTitulo(data.titulo || '');
           setArtista(data.artista || '');
           setBpm(data.bpm || '');
@@ -716,7 +719,6 @@ const EditSong = ({ user }) => {
         usageChanges: resolvedMediaUsageChanges
       } = await resolvePendingSectionMediaForSave(sectionMedia);
 
-      const docRef = doc(db, 'canciones', id);
       const savedData = {
         titulo,
         artista,
@@ -734,7 +736,29 @@ const EditSong = ({ user }) => {
         fondoMediaId: fondoMediaId || null,
         fechaActualizacion: new Date().toISOString()
       };
-      await updateDoc(docRef, savedData);
+      const previous = initialServerSongRef.current || {};
+      const metadataChanges = Object.fromEntries(Object.entries({
+        titulo: savedData.titulo,
+        artista: savedData.artista,
+        tonoOriginal: savedData.tonoOriginal,
+        etiquetas: savedData.etiquetas,
+        multitracks: savedData.multitracks,
+        recursos: savedData.recursos,
+        sectionMedia: savedData.sectionMedia,
+        tonosAlternativos: savedData.tonosAlternativos,
+        bpm: savedData.bpm,
+        audioUrl: savedData.audioUrl,
+        youtubeUrl: savedData.youtubeUrl,
+        fondoUrl: savedData.fondoUrl,
+        fondoMediaId: savedData.fondoMediaId
+      }).filter(([field, value]) => JSON.stringify(previous[field] ?? null) !== JSON.stringify(value ?? null)));
+
+      if (previous.letraRaw !== savedData.letraRaw) {
+        await updateSongContent(id, savedData.letraRaw);
+      }
+      if (Object.keys(metadataChanges).length) {
+        await updateSongMetadata(id, metadataChanges);
+      }
       try {
         await flushPendingMediaUsage(resolvedMediaUsageChanges);
       } catch (usageError) {
@@ -757,6 +781,7 @@ const EditSong = ({ user }) => {
       setAudioFile(null);
       setSectionMedia(resolvedSectionMedia);
       setStemsNuevosCount(0);
+      initialServerSongRef.current = { ...previous, ...savedData };
       initialSongStateRef.current = stringifySongState({
         ...savedData,
         tonosCantantes,

@@ -1,4 +1,5 @@
 import { normalizeRole } from './rolePermissions';
+import { PERMISSIONS, hasPermission, isOwnerUser } from './permissions.js';
 
 export const MEDIA_LIBRARY_ACTIONS = Object.freeze({
   ACCESS: 'access',
@@ -13,15 +14,9 @@ export const MEDIA_LIBRARY_ACTIONS = Object.freeze({
   ADMINISTRATION: 'administration'
 });
 
-export const isMediaLibraryOwner = (user = {}) => {
-  const role = normalizeRole(user?.rol || user?.role);
-  return role === 'dueno' || role === 'dueño';
-};
+export const isMediaLibraryOwner = isOwnerUser;
 
-export const canAccessMediaLibrary = (user = {}) => {
-  const role = normalizeRole(user?.rol || user?.role);
-  return isMediaLibraryOwner(user) || role === 'admin' || role === 'multimedia';
-};
+export const canAccessMediaLibrary = (user = {}) => hasPermission(user, PERMISSIONS.MULTIMEDIA_LIBRARY_VIEW);
 
 export const canSelectSharedMediaForPreaching = (user = {}, preaching = {}) => {
   const role = normalizeRole(user?.rol || user?.role);
@@ -38,9 +33,9 @@ export const canPerformMediaLibraryAction = (user = {}, action, context = {}) =>
 
   if (!canAccessMediaLibrary(user)) return false;
 
-  if (action === MEDIA_LIBRARY_ACTIONS.SYNC) {
-    return isMediaLibraryOwner(user);
-  }
-
-  return true;
+  if (action === MEDIA_LIBRARY_ACTIONS.SYNC) return isMediaLibraryOwner(user);
+  if (action === MEDIA_LIBRARY_ACTIONS.ADD) return hasPermission(user, PERMISSIONS.MULTIMEDIA_UPLOAD);
+  if (action === MEDIA_LIBRARY_ACTIONS.EDIT) return hasPermission(user, PERMISSIONS.MULTIMEDIA_EDIT);
+  if ([MEDIA_LIBRARY_ACTIONS.DELETE_FOREVER, MEDIA_LIBRARY_ACTIONS.TRASH].includes(action)) return hasPermission(user, PERMISSIONS.MULTIMEDIA_DELETE);
+  return canAccessMediaLibrary(user);
 };

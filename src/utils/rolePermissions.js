@@ -1,10 +1,9 @@
-export const normalizeRole = (role = '') => String(role)
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase()
-  .trim();
+import { normalizeRole } from './rolePermissionsBase.js';
+import { PERMISSIONS, hasAnyPermission, hasPermission, isOwnerUser } from './permissions.js';
 
-export const isOwner = (user = {}) => normalizeRole(user?.rol || user?.role) === 'dueno';
+export { normalizeRole };
+
+export const isOwner = isOwnerUser;
 
 export const isAdmin = (user = {}) => normalizeRole(user?.rol || user?.role) === 'admin';
 
@@ -25,35 +24,36 @@ export const hasAnyRole = (user = {}, roles = []) => {
 
 export const canManageTeam = (user = {}) => isOwner(user);
 
-export const canManageSongs = (user = {}) => isOwner(user) || isAdmin(user) || isMultimedia(user);
-
-export const canAccessMultimediaTools = (user = {}) => isOwner(user) || isAdmin(user) || isMultimedia(user);
-
-export const canAccessController = (user = {}) => canAccessMultimediaTools(user);
-export const canManageAnnouncements = (user = {}) => isOwner(user);
-
-export const canViewEventsAndSetlists = (user = {}) => hasAnyRole(user, [
-  'dueño',
-  'dueno',
-  'admin',
-  'multimedia',
-  'musico',
-  'predicador',
-  'pastor'
+export const canManageSongs = (user = {}) => hasAnyPermission(user, [
+  PERMISSIONS.SONGS_CREATE,
+  PERMISSIONS.SONGS_EDIT_LYRICS,
+  PERMISSIONS.SONGS_EDIT_CHORDS,
+  PERMISSIONS.SONGS_EDIT_METADATA
 ]);
 
-export const canAccessPreachings = (user = {}) => hasAnyRole(user, [
-  'dueño',
-  'dueno',
-  'admin',
-  'multimedia',
-  'predicador',
-  'pastor'
+export const canAccessMultimediaTools = (user = {}) => hasPermission(user, PERMISSIONS.MULTIMEDIA_CENTRAL_ACCESS);
+
+export const canAccessController = (user = {}) => hasAnyPermission(user, [
+  PERMISSIONS.MULTIMEDIA_CONTROL_OUTPUTS,
+  PERMISSIONS.MULTIMEDIA_PROJECT,
+  PERMISSIONS.BIBLE_PROJECT,
+  PERMISSIONS.SERMONS_PROJECT
+]);
+export const canManageAnnouncements = (user = {}) => hasAnyPermission(user, [
+  PERMISSIONS.ANNOUNCEMENTS_VIEW,
+  PERMISSIONS.ANNOUNCEMENTS_CREATE,
+  PERMISSIONS.ANNOUNCEMENTS_EDIT,
+  PERMISSIONS.ANNOUNCEMENTS_DELETE,
+  PERMISSIONS.ANNOUNCEMENTS_PROJECT
 ]);
 
-export const canManageAnyPreaching = (user = {}) => isOwner(user) || isMultimedia(user);
+export const canViewEventsAndSetlists = (user = {}) => hasAnyPermission(user, [PERMISSIONS.EVENTS_VIEW, PERMISSIONS.SETLISTS_VIEW]);
 
-export const canCreatePreaching = (user = {}) => isOwner(user) || isMultimedia(user) || isPastor(user);
+export const canAccessPreachings = (user = {}) => hasPermission(user, PERMISSIONS.SERMONS_VIEW);
+
+export const canManageAnyPreaching = (user = {}) => hasAnyPermission(user, [PERMISSIONS.SERMONS_CREATE, PERMISSIONS.SERMONS_EDIT]);
+
+export const canCreatePreaching = (user = {}) => hasPermission(user, PERMISSIONS.SERMONS_CREATE);
 
 export const canUsePreachingMedia = (user = {}, preaching = {}) => {
   if (canManageAnyPreaching(user)) return true;

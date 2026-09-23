@@ -11,6 +11,7 @@ import InternalScreenMedia from './InternalScreenMedia';
 import InternalScreenBible from './InternalScreenBible';
 import InternalScreenBlackout from './InternalScreenBlackout';
 import InternalScreenPreaching from './InternalScreenPreaching';
+import QuickMessagePresentation from './QuickMessagePresentation';
 
 const readLocal = (key, fallback) => {
   if (typeof window === 'undefined') return fallback;
@@ -225,6 +226,7 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
       )}
 
       {media?.url && <InternalScreenMedia media={media} label="Multimedia en retorno de cantantes" />}
+      <QuickMessagePresentation eventData={evento} layerClassName="z-[75]" />
       <InternalScreenBible eventData={evento} />
       <InternalScreenPreaching eventData={evento} />
       <InternalScreenBlackout active={evento?.proyectorApagado === true} />

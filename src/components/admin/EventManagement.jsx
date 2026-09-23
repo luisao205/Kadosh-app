@@ -7,8 +7,10 @@ import { traducirAcorde } from '../../utils/musicCore';
 import { getEventChoirAssignments, getEventChoirsForSong, getEventSingerAssignments, getEventSingerForSong, getSingerTone, getSongBaseKey } from '../../utils/songAssignments';
 import { formatEventDate, formatEventTime, parseAppDate } from '../../utils/dateUtils';
 import { getSongSearchMatch } from '../../utils/songSearch';
-import { appendSongToSetlist, buildEventSetlistUpdate, getEventSongIds, hasSongInSetlist } from '../../utils/setlistUtils';
+import { appendSongToSetlist, buildEventSetlistUpdate, getEventSetlistItems, getEventSongIds, hasSongInSetlist } from '../../utils/setlistUtils';
 import { useFeedback } from '../ui/FeedbackProvider';
+import { PERMISSIONS, hasAnyPermission } from '../../utils/permissions';
+import { agregarCancionEnVivo } from '../../utils/liveSetlistFunctions';
 
 const PLANTILLA_NOTAS = `👗 Vestimenta: 
 ⏰ Llegada: 
@@ -69,7 +71,7 @@ const EventManagement = ({ user }) => {
   const [showSavePlantillaModal, setShowSavePlantillaModal] = useState(false);
   const [nuevaPlantillaName, setNuevaPlantillaName] = useState('');
   const showToast = (message, type = 'error') => notify(message, { type });
-  const canManageSetlists = ['dueno', 'dueño', 'admin'].includes(String(user?.rol || '').toLowerCase());
+  const canManageSetlists = hasAnyPermission(user, [PERMISSIONS.EVENTS_EDIT, PERMISSIONS.SETLISTS_ADD_SONG, PERMISSIONS.SETLISTS_REMOVE_SONG, PERMISSIONS.SETLISTS_REORDER, PERMISSIONS.SETLISTS_MANAGE]);
 
   // Cargar datos en tiempo real (Eventos, Canciones y Usuarios)
   useEffect(() => {
@@ -92,7 +94,7 @@ const EventManagement = ({ user }) => {
         const eventDate = parseAppDate(ev.fecha);
         if (!eventDate) return;
         if (eventDate <= hoy) { // Solo evaluamos eventos que ya pasaron
-          const ids = ev.setlist ? ev.setlist.filter(i => i.type === 'song').map(i => i.value) : (ev.canciones || []);
+          const ids = getEventSongIds(ev);
           ids.forEach(id => {
             const lastDate = parseAppDate(map[id]);
             if (!lastDate || eventDate > lastDate) {
@@ -208,8 +210,7 @@ const EventManagement = ({ user }) => {
 
     setIsAddingSongToEvent(true);
     try {
-      const nextSetlist = appendSongToSetlist(evento, songId, { prefix: 'repertorio' });
-      await updateDoc(doc(db, 'eventos', evento.id), buildEventSetlistUpdate(nextSetlist));
+      await agregarCancionEnVivo({ eventoId: evento.id, songId });
       showToast('Cancion agregada al setlist.', 'success');
       setSongToAddRequest(null);
       navigate(`/setlist/${evento.id}`, { state: { returnTo: '/canciones' } });
@@ -359,7 +360,7 @@ const EventManagement = ({ user }) => {
   };
 
   const getEnsayoSummary = (event = { ensayoChecklist, setlist, canciones: [] }) => {
-    const items = event.setlist || (event.canciones || []).map(id => ({ type: 'song', value: id }));
+    const items = getEventSetlistItems(event);
     const songItems = getSongItemsFromSetlist(items);
     const checklist = event.ensayoChecklist || {};
     const readyCount = songItems.filter(item => {
@@ -546,7 +547,7 @@ const EventManagement = ({ user }) => {
 
     mensaje += `\n📋 *Repertorio:*\n`;
     
-    const setlistItems = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
+    const setlistItems = getEventSetlistItems(evento);
     let songCount = 1;
     setlistItems.forEach(item => {
       if (item.type === 'note') {
@@ -626,12 +627,12 @@ const EventManagement = ({ user }) => {
     setTipoEvento(evento.tipoEvento || 'Servicio Dominical');
     setLugar(evento.lugar || evento.ubicacion || '');
     setNotasGenerales(evento.notas || '');
-    setSetlist(evento.setlist || (evento.canciones || []).map(id => ({ idLocal: Date.now().toString() + Math.random(), type: 'song', value: id })));
+    setSetlist(getEventSetlistItems(evento));
     setCantantesPorCancion(getEventSingerAssignments(evento));
     setCorosPorCancion(getEventChoirAssignments(evento));
     setResponsables(evento.responsables || {});
     setPredicadorId(resolvePreacherId(evento));
-    setEnsayoChecklist(cleanChecklistForSetlist(evento.ensayoChecklist || {}, evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }))));
+    setEnsayoChecklist(cleanChecklistForSetlist(evento.ensayoChecklist || {}, getEventSetlistItems(evento)));
     setEquipoSeleccionado(evento.equipo || []);
     setEstadoAsistenciaActual(evento.estadoAsistencia || {});
     setConflictosHorario([]);
@@ -655,7 +656,7 @@ const EventManagement = ({ user }) => {
     setTipoEvento(evento.tipoEvento || 'Servicio Dominical');
     setLugar(evento.lugar || evento.ubicacion || '');
     setNotasGenerales(evento.notas || '');
-    const oldSetlist = evento.setlist || (evento.canciones || []).map(id => ({ type: 'song', value: id }));
+    const oldSetlist = getEventSetlistItems(evento);
     setSetlist(oldSetlist.map(item => ({ ...item, idLocal: Date.now().toString() + Math.random() })));
     setCantantesPorCancion(getEventSingerAssignments(evento));
     setCorosPorCancion(getEventChoirAssignments(evento));
@@ -742,7 +743,7 @@ const EventManagement = ({ user }) => {
           </span>
         )}
         <div className="flex gap-4 mt-2 text-sm font-medium text-zinc-500">
-          <span className="flex items-center gap-1"><Music size={14}/> {evento.setlist ? evento.setlist.filter(i => i.type === 'song').length : (evento.canciones?.length || 0)} Canciones</span>
+          <span className="flex items-center gap-1"><Music size={14}/> {getEventSongIds(evento).length} Canciones</span>
           <span className="flex items-center gap-1"><Users size={14}/> {evento.equipo?.length || 0} Convocados</span>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { doc, updateDoc, collection, addDoc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db, messaging } from '../../config/firebase';
+import { db, getMessagingIfSupported } from '../../config/firebase';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getToken } from 'firebase/messaging';
 import { User, Save, Moon, Sun, Type, Camera, Loader2, Quote, Mic2, Palette, Check, X, Bell, BellRing, Settings, Lock } from 'lucide-react';
@@ -37,6 +37,7 @@ const UserProfile = ({ user }) => {
   const [teamPinForm, setTeamPinForm] = useState({ current: '', next: '', confirm: '' });
   const [teamPinAttempts, setTeamPinAttempts] = useState(0);
   const [teamPinLockedUntil, setTeamPinLockedUntil] = useState(0);
+  const notificationSetupRef = useRef(false);
   const isOwnerUser = isOwner(user);
 
   useEffect(() => {
@@ -45,7 +46,7 @@ const UserProfile = ({ user }) => {
         const status = await PushNotifications.checkPermissions();
         setPermisoConcedido(status.receive === 'granted');
       } else {
-        setPermisoConcedido(Notification.permission === 'granted');
+        setPermisoConcedido('Notification' in window && Notification.permission === 'granted');
       }
     };
     checkPerms();
@@ -192,6 +193,8 @@ const UserProfile = ({ user }) => {
 
   // Función para solicitar permisos de notificación manualmente
   const handleManualNotificationRequest = async () => {
+    if (notificationSetupRef.current) return;
+    notificationSetupRef.current = true;
     try {
       if (Capacitor.isNativePlatform()) {
         // MODO NATIVO (APK)
@@ -213,6 +216,8 @@ const UserProfile = ({ user }) => {
         }
       } else {
         // MODO WEB
+        const messaging = await getMessagingIfSupported();
+        if (!messaging || !('Notification' in window)) return;
         const permission = await Notification.requestPermission();
         if (permission === 'granted') {
           const currentToken = await getToken(messaging, { vapidKey: import.meta.env.VITE_VAPID_KEY });
@@ -227,6 +232,8 @@ const UserProfile = ({ user }) => {
     } catch (error) {
       console.error(error);
       showToast("Error al configurar notificaciones", "error");
+    } finally {
+      notificationSetupRef.current = false;
     }
   };
 
