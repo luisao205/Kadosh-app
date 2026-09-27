@@ -10,7 +10,6 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-release
 
 # Editor directories and files
 .vscode/*
@@ -26,7 +25,23 @@ release
 *.njsproj
 *.sln
 *.sw?
+
 Kadosh App-win32-x64/
 .firebase/
-bibles-source/
-*.pre-chatgpt
+
+# Kadosh - archivos sensibles/pesados que no deben subir a Git
+*.keystore
+*.jks
+
+android/.gradle/
+android/app/build/
+
+bibles-source/xmm/*.xmm
+
+# Android release signing
+android/keystore/
+android/keystore.properties
+
+# Generated release artifacts
+release/
+*.pre-*
