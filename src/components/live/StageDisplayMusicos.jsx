@@ -258,6 +258,18 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
   const alertIsActive = alertaData && alertaData.active !== false && (!alertaData.expiresAt || alertaData.expiresAt > Date.now());
   const shouldShowAlert = alertIsActive && (!alertaData.target || alertaData.target === 'all' || alertaData.target === 'musicos');
   const alertPriority = alertaData?.priority || 'normal';
+
+  // KADOSH_PROJECTION_CLOCK_V1
+  const projectorStateForClock = evento?.projectorState || null;
+  const showProjectionClock = Boolean(
+    media?.url
+    || projectorStateForClock?.type === 'media'
+    || projectorStateForClock?.type === 'preaching'
+    || projectorStateForClock?.type === 'quickMessage'
+    || projectorStateForClock?.contentType === 'bible'
+    || projectorStateForClock?.contentType === 'quickMessage'
+  );
+
   const normalizedRole = (user?.rol || user?.role || '').toLowerCase();
   const ownerEmail = import.meta.env.VITE_OWNER_EMAIL || 'luistorresdrums2024@gmail.com';
   const canSendStageMessages = ['dueño', 'dueno', 'admin', 'multimedia', 'director', 'lider', 'líder'].includes(normalizedRole) || user?.email === ownerEmail;
@@ -308,6 +320,26 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
             <button onClick={returnToLive} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-zinc-950 px-4 py-2 text-xs font-black uppercase text-white active:scale-95">
               <Link2 size={16} /> Volver al vivo
             </button>
+          </div>
+        </div>
+      )}
+
+      {showProjectionClock && (
+        <div
+          className="pointer-events-none fixed z-[85] rounded-2xl border border-white/10 bg-black/55 px-3 py-2 shadow-2xl backdrop-blur-md"
+          style={{
+            top: 'max(0.75rem, env(safe-area-inset-top))',
+            right: 'max(0.75rem, env(safe-area-inset-right))'
+          }}
+          aria-label="Hora actual"
+        >
+          <div className="font-mono text-[clamp(1.1rem,1.8vw,2rem)] font-black tabular-nums tracking-tight text-white/95 drop-shadow-lg">
+            {hora.toLocaleTimeString('es-ES', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false
+            })}
           </div>
         </div>
       )}

@@ -199,6 +199,18 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
   const shouldShowAlert = alertIsActive && (!alertaData.target || alertaData.target === 'all' || alertaData.target === 'cantantes');
   const alertPriority = alertaData?.priority || 'normal';
 
+  // KADOSH_PROJECTION_CLOCK_V1
+  const projectorStateForClock = evento?.projectorState || null;
+  const showProjectionClock = Boolean(
+    media?.url
+    || projectorStateForClock?.type === 'media'
+    || projectorStateForClock?.type === 'preaching'
+    || projectorStateForClock?.type === 'quickMessage'
+    || projectorStateForClock?.contentType === 'bible'
+    || projectorStateForClock?.contentType === 'quickMessage'
+  );
+
+
   return (
     <div
       className="fixed inset-0 h-[100dvh] w-screen overflow-hidden bg-zinc-950 text-white selection:bg-transparent"
@@ -222,6 +234,26 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
             {alertPriority === 'importante' ? 'Atención cantantes' : 'Mensaje a cantantes'}
           </p>
           <p className="mt-1 text-2xl font-black leading-tight sm:text-4xl">{alertaData.text}</p>
+        </div>
+      )}
+
+      {showProjectionClock && (
+        <div
+          className="pointer-events-none fixed z-[85] rounded-2xl border border-white/10 bg-black/55 px-3 py-2 shadow-2xl backdrop-blur-md"
+          style={{
+            top: 'max(0.75rem, env(safe-area-inset-top))',
+            right: 'max(0.75rem, env(safe-area-inset-right))'
+          }}
+          aria-label="Hora actual"
+        >
+          <div className="font-mono text-[clamp(1.1rem,1.8vw,2rem)] font-black tabular-nums tracking-tight text-white/95 drop-shadow-lg">
+            {hora.toLocaleTimeString('es-ES', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false
+            })}
+          </div>
         </div>
       )}
 

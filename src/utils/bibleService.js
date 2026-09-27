@@ -3,6 +3,7 @@ export const DEFAULT_TRANSLATION_ID = 'local:rvr1960';
 
 const LOCAL_TRANSLATIONS = [
   { id: 'rvr1960', translationId: 'local:rvr1960' },
+  { id: 'rvc', translationId: 'local:rvc' },
   { id: 'dhh', translationId: 'local:dhh' },
   { id: 'ntv', translationId: 'local:ntv' },
   { id: 'nvi', translationId: 'local:nvi' },

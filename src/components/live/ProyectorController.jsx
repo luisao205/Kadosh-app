@@ -1585,6 +1585,163 @@ const ProyectorController = ({ user }) => {
     }
   };
 
+  // KADOSH_MOBILE_MEDIA_TRANSPORT_V3
+  const getMobileVideoThumbnailV3 = (media = {}) => {
+    const direct = String(
+      media.thumbnailUrl ||
+      media.thumbnail ||
+      media.posterUrl ||
+      media.poster ||
+      ''
+    ).trim();
+
+    if (direct) return direct;
+
+    const url = String(media.url || '').trim();
+    if (!url) return '';
+
+    if (url.includes('res.cloudinary.com') && url.includes('/video/upload/')) {
+      const [prefix, restWithQuery] = url.split('/video/upload/');
+      if (prefix && restWithQuery) {
+        const rest = restWithQuery.split('?')[0].split('#')[0];
+        const withoutExt = rest.replace(/\.[a-z0-9]+$/i, '');
+        return `${prefix}/video/upload/so_1,f_jpg,q_auto,w_720/${withoutExt}.jpg`;
+      }
+    }
+
+    return '';
+  };
+
+  const renderMobileMediaTransportV3 = ({ compact = false } = {}) => {
+    if (!mediaActive?.url || mediaActive?.type !== 'video') return null;
+
+    const volume = Number.isFinite(Number(mediaActive.volume))
+      ? Math.max(0, Math.min(1, Number(mediaActive.volume)))
+      : 1;
+    const volumePercent = Math.round(volume * 100);
+
+    return (
+      <div
+        data-kadosh-mobile-media-transport="v3"
+        className={`rounded-[1.75rem] border border-violet-500/35 bg-gradient-to-br from-violet-500/15 via-zinc-950 to-zinc-950 shadow-xl shadow-violet-950/20 ${compact ? 'p-3' : 'p-4'}`}
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-violet-600 text-white shadow-lg shadow-violet-950/40">
+            <Film size={21} />
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${mediaActive.playing ? 'bg-red-500 animate-pulse' : 'bg-amber-400'}`} />
+              <p className="text-[9px] font-black uppercase tracking-[0.18em] text-violet-300">
+                {mediaActive.playing ? 'Video en reproducción' : 'Video pausado'}
+              </p>
+            </div>
+            <p className="mt-1 truncate text-sm font-black text-white">{mediaActive.name || 'Multimedia'}</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={detenerMedia}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-red-500/25 bg-red-500/10 text-red-300 active:scale-95"
+            title="Detener y quitar video"
+            aria-label="Detener y quitar video"
+          >
+            <PowerOff size={18} />
+          </button>
+        </div>
+
+        <div className="mt-4 grid grid-cols-5 gap-2">
+          <button
+            type="button"
+            onClick={() => handleSeekCommand('start')}
+            className="flex min-h-12 flex-col items-center justify-center rounded-2xl border border-white/10 bg-zinc-900 text-zinc-300 active:scale-95"
+          >
+            <RotateCcw size={17} />
+            <span className="mt-1 text-[8px] font-black uppercase">Inicio</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSeekCommand('back10')}
+            className="flex min-h-12 flex-col items-center justify-center rounded-2xl border border-white/10 bg-zinc-900 text-zinc-300 active:scale-95"
+          >
+            <Rewind size={18} />
+            <span className="mt-1 text-[8px] font-black uppercase">-10s</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleMediaControl({ playing: !mediaActive.playing })}
+            className="flex min-h-12 flex-col items-center justify-center rounded-2xl bg-white text-zinc-950 shadow-lg active:scale-95"
+          >
+            {mediaActive.playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+            <span className="mt-1 text-[8px] font-black uppercase">
+              {mediaActive.playing ? 'Pausa' : 'Play'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSeekCommand('fwd10')}
+            className="flex min-h-12 flex-col items-center justify-center rounded-2xl border border-white/10 bg-zinc-900 text-zinc-300 active:scale-95"
+          >
+            <FastForward size={18} />
+            <span className="mt-1 text-[8px] font-black uppercase">+10s</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={detenerMedia}
+            className="flex min-h-12 flex-col items-center justify-center rounded-2xl border border-red-500/25 bg-red-500/10 text-red-300 active:scale-95"
+          >
+            <X size={18} />
+            <span className="mt-1 text-[8px] font-black uppercase">Stop</span>
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Volume2 size={16} className={volume === 0 ? 'text-zinc-600' : 'text-violet-300'} />
+              <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400">Volumen</span>
+            </div>
+            <span className="font-mono text-xs font-black text-white">{volumePercent}%</span>
+          </div>
+
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value={volume}
+            onChange={(event) => handleMediaControl({ volume: Number(event.target.value) })}
+            className="h-2 w-full cursor-pointer accent-violet-500"
+            aria-label="Volumen del video"
+          />
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => handleMediaControl({ volume: volume === 0 ? 1 : 0 })}
+              className="rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-[9px] font-black uppercase text-zinc-300 active:scale-95"
+            >
+              {volume === 0 ? 'Activar audio' : 'Silenciar'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleMediaControl({ playing: false })}
+              className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[9px] font-black uppercase text-amber-200 active:scale-95"
+            >
+              Pausar ahora
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const clearPreachingProjection = async () => {
     if (evento?.projectorState?.type !== 'preaching') return;
     const currentBackground = resolveProjectorBackground(evento);
@@ -2433,7 +2590,11 @@ const ProyectorController = ({ user }) => {
                       onClick={() => setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })}
                       className={`w-24 h-16 rounded-2xl overflow-hidden border transition-all bg-black relative ${previewMedia?.url === m.url ? 'border-indigo-500 ring-2 ring-indigo-500/30' : 'border-white/10 hover:border-indigo-400'}`}
                     >
-                      {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
+                      {m.type === 'video' ? (
+                      getMobileVideoThumbnailV3(m)
+                        ? <img src={getMobileVideoThumbnailV3(m)} alt={m.name || 'Vista previa de video'} className="w-full h-full object-cover opacity-60" />
+                        : <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-500"><Film size={32} /></div>
+                    ) : <img src={m.url} alt={m.name || 'Multimedia'} className="w-full h-full object-cover opacity-60" />}
                       <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Play size={16} className="text-white"/>
                       </div>
@@ -3200,6 +3361,9 @@ const ProyectorController = ({ user }) => {
 
         {projectionSourceMode === 'media' && (
           <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-40">
+            {/* KADOSH_MOBILE_MEDIA_CONTROL_MAIN_V3 */}
+            {renderMobileMediaTransportV3()}
+
             <div className="rounded-3xl border border-indigo-500/20 bg-indigo-500/10 p-4">
               <p className="text-[10px] font-black uppercase tracking-[0.24em] text-indigo-300">Multimedia</p>
               <h2 className="mt-1 text-xl font-black text-white">Boveda de medios</h2>
@@ -3239,7 +3403,11 @@ const ProyectorController = ({ user }) => {
                   className={`overflow-hidden rounded-2xl border bg-black text-left ${previewMedia?.url === m.url ? 'border-indigo-400 ring-2 ring-indigo-500/30' : 'border-white/10'}`}
                 >
                   <div className="aspect-video bg-zinc-900">
-                    {m.type === 'video' ? <video src={m.url} className="h-full w-full object-cover opacity-70" /> : <img src={m.url} className="h-full w-full object-cover opacity-70" />}
+                    {m.type === 'video' ? (
+                      getMobileVideoThumbnailV3(m)
+                        ? <img src={getMobileVideoThumbnailV3(m)} alt={m.name || 'Vista previa de video'} className="h-full w-full object-cover opacity-70" />
+                        : <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-500"><Film size={32} /></div>
+                    ) : <img src={m.url} alt={m.name || 'Multimedia'} className="h-full w-full object-cover opacity-70" />}
                   </div>
                   <div className="p-2">
                     <p className="truncate text-[10px] font-black text-white">{m.name || 'Sin nombre'}</p>
@@ -3265,7 +3433,11 @@ const ProyectorController = ({ user }) => {
            <div className="flex-1 truncate">
              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-0.5">En Pantalla</p>
              <p className="text-xs font-bold text-white truncate">
-               {isBlackout ? 'Pantalla en negro (Apagada)' : (liveSlide?.texto?.trim() ? liveSlide.texto.replace(/\n/g, ' - ') : '🎶 Instrumental (Solo fondo)')}
+               {isBlackout
+                 ? 'Pantalla en negro (Apagada)'
+                 : mediaActive?.url
+                   ? `🎬 ${mediaActive.name || 'Multimedia'}`
+                   : (liveSlide?.texto?.trim() ? liveSlide.texto.replace(/\n/g, ' - ') : '🎶 Instrumental (Solo fondo)')}
              </p>
            </div>
            <button
@@ -3298,6 +3470,9 @@ const ProyectorController = ({ user }) => {
 
             {mobileActiveTab === 'media' ? (
               <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 [&::-webkit-scrollbar]:hidden">
+                {/* KADOSH_MOBILE_MEDIA_CONTROL_MODAL_V3 */}
+                {renderMobileMediaTransportV3({ compact: true })}
+
                 <div className="flex items-center gap-2 bg-zinc-950 p-2 rounded-2xl border border-zinc-800">
                   {currentFolder && <button onClick={() => setCurrentFolder(null)} className="p-2 bg-zinc-800 rounded-xl text-white" title="Volver"><ChevronLeft size={16}/></button>}
                   <Search size={16} className="text-zinc-500 ml-1" />
@@ -3330,7 +3505,11 @@ const ProyectorController = ({ user }) => {
                   {filteredMedia.map((m, i) => (
                     <div key={i} className={`relative overflow-hidden rounded-2xl border-2 bg-zinc-950 ${previewMedia?.url === m.url ? 'border-violet-500' : 'border-zinc-800'}`}>
                       <button onClick={() => setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })} className="relative block aspect-video w-full overflow-hidden">
-                        {m.type === 'video' ? <video src={m.url} className="w-full h-full object-cover opacity-60" /> : <img src={m.url} className="w-full h-full object-cover opacity-60" />}
+                        {m.type === 'video' ? (
+                      getMobileVideoThumbnailV3(m)
+                        ? <img src={getMobileVideoThumbnailV3(m)} alt={m.name || 'Vista previa de video'} className="w-full h-full object-cover opacity-60" />
+                        : <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-zinc-500"><Film size={32} /></div>
+                    ) : <img src={m.url} alt={m.name || 'Multimedia'} className="w-full h-full object-cover opacity-60" />}
                         <div className="absolute bottom-0 inset-x-0 bg-black/60 p-1"><p className="text-[8px] font-bold text-white truncate text-center">{m.name}</p></div>
                       </button>
                       <div className="grid grid-cols-3 gap-1 p-1">
