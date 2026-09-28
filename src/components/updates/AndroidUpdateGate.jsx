@@ -27,7 +27,14 @@ const AndroidUpdateGate = ({ children }) => {
     let unsubscribeAuth = null;
     let appStateListener = null;
     let publicCheckTimer = null;
+    let authenticated = false;
     let cancelled = false;
+
+    const stopPublicPolling = () => {
+      if (!publicCheckTimer) return;
+      window.clearInterval(publicCheckTimer);
+      publicCheckTimer = null;
+    };
 
     const refreshInstalledVersion = async () => {
       try {
@@ -41,12 +48,18 @@ const AndroidUpdateGate = ({ children }) => {
     const refreshPublicConfig = async () => {
       try {
         const nextConfig = await fetchPublishedAndroidUpdate();
-        if (!cancelled && nextConfig?.status === 'published') setConfig(nextConfig);
+        if (!cancelled && !authenticated) setConfig(nextConfig);
       } catch (error) {
         // La Function se desplegará junto con este updater. Mientras tanto,
         // una sesión autenticada seguirá usando el listener Firestore existente.
         console.warn('No se pudo consultar la actualización Android pública:', error);
       }
+    };
+
+    const startPublicPolling = () => {
+      stopPublicPolling();
+      void refreshPublicConfig();
+      publicCheckTimer = window.setInterval(() => void refreshPublicConfig(), PUBLIC_CHECK_INTERVAL_MS);
     };
 
     const subscribeAuthenticatedConfig = () => {
@@ -57,20 +70,25 @@ const AndroidUpdateGate = ({ children }) => {
     };
 
     void refreshInstalledVersion();
-    void refreshPublicConfig();
-    publicCheckTimer = window.setInterval(() => void refreshPublicConfig(), PUBLIC_CHECK_INTERVAL_MS);
+    startPublicPolling();
 
     unsubscribeAuth = onAuthStateChanged(getAuth(), (firebaseUser) => {
+      authenticated = Boolean(firebaseUser);
       unsubscribeUpdates?.();
       unsubscribeUpdates = null;
-      if (firebaseUser) subscribeAuthenticatedConfig();
-      else void refreshPublicConfig();
+
+      if (authenticated) {
+        stopPublicPolling();
+        subscribeAuthenticatedConfig();
+      } else {
+        startPublicPolling();
+      }
     });
 
     CapacitorApp.addListener('appStateChange', ({ isActive }) => {
       if (!isActive) return;
       void refreshInstalledVersion();
-      void refreshPublicConfig();
+      if (!authenticated) void refreshPublicConfig();
     }).then((handle) => {
       if (cancelled) handle.remove();
       else appStateListener = handle;
@@ -81,7 +99,7 @@ const AndroidUpdateGate = ({ children }) => {
       unsubscribeUpdates?.();
       unsubscribeAuth?.();
       appStateListener?.remove();
-      if (publicCheckTimer) window.clearInterval(publicCheckTimer);
+      stopPublicPolling();
     };
   }, [isAndroid]);
 
