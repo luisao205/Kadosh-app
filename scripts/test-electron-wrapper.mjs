@@ -22,10 +22,13 @@ assert.match(packageJson.scripts['desktop:build'], /electron-builder --win nsis/
 assert.match(packageJson.scripts['build:android'], /vite build --mode android/);
 assert.match(packageJson.scripts['android:sync'], /cap sync android/);
 
-assert.match(nsisPatchSource, /\$\$_\.Name -eq '\$\{_FILE\}'/);
-assert.match(nsisPatchSource, /Stop-Process -Id \$\$_\.ProcessId/);
-assert.match(nsisPatchSource, /-NoProfile -NonInteractive/);
+assert.match(nsisPatchSource, /Kadosh compatibility: exact executable-name process matching/);
+assert.match(nsisPatchSource, /tasklist \/FI/);
+assert.match(nsisPatchSource, /IMAGENAME eq/);
+assert.match(nsisPatchSource, /findstr\.exe/);
+assert.match(nsisPatchSource, /taskkill \$0 \/IM/);
 assert.doesNotMatch(nsisPatchSource, /processPathFilter/);
+assert.doesNotMatch(nsisPatchSource, /\$\$_\.Name/);
 assert.match(nsisPatchSource, /\$\(uninstallFailed\): \$R0/);
 assert.match(nsisPatchSource, /appBuilderLibVersion !== '26\.15\.3'/);
 
