@@ -22,10 +22,10 @@ assert.match(packageJson.scripts['desktop:build'], /electron-builder --win nsis/
 assert.match(packageJson.scripts['build:android'], /vite build --mode android/);
 assert.match(packageJson.scripts['android:sync'], /cap sync android/);
 
-assert.match(nsisPatchSource, /APPEND_INSTALL_LOCATION_TO_PROCESS_PATH_FILTER/);
-assert.match(nsisPatchSource, /processPathFilter/);
-assert.match(nsisPatchSource, /TRIM_TRAILING_BACKSLASHES/);
-assert.match(nsisPatchSource, /\$R9 != ""/);
+assert.match(nsisPatchSource, /\$\$_\.Name -eq '\$\{_FILE\}'/);
+assert.match(nsisPatchSource, /Stop-Process -Id \$\$_\.ProcessId/);
+assert.match(nsisPatchSource, /-NoProfile -NonInteractive/);
+assert.doesNotMatch(nsisPatchSource, /processPathFilter/);
 assert.match(nsisPatchSource, /\$\(uninstallFailed\): \$R0/);
 assert.match(nsisPatchSource, /appBuilderLibVersion !== '26\.15\.3'/);
 
