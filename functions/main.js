@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 
 const existingFunctions = require('./index');
 Object.assign(exports, existingFunctions);
+Object.assign(exports, require('./permissionManagement')({ functions, admin }));
 
 const chunk = (items, size) => {
   const groups = [];
