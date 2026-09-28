@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { FileText, Music, Search, X } from 'lucide-react';
