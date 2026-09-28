@@ -1,12 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
-import { Capacitor, registerPlugin } from '@capacitor/core';
-import { Download, Monitor, RefreshCw, Rocket, Smartphone, Save, ShieldAlert } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Monitor, RefreshCw, Rocket, Smartphone, Save, ShieldAlert } from 'lucide-react';
 import { getUpdateDecision, saveAppUpdateConfig, subscribeAppUpdates } from '../../utils/appUpdates';
 import { isAdmin, isMultimedia, isOwner } from '../../utils/rolePermissions';
 import { useFeedback } from '../ui/FeedbackProvider';
-
-const AndroidUpdater = registerPlugin('KadoshUpdater');
 
 const emptyConfig = {
   latestVersion: '',
@@ -19,6 +17,16 @@ const emptyConfig = {
 };
 
 const getDesktopUpdater = () => typeof window === 'undefined' ? null : window.kadoshDesktop?.updater || null;
+
+const openDownload = (url) => {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.target = '_blank';
+  anchor.rel = 'noopener noreferrer';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+};
 
 const UpdateCard = ({ icon, title, installedVersion, config, decision, action, actionLabel, actionDisabled }) => (
   <div className="kp-card rounded-3xl border border-white/10 p-5 md:p-6">
@@ -108,7 +116,6 @@ const UpdateCenter = ({ user }) => {
   const [androidVersion, setAndroidVersion] = useState('');
   const [editors, setEditors] = useState({ windows: emptyConfig, android: emptyConfig });
   const [saving, setSaving] = useState(false);
-  const [installingAndroid, setInstallingAndroid] = useState(false);
   const canManage = isOwner(user) || isAdmin(user) || isMultimedia(user);
 
   useEffect(() => subscribeAppUpdates((next) => {
@@ -140,17 +147,9 @@ const UpdateCenter = ({ user }) => {
     await desktopUpdater.checkForUpdates();
   };
 
-  const installAndroid = async () => {
+  const installAndroid = () => {
     if (!Capacitor.isNativePlatform() || !updates.android.downloadUrl) return;
-    setInstallingAndroid(true);
-    try {
-      await AndroidUpdater.installApk({ url: updates.android.downloadUrl });
-    } catch (error) {
-      console.error('No se pudo abrir el instalador APK:', error);
-      notify('No se pudo descargar o abrir el instalador de Android.', { type: 'error' });
-    } finally {
-      setInstallingAndroid(false);
-    }
+    openDownload(updates.android.downloadUrl);
   };
 
   const persist = async (platform, publish) => {
@@ -197,8 +196,8 @@ const UpdateCenter = ({ user }) => {
           config={updates.android}
           decision={androidDecision}
           action={installAndroid}
-          actionLabel={installingAndroid ? 'Preparando APK...' : 'Descargar APK'}
-          actionDisabled={!Capacitor.isNativePlatform() || installingAndroid || !updates.android.downloadUrl}
+          actionLabel="Descargar APK"
+          actionDisabled={!Capacitor.isNativePlatform() || !updates.android.downloadUrl}
         />
       </div>
 
