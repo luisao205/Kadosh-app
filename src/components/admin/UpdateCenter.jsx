@@ -9,7 +9,7 @@ import {
   subscribeAppUpdates
 } from '../../utils/appUpdates';
 import { canUseNativeAndroidUpdater, installAndroidUpdate } from '../../native/kadoshUpdate';
-import { isAdmin, isMultimedia, isOwner } from '../../utils/rolePermissions';
+import { isOwner } from '../../utils/rolePermissions';
 import { useFeedback } from '../ui/FeedbackProvider';
 
 const emptyConfig = {
@@ -120,9 +120,9 @@ const DetectedRelease = ({ release, loading, error, publishedConfig, onRefresh, 
     <section className="kp-card mt-6 rounded-3xl border border-white/10 p-5 md:p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-violet-300">Control administrativo · Android</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-violet-300">Publicación Android · Dueño</p>
           <h2 className="mt-1 text-2xl font-black text-white">Release detectada automáticamente</h2>
-          <p className="mt-2 max-w-2xl text-sm font-medium text-zinc-400">Kadosh lee la última GitHub Release. No tienes que escribir versión, versión mínima ni URL del APK.</p>
+          <p className="mt-2 max-w-2xl text-sm font-medium text-zinc-400">Kadosh lee la última GitHub Release. Tú solo revisas la versión detectada y pulsas Publicar Android.</p>
         </div>
         <button type="button" onClick={onRefresh} disabled={loading} className="kp-button-secondary inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:opacity-50">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar detección
@@ -167,7 +167,7 @@ const UpdateCenter = ({ user }) => {
   const [releaseLoading, setReleaseLoading] = useState(false);
   const [releaseError, setReleaseError] = useState('');
   const [publishing, setPublishing] = useState(false);
-  const canManage = isOwner(user) || isAdmin(user) || isMultimedia(user);
+  const canManage = isOwner(user);
 
   useEffect(() => subscribeAppUpdates(setUpdates, (error) => console.warn('No se pudo cargar el centro de actualizaciones:', error)), []);
 
@@ -183,7 +183,7 @@ const UpdateCenter = ({ user }) => {
   }, [desktopUpdater]);
 
   useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return undefined;
+    if (Capacitor.getPlatform() !== 'android') return undefined;
     let active = true;
     CapacitorApp.getInfo().then((info) => active && setAndroidVersion(info.version || '')).catch(() => {});
     return () => { active = false; };
@@ -208,7 +208,7 @@ const UpdateCenter = ({ user }) => {
   }, [canManage]);
 
   const publishAndroid = async () => {
-    if (!release || publishing) return;
+    if (!release || publishing || !canManage) return;
     setPublishing(true);
     try {
       await publishDetectedAndroidRelease(release);
