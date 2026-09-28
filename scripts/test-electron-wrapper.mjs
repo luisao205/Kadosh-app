@@ -31,6 +31,13 @@ assert.match(nsisPatchSource, /taskkill \$0 \/IM/);
 assert.doesNotMatch(nsisPatchSource, /processPathFilter/);
 assert.doesNotMatch(nsisPatchSource, /\$\$_\.Name/);
 assert.match(nsisPatchSource, /\$\(uninstallFailed\): \$R0/);
+assert.match(nsisPatchSource, /legacy 1\.1\.1 migration/);
+assert.match(nsisPatchSource, /DisplayVersion/);
+assert.match(nsisPatchSource, /\$R2 == "1\.1\.1"/);
+assert.match(nsisPatchSource, /FIND_PROCESS "\$\{APP_EXECUTABLE_FILENAME\}"/);
+assert.match(nsisPatchSource, /Rename "\$installationDir" "\$R3"/);
+assert.match(nsisPatchSource, /\.legacy-1\.1\.1/);
+assert.doesNotMatch(nsisPatchSource, /RMDir \/r "\$installationDir"/);
 assert.match(nsisPatchSource, /appBuilderLibVersion !== '26\.15\.3'/);
 
 assert.match(mainSource, /contextIsolation: true/);
