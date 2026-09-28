@@ -57,7 +57,7 @@ export const parsearCancion = (textoRaw) => {
         secciones.push(seccionActual);
       }
 
-      const tokens = lineaLimpia.match(/(\[[^\]]+\]|[^\[\s]+|\s+)/g) || [];
+      const tokens = lineaLimpia.match(/(\[[^\]]+\]|[^\s[]+|\s+)/g) || [];
       const lineaEstructurada = [];
       let palabraActual = [];
       let acordeActual = '';
