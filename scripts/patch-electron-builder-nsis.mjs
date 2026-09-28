@@ -23,17 +23,20 @@ if (appBuilderLibVersion !== '26.15.3') {
 }
 
 let allowSource = readFileSync(allowPath, 'utf8');
-const exactNameMarker = "$$_.Name -eq '${_FILE}'";
+const compatibilityMarker = '# Kadosh compatibility: exact executable-name process matching';
 
-if (!allowSource.includes(exactNameMarker)) {
-  const oldFind = "    nsExec::Exec `\"$PowerShellPath\" -C \"if ((Get-CimInstance -ClassName Win32_Process | ? {$$_.Path -and $$_.Path.StartsWith('$INSTDIR', 'CurrentCultureIgnoreCase')}).Count -gt 0) { exit 0 } else { exit 1 }\"`";
-  const newFind = "    nsExec::Exec `\"$PowerShellPath\" -NoProfile -NonInteractive -C \"if ((Get-CimInstance -ClassName Win32_Process | ? {$$_.Name -eq '${_FILE}'}).Count -gt 0) { exit 0 } else { exit 1 }\"`";
-  allowSource = replaceOnce(allowSource, oldFind, newFind, 'FIND_PROCESS exact executable name');
+if (!allowSource.includes(compatibilityMarker)) {
+  const findStart = allowSource.indexOf('!macro FIND_PROCESS _FILE _RETURN');
+  const killStart = allowSource.indexOf('!macro KILL_PROCESS _FILE _FORCE');
+  const checkStart = allowSource.indexOf('!macro _CHECK_APP_RUNNING');
 
-  const oldKill = "    nsExec::Exec `\"$PowerShellPath\" -C \"Get-CimInstance -ClassName Win32_Process | ? {$$_.Path -and $$_.Path.StartsWith('$INSTDIR', 'CurrentCultureIgnoreCase')} | % { Stop-Process -Id $$_.ProcessId $0 }\"`";
-  const newKill = "    nsExec::Exec `\"$PowerShellPath\" -NoProfile -NonInteractive -C \"Get-CimInstance -ClassName Win32_Process | ? {$$_.Name -eq '${_FILE}'} | % { Stop-Process -Id $$_.ProcessId $0 }\"`";
-  allowSource = replaceOnce(allowSource, oldKill, newKill, 'KILL_PROCESS exact executable name');
+  if (findStart < 0 || killStart < 0 || checkStart < 0 || !(findStart < killStart && killStart < checkStart)) {
+    fail(`no se encontraron los macros FIND_PROCESS/KILL_PROCESS esperados en app-builder-lib ${appBuilderLibVersion}`);
+  }
 
+  const exactProcessMacros = `${compatibilityMarker}\n!macro FIND_PROCESS _FILE _RETURN\n  !ifdef INSTALL_MODE_PER_ALL_USERS\n    nsExec::Exec \`\"$CmdPath\" /C tasklist /FI \"IMAGENAME eq \${_FILE}\" /FO CSV /NH | \"$SYSDIR\\findstr.exe\" /B /I /C:\"\\\"\${_FILE}\\\"\"\`\n    Pop \${_RETURN}\n  !else\n    nsExec::Exec \`\"$CmdPath\" /C tasklist /FI \"USERNAME eq %USERNAME%\" /FI \"IMAGENAME eq \${_FILE}\" /FO CSV /NH | \"$SYSDIR\\findstr.exe\" /B /I /C:\"\\\"\${_FILE}\\\"\"\`\n    Pop \${_RETURN}\n  !endif\n!macroend\n\n!macro KILL_PROCESS _FILE _FORCE\n  Push $0\n  \${if} \${_FORCE} == 1\n    StrCpy $0 \"/F\"\n  \${else}\n    StrCpy $0 \"\"\n  \${endIf}\n\n  !ifdef INSTALL_MODE_PER_ALL_USERS\n    nsExec::Exec \`\"$CmdPath\" /C taskkill $0 /IM \"\${_FILE}\" /FI \"PID ne $pid\"\`\n  !else\n    nsExec::Exec \`\"$CmdPath\" /C taskkill $0 /IM \"\${_FILE}\" /FI \"PID ne $pid\" /FI \"USERNAME eq %USERNAME%\"\`\n  !endif\n  Pop $0\n!macroend \n\n`;
+
+  allowSource = `${allowSource.slice(0, findStart)}${exactProcessMacros}${allowSource.slice(checkStart)}`;
   writeFileSync(allowPath, allowSource, 'utf8');
 }
 
@@ -48,4 +51,4 @@ if (installUtilSource.includes(oldRetry)) {
   fail(`no se encontró el bloque esperado de uninstallOldVersion en app-builder-lib ${appBuilderLibVersion}`);
 }
 
-console.log(`electron-builder NSIS compatibility patch: OK (app-builder-lib ${appBuilderLibVersion}, exact process name)`);
+console.log(`electron-builder NSIS compatibility patch: OK (app-builder-lib ${appBuilderLibVersion}, tasklist exact name)`);
