@@ -34,10 +34,9 @@
     </application>
 
     <!-- Permissions -->
-<!-- Permiso necesario para Android 13 (API 33) o superior -->
-<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Permisos para Cámara y Galería -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 </manifest>
