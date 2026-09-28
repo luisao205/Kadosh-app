@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { Download, ShieldAlert } from 'lucide-react';
 import { getUpdateDecision, subscribeAppUpdates } from '../../utils/appUpdates';
 
@@ -13,11 +14,26 @@ const AndroidUpdateGate = ({ children }) => {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
+    if (!Capacitor.isNativePlatform()) return undefined;
+    let unsubscribeUpdates = null;
     CapacitorApp.getInfo().then((info) => setInstalledVersion(info.version || '')).catch(() => {});
-    return subscribeAppUpdates((updates) => setConfig(updates.android), (nextError) => {
-      console.warn('No se pudo comprobar la actualización Android:', nextError);
+
+    const unsubscribeAuth = onAuthStateChanged(getAuth(), (firebaseUser) => {
+      unsubscribeUpdates?.();
+      unsubscribeUpdates = null;
+      if (!firebaseUser) {
+        setConfig(null);
+        return;
+      }
+      unsubscribeUpdates = subscribeAppUpdates((updates) => setConfig(updates.android), (nextError) => {
+        console.warn('No se pudo comprobar la actualización Android:', nextError);
+      });
     });
+
+    return () => {
+      unsubscribeUpdates?.();
+      unsubscribeAuth();
+    };
   }, []);
 
   if (!Capacitor.isNativePlatform() || !config || !installedVersion) return children;
