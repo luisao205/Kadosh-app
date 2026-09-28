@@ -23,6 +23,7 @@ jobs:
       - run: node scripts/test-song-structure.mjs
       - run: node scripts/test-electron-updater.mjs
       - run: node scripts/test-electron-wrapper.mjs
+      - run: node scripts/test-android-updater.mjs
       - run: node --check functions/main.js
       - name: Lint changed implementation files
         run: >-
@@ -31,12 +32,16 @@ jobs:
           src/components/updates/AndroidUpdateGate.jsx
           src/components/updates/GlobalUpdateCenter.jsx
           src/components/songs/SongExportCenter.jsx
+          src/native/kadoshUpdate.js
           src/utils/versioning.js
           src/utils/appUpdates.js
           src/utils/songPrint.js
           src/utils/songParser.js
           functions/main.js
       - run: npm run build
+      - run: npm run build:android
+      - name: Verify Android bundle has no PWA service worker
+        run: test ! -f dist/sw.js && test ! -f dist/registerSW.js
       - name: Report repository-wide lint baseline
         continue-on-error: true
         run: npm run lint
@@ -58,3 +63,22 @@ jobs:
           if (!(Test-Path 'release/Kadosh-App-Setup-1.1.1.exe.blockmap')) { throw 'Missing NSIS blockmap' }
           if (!(Test-Path 'release/latest.yml')) { throw 'Missing latest.yml' }
           Get-ChildItem release
+
+  android-native-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - run: npm ci
+      - run: npm run android:sync
+      - name: Compile Android updater integration
+        working-directory: android
+        run: ./gradlew assembleDebug
