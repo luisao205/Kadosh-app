@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Monitor, RefreshCw, Rocket, Smartphone, Save, ShieldAlert } from 'lucide-react';
@@ -110,7 +110,7 @@ const PlatformEditor = ({ platform, value, onChange, onSave, onPublish, saving }
 
 const UpdateCenter = ({ user }) => {
   const { notify } = useFeedback();
-  const desktopUpdater = useMemo(getDesktopUpdater, []);
+  const [desktopUpdater] = useState(getDesktopUpdater);
   const [updates, setUpdates] = useState({ windows: emptyConfig, android: emptyConfig });
   const [desktopState, setDesktopState] = useState({ status: 'idle', currentVersion: '', availableVersion: null });
   const [androidVersion, setAndroidVersion] = useState('');
