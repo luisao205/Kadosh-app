@@ -90,12 +90,12 @@ const focusMainWindow = () => {
   window.focus();
 };
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const hasSingleInstanceLock = isDevelopment ? true : app.requestSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {
   app.exit(0);
 } else {
-  app.on('second-instance', focusMainWindow);
+  if (!isDevelopment) app.on('second-instance', focusMainWindow);
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
