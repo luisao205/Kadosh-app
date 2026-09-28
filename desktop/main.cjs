@@ -51,6 +51,11 @@ const registerRendererProtocol = () => {
   });
 };
 
+const closeManagedOutputWindows = () => {
+  if (!outputWindowManager) return;
+  outputWindowManager.closeAllOutputs();
+};
+
 const createMainWindow = () => {
   Menu.setApplicationMenu(null);
 
@@ -72,6 +77,10 @@ const createMainWindow = () => {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('close', closeManagedOutputWindows);
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 
   if (isDevelopment) {
     mainWindow.loadURL(developmentServerUrl);
@@ -134,6 +143,8 @@ if (!hasSingleInstanceLock) {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
     });
   });
+
+  app.on('before-quit', closeManagedOutputWindows);
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
