@@ -1,5 +1,6 @@
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../config/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../config/firebase';
 import { compareVersions, isValidVersion } from './versioning';
 
 export const APP_UPDATES_DOC = 'appUpdates';
@@ -69,6 +70,12 @@ export const fetchLatestGitHubRelease = async ({ fetchImpl = globalThis.fetch } 
   const release = normalizeGitHubRelease(await response.json());
   if (!release.version) throw new Error('La última release no tiene una versión válida.');
   return release;
+};
+
+export const fetchPublishedAndroidUpdate = async () => {
+  const callable = httpsCallable(functions, 'getPublishedAndroidUpdate');
+  const result = await callable({});
+  return normalizePlatformUpdate(result?.data?.android || {});
 };
 
 export const subscribeAppUpdates = (listener, onError) => onSnapshot(
