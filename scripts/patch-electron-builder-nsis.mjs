@@ -24,6 +24,16 @@ if (appBuilderLibVersion !== '26.15.3') {
 
 let allowSource = readFileSync(allowPath, 'utf8');
 const compatibilityMarker = '# Kadosh compatibility: exact executable-name process matching';
+const legacyCmdPathToken = '"$CmdPath"';
+const directCmdPathToken = '"$SYSDIR\\cmd.exe"';
+
+// Repair node_modules that were already patched by an older Kadosh build script.
+// Without this, the marker makes the patch look complete even though the old
+// macro still references $CmdPath in a scope where NSIS has not declared it.
+if (allowSource.includes(compatibilityMarker) && allowSource.includes(legacyCmdPathToken)) {
+  allowSource = allowSource.replaceAll(legacyCmdPathToken, directCmdPathToken);
+  writeFileSync(allowPath, allowSource, 'utf8');
+}
 
 if (!allowSource.includes(compatibilityMarker)) {
   const findStart = allowSource.indexOf('!macro FIND_PROCESS _FILE _RETURN');
