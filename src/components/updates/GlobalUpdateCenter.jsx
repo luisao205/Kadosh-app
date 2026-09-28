@@ -7,12 +7,14 @@ import UpdateCenter from '../admin/UpdateCenter';
 
 const GlobalUpdateCenter = () => {
   const [user, setUser] = useState(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('updates') === '1';
+  });
 
   useEffect(() => onAuthStateChanged(getAuth(), async (firebaseUser) => {
     if (!firebaseUser) {
       setUser(null);
-      setOpen(false);
       return;
     }
     try {
@@ -23,6 +25,15 @@ const GlobalUpdateCenter = () => {
       setUser({ uid: firebaseUser.uid, email: firebaseUser.email });
     }
   }), []);
+
+  const close = () => {
+    setOpen(false);
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('updates')) return;
+    url.searchParams.delete('updates');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  };
 
   if (!user) return null;
 
@@ -42,7 +53,7 @@ const GlobalUpdateCenter = () => {
         <div className="fixed inset-0 z-[120] overflow-y-auto bg-black/75 p-4 backdrop-blur-sm md:p-8">
           <div className="mx-auto max-w-6xl">
             <div className="mb-3 flex justify-end">
-              <button type="button" onClick={() => setOpen(false)} className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white" aria-label="Cerrar centro de actualizaciones">
+              <button type="button" onClick={close} className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white" aria-label="Cerrar centro de actualizaciones">
                 <X size={20} />
               </button>
             </div>
