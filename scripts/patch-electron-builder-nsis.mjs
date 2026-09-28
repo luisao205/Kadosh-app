@@ -60,6 +60,34 @@ if (installUtilSource.includes(oldRetry)) {
   fail(`no se encontró el bloque esperado de uninstallOldVersion en app-builder-lib ${appBuilderLibVersion}`);
 }
 
+const legacyPreflightMarker = '# Kadosh legacy 1.1.1 migration: accept a program directory already quarantined by a previous attempt';
+if (!installUtilSource.includes(legacyPreflightMarker)) {
+  const oldUninstallerTempLine = '  StrCpy $uninstallerFileNameTemp "$PLUGINSDIR\\old-uninstaller.exe"';
+  const legacyPreflight = [
+    `  ${legacyPreflightMarker}`,
+    '  !insertmacro readReg $R4 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
+    '  ${if} $R4 == "1.1.1"',
+    '    StrCpy $R3 "$installationDir.legacy-1.1.1"',
+    '    IfFileExists "$R3\\*.*" 0 LegacyKadoshPreflightDone',
+    '    IfFileExists "$installationDir\\*.*" LegacyKadoshPreflightDone 0',
+    '    DetailPrint "Legacy Kadosh 1.1.1 program directory was already quarantined; continuing migration."',
+    '    StrCpy $R0 0',
+    '    ClearErrors',
+    '    Return',
+    '  ${endIf}',
+    '  LegacyKadoshPreflightDone:',
+    '',
+    oldUninstallerTempLine
+  ].join('\n');
+
+  installUtilSource = replaceOnce(
+    installUtilSource,
+    oldUninstallerTempLine,
+    legacyPreflight,
+    'legacy 1.1.1 already-quarantined preflight'
+  );
+}
+
 const legacyCheckResult = [
   '    CheckResult:',
   '      ${if} $R0 == 0',
@@ -90,6 +118,7 @@ const legacyMigrationResult = [
   '          IfErrors LegacyKadoshMigrationFailed LegacyKadoshMigrationSucceeded',
   '          LegacyKadoshMigrationSucceeded:',
   '            DetailPrint "Legacy Kadosh 1.1.1 program directory quarantined for safe migration."',
+  '            StrCpy $R0 0',
   '            ClearErrors',
   '            Return',
   '          LegacyKadoshMigrationFailed:',
@@ -109,6 +138,27 @@ if (!installUtilSource.includes(legacyMigrationMarker)) {
     legacyMigrationResult,
     'legacy 1.1.1 quarantine fallback'
   );
+}
+
+// Repair node_modules already patched by the previous migration version: the
+// quarantine succeeded, but $R0 was left as 2, so handleUninstallResult still
+// treated the migration as a failure and showed an MB_OK error dialog.
+const legacySuccessWithoutReset = [
+  '          LegacyKadoshMigrationSucceeded:',
+  '            DetailPrint "Legacy Kadosh 1.1.1 program directory quarantined for safe migration."',
+  '            ClearErrors',
+  '            Return'
+].join('\n');
+const legacySuccessWithReset = [
+  '          LegacyKadoshMigrationSucceeded:',
+  '            DetailPrint "Legacy Kadosh 1.1.1 program directory quarantined for safe migration."',
+  '            StrCpy $R0 0',
+  '            ClearErrors',
+  '            Return'
+].join('\n');
+
+if (installUtilSource.includes(legacySuccessWithoutReset)) {
+  installUtilSource = installUtilSource.replace(legacySuccessWithoutReset, legacySuccessWithReset);
 }
 
 writeFileSync(installUtilPath, installUtilSource, 'utf8');
