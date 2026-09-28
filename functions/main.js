@@ -14,6 +14,26 @@ const chunk = (items, size) => {
 
 const getAndroidConfig = (snapshot) => snapshot?.exists ? snapshot.data()?.android || null : null;
 
+const sanitizePublishedAndroidConfig = (value) => {
+  if (!value || value.status !== 'published' || !value.latestVersion) return null;
+  return {
+    latestVersion: String(value.latestVersion || ''),
+    minimumVersion: String(value.minimumVersion || ''),
+    downloadUrl: String(value.downloadUrl || value.apkUrl || ''),
+    forceUpdate: value.forceUpdate === true,
+    releaseNotes: String(value.releaseNotes || ''),
+    releaseTag: String(value.releaseTag || ''),
+    releaseUrl: String(value.releaseUrl || ''),
+    assetName: String(value.assetName || ''),
+    status: 'published'
+  };
+};
+
+exports.getPublishedAndroidUpdate = functions.https.onCall(async () => {
+  const snapshot = await admin.firestore().collection('sistema').doc('appUpdates').get();
+  return { android: sanitizePublishedAndroidConfig(getAndroidConfig(snapshot)) };
+});
+
 exports.notifyPublishedAndroidUpdate = functions.firestore
   .document('sistema/appUpdates')
   .onWrite(async (change) => {
