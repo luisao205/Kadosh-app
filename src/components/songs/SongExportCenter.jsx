@@ -4,6 +4,7 @@ import { collection, onSnapshot } from 'firebase/firestore';
 import { FileText, Search, X } from 'lucide-react';
 import { db } from '../../config/firebase';
 import { getSongBaseKey } from '../../utils/songAssignments';
+import { getSongSearchMatch } from '../../utils/songSearch';
 import { getSongPreviewLines, printSongPdf, SONG_PRINT_MODES } from '../../utils/songPrint';
 import { useFeedback } from '../ui/FeedbackProvider';
 
@@ -19,6 +20,13 @@ const PDF_ACTIONS = [
   { id: SONG_PRINT_MODES.COMBINED, label: 'PDF — Letra + acordes' },
   { id: SONG_PRINT_MODES.STRUCTURE, label: 'PDF — Solo estructura' }
 ];
+
+const SEARCH_FIELD_LABELS = {
+  title: 'título',
+  artist: 'artista',
+  tags: 'etiqueta',
+  lyrics: 'letra'
+};
 
 const useBrowserPathname = () => {
   const [pathname, setPathname] = useState(() => window.location.pathname);
@@ -93,9 +101,11 @@ const SongExportCenter = () => {
   }, []);
 
   const filteredSongs = useMemo(() => {
-    const needle = queryText.trim().toLowerCase();
-    if (!needle) return songs.slice(0, 80);
-    return songs.filter((song) => `${song.titulo || ''} ${song.artista || ''}`.toLowerCase().includes(needle)).slice(0, 80);
+    const search = queryText.trim();
+    return songs
+      .map((song) => ({ song, searchMatch: getSongSearchMatch(song, search) }))
+      .filter(({ searchMatch }) => searchMatch.matches)
+      .slice(0, 80);
   }, [queryText, songs]);
 
   const selectedSong = songs.find((song) => song.id === selectedId) || null;
@@ -152,15 +162,30 @@ const SongExportCenter = () => {
               <aside className="rounded-3xl border border-white/10 bg-zinc-900/60 p-3">
                 <div className="relative">
                   <Search size={16} className="absolute left-3 top-3 text-zinc-500" />
-                  <input value={queryText} onChange={(event) => setQueryText(event.target.value)} placeholder="Buscar canción..." className="kp-input w-full rounded-xl py-2.5 pl-9 pr-3 text-sm" />
+                  <input value={queryText} onChange={(event) => setQueryText(event.target.value)} placeholder="Buscar por título, artista, etiqueta o letra..." className="kp-input w-full rounded-xl py-2.5 pl-9 pr-3 text-sm" />
                 </div>
                 <div className="mt-3 max-h-[62vh] space-y-1 overflow-y-auto pr-1">
-                  {filteredSongs.map((song) => (
+                  {filteredSongs.map(({ song, searchMatch }) => (
                     <button key={song.id} type="button" onClick={() => selectSong(song)} className={`w-full rounded-xl px-3 py-2.5 text-left transition-colors ${song.id === selectedId ? 'bg-violet-500/15 text-violet-200' : 'text-zinc-300 hover:bg-white/5'}`}>
                       <span className="block truncate text-sm font-black">{song.titulo || 'Sin título'}</span>
                       <span className="block truncate text-[10px] font-bold text-zinc-500">{song.artista || 'Sin artista'} · {getSongBaseKey(song)}</span>
+                      {queryText.trim() && searchMatch.field !== 'empty' && (
+                        <span className="mt-1 block text-[9px] font-black uppercase tracking-wider text-violet-400/80">
+                          Coincidencia: {SEARCH_FIELD_LABELS[searchMatch.field] || searchMatch.field}
+                        </span>
+                      )}
+                      {searchMatch.field === 'lyrics' && searchMatch.snippet && (
+                        <span className="mt-1 block line-clamp-2 text-[10px] font-bold leading-snug text-emerald-300">
+                          {searchMatch.snippet}
+                        </span>
+                      )}
                     </button>
                   ))}
+                  {filteredSongs.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-white/10 px-3 py-5 text-center text-xs font-bold text-zinc-500">
+                      No se encontraron canciones.
+                    </div>
+                  )}
                 </div>
               </aside>
 
