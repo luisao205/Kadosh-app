@@ -8,7 +8,7 @@ const builderConfig = await readFile(new URL('../electron-builder.yml', import.m
 const nsisPatchSource = await readFile(new URL('./patch-electron-builder-nsis.mjs', import.meta.url), 'utf8');
 
 assert.equal(packageJson.main, 'desktop/main.cjs');
-assert.equal(packageJson.version, '1.1.1');
+assert.equal(packageJson.version, '1.1.2');
 assert.match(packageJson.scripts['desktop:dev'], /vite --host 127\.0\.0\.1/);
 assert.match(packageJson.scripts['desktop:dev'], /wait-on tcp:127\.0\.0\.1:5173/);
 assert.match(packageJson.scripts['desktop:dev'], /electron \./);
