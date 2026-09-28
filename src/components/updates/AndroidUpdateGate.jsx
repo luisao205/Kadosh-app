@@ -3,27 +3,38 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { Download, ShieldAlert, X } from 'lucide-react';
-import { getUpdateDecision, subscribeAppUpdates } from '../../utils/appUpdates';
-
-const openDownload = (url) => {
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.target = '_blank';
-  anchor.rel = 'noopener noreferrer';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-};
+import { getAndroidReleaseApkUrl, getUpdateDecision, subscribeAppUpdates } from '../../utils/appUpdates';
+import { installAndroidUpdate } from '../../native/kadoshUpdate';
 
 const AndroidUpdateGate = ({ children }) => {
   const [installedVersion, setInstalledVersion] = useState('');
   const [config, setConfig] = useState(null);
   const [dismissedVersion, setDismissedVersion] = useState('');
+  const [installing, setInstalling] = useState(false);
+  const [installMessage, setInstallMessage] = useState('');
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return undefined;
     let unsubscribeUpdates = null;
-    CapacitorApp.getInfo().then((info) => setInstalledVersion(info.version || '')).catch(() => {});
+    let appStateListener = null;
+    let cancelled = false;
+
+    const refreshInstalledVersion = async () => {
+      try {
+        const info = await CapacitorApp.getInfo();
+        if (!cancelled) setInstalledVersion(info.version || '');
+      } catch {
+        // La versión se volverá a consultar al siguiente arranque/resume.
+      }
+    };
+
+    void refreshInstalledVersion();
+    CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) void refreshInstalledVersion();
+    }).then((handle) => {
+      if (cancelled) handle.remove();
+      else appStateListener = handle;
+    }).catch(() => {});
 
     const unsubscribeAuth = onAuthStateChanged(getAuth(), (firebaseUser) => {
       unsubscribeUpdates?.();
@@ -38,17 +49,38 @@ const AndroidUpdateGate = ({ children }) => {
     });
 
     return () => {
+      cancelled = true;
       unsubscribeUpdates?.();
       unsubscribeAuth();
+      appStateListener?.remove();
     };
   }, []);
 
   if (!Capacitor.isNativePlatform() || !config || !installedVersion) return children;
 
   const decision = getUpdateDecision({ installedVersion, config });
-  const install = () => {
-    if (!decision.config.downloadUrl) return;
-    openDownload(decision.config.downloadUrl);
+  const downloadUrl = decision.config.downloadUrl || getAndroidReleaseApkUrl(decision.config.latestVersion);
+
+  const install = async () => {
+    if (!downloadUrl || installing) return;
+    setInstalling(true);
+    setInstallMessage('Descargando actualización…');
+    try {
+      const result = await installAndroidUpdate({
+        url: downloadUrl,
+        version: decision.config.latestVersion
+      });
+      if (result?.permissionRequired) {
+        setInstallMessage('Activa “Permitir desde esta fuente”, vuelve a Kadosh y pulsa Actualizar ahora otra vez.');
+      } else {
+        setInstallMessage('El instalador de Android está listo. Confirma la actualización para continuar.');
+      }
+    } catch (error) {
+      console.error('No se pudo instalar la actualización Android:', error);
+      setInstallMessage(error?.message || 'No se pudo descargar o abrir la actualización.');
+    } finally {
+      setInstalling(false);
+    }
   };
 
   if (decision.required) {
@@ -87,12 +119,13 @@ const AndroidUpdateGate = ({ children }) => {
           <button
             type="button"
             onClick={install}
-            disabled={!decision.config.downloadUrl}
+            disabled={!downloadUrl || installing}
             className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-400 px-5 py-3.5 text-sm font-black uppercase tracking-wide text-zinc-950 transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Download size={18} /> Actualizar ahora
+            <Download size={18} /> {installing ? 'Descargando…' : 'Actualizar ahora'}
           </button>
-          {!decision.config.downloadUrl && <p className="mt-3 text-center text-xs font-bold text-red-300">El administrador todavía no publicó una URL de APK válida.</p>}
+          {installMessage && <p className="mt-3 text-center text-xs font-bold leading-relaxed text-amber-200">{installMessage}</p>}
+          {!downloadUrl && <p className="mt-3 text-center text-xs font-bold text-red-300">No hay un APK publicado para esta versión.</p>}
         </div>
       </div>
     );
@@ -110,8 +143,9 @@ const AndroidUpdateGate = ({ children }) => {
           <h2 className="mt-1 pr-8 text-xl font-black">Kadosh App {decision.config.latestVersion}</h2>
           <p className="mt-2 text-sm font-medium text-zinc-400">Tienes instalada la versión {installedVersion}.</p>
           {decision.config.releaseNotes && <p className="mt-3 line-clamp-3 text-sm font-medium leading-relaxed text-zinc-300">{decision.config.releaseNotes}</p>}
+          {installMessage && <p className="mt-3 text-xs font-bold leading-relaxed text-cyan-200">{installMessage}</p>}
           <div className="mt-4 flex flex-wrap gap-2">
-            <button type="button" onClick={install} disabled={!decision.config.downloadUrl} className="kp-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:opacity-50"><Download size={14} /> Actualizar ahora</button>
+            <button type="button" onClick={install} disabled={!downloadUrl || installing} className="kp-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:opacity-50"><Download size={14} /> {installing ? 'Descargando…' : 'Actualizar ahora'}</button>
             <button type="button" onClick={() => setDismissedVersion(decision.config.latestVersion)} className="kp-button-secondary rounded-xl px-4 py-2.5 text-xs font-black uppercase">Más tarde</button>
           </div>
         </div>
