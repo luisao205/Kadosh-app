@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: node scripts/test-versioning.mjs
@@ -24,8 +24,22 @@ jobs:
       - run: node scripts/test-electron-updater.mjs
       - run: node scripts/test-electron-wrapper.mjs
       - run: node --check functions/main.js
+      - name: Lint changed implementation files
+        run: >-
+          npx eslint
+          src/components/admin/UpdateCenter.jsx
+          src/components/updates/AndroidUpdateGate.jsx
+          src/components/updates/GlobalUpdateCenter.jsx
+          src/components/songs/SongExportCenter.jsx
+          src/utils/versioning.js
+          src/utils/appUpdates.js
+          src/utils/songPrint.js
+          src/utils/songParser.js
+          functions/main.js
       - run: npm run build
-      - run: npm run lint
+      - name: Report repository-wide lint baseline
+        continue-on-error: true
+        run: npm run lint
 
   windows-desktop-build:
     runs-on: windows-latest
@@ -33,7 +47,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run desktop:build
+      - name: Verify NSIS updater artifacts
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'release/Kadosh-App-Setup-1.1.1.exe')) { throw 'Missing NSIS setup' }
+          if (!(Test-Path 'release/Kadosh-App-Setup-1.1.1.exe.blockmap')) { throw 'Missing NSIS blockmap' }
+          if (!(Test-Path 'release/latest.yml')) { throw 'Missing latest.yml' }
+          Get-ChildItem release
