@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/windows-updater-single-instance
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
