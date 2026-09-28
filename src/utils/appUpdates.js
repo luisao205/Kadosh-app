@@ -5,6 +5,13 @@ import { compareVersions, isValidVersion } from './versioning';
 export const APP_UPDATES_DOC = 'appUpdates';
 export const APP_UPDATES_PATH = ['sistema', APP_UPDATES_DOC];
 export const UPDATE_STATUSES = ['draft', 'testing', 'published'];
+export const GITHUB_RELEASES_BASE = 'https://github.com/luisao205/Kadosh-app/releases/download';
+
+export const getAndroidReleaseApkUrl = (version) => {
+  const normalizedVersion = String(version || '').trim().replace(/^v/i, '');
+  if (!isValidVersion(normalizedVersion)) return '';
+  return `${GITHUB_RELEASES_BASE}/v${normalizedVersion}/app-release.apk`;
+};
 
 const normalizePlatformUpdate = (value = {}) => ({
   latestVersion: String(value.latestVersion || '').trim(),
@@ -52,10 +59,15 @@ export const saveAppUpdateConfig = async ({ platform, config, publish = false })
   if (!isValidVersion(normalized.latestVersion)) throw new Error('La versión más reciente no es válida.');
   if (normalized.minimumVersion && !isValidVersion(normalized.minimumVersion)) throw new Error('La versión mínima no es válida.');
 
+  const resolvedDownloadUrl = platform === 'android' && !normalized.downloadUrl
+    ? getAndroidReleaseApkUrl(normalized.latestVersion)
+    : normalized.downloadUrl;
   const status = publish ? 'published' : normalized.status;
+
   await setDoc(doc(db, ...APP_UPDATES_PATH), {
     [platform]: {
       ...normalized,
+      downloadUrl: resolvedDownloadUrl,
       status,
       publishedAt: publish ? serverTimestamp() : normalized.publishedAt,
       updatedAt: serverTimestamp()
