@@ -24,11 +24,13 @@ jobs:
       - run: node scripts/test-electron-updater.mjs
       - run: node scripts/test-electron-wrapper.mjs
       - run: node scripts/test-android-updater.mjs
+      - run: node scripts/test-preaching-permissions.mjs
       - run: node --check functions/main.js
       - name: Lint changed implementation files
         run: >-
           npx eslint
           src/components/admin/UpdateCenter.jsx
+          src/components/admin/PreachingManagement.jsx
           src/components/updates/AndroidUpdateGate.jsx
           src/components/updates/GlobalUpdateCenter.jsx
           src/components/songs/SongExportCenter.jsx
