@@ -7,7 +7,7 @@ const preloadSource = await readFile(new URL('../desktop/preload.cjs', import.me
 const builderConfig = await readFile(new URL('../electron-builder.yml', import.meta.url), 'utf8');
 
 assert.equal(packageJson.main, 'desktop/main.cjs');
-assert.equal(packageJson.version, '0.1.1');
+assert.equal(packageJson.version, '1.1.1');
 assert.match(packageJson.scripts['desktop:dev'], /vite --host 127\.0\.0\.1/);
 assert.match(packageJson.scripts['desktop:dev'], /wait-on tcp:127\.0\.0\.1:5173/);
 assert.match(packageJson.scripts['desktop:dev'], /electron \./);
@@ -25,6 +25,9 @@ assert.match(mainSource, /secure: true/);
 assert.match(mainSource, /supportFetchAPI: true/);
 assert.match(mainSource, /protocol\.handle\(APP_SCHEME/);
 assert.match(mainSource, /initializeWindowsStartup\(\{ app \}\)/);
+assert.match(mainSource, /app\.requestSingleInstanceLock\(\)/);
+assert.match(mainSource, /app\.on\('second-instance', focusMainWindow\)/);
+assert.match(mainSource, /if \(!hasSingleInstanceLock\) \{\s*app\.exit\(0\);/);
 assert.match(mainSource, /app\.on\('web-contents-created'/);
 assert.match(mainSource, /attachNativeWindowBehavior\(webContents, BrowserWindow\)/);
 assert.match(mainSource, /setWindowOpenHandler/);
