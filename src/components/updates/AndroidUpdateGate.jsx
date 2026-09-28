@@ -3,8 +3,15 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { Download, ShieldAlert, X } from 'lucide-react';
-import { getAndroidReleaseApkUrl, getUpdateDecision, subscribeAppUpdates } from '../../utils/appUpdates';
+import {
+  fetchPublishedAndroidUpdate,
+  getAndroidReleaseApkUrl,
+  getUpdateDecision,
+  subscribeAppUpdates
+} from '../../utils/appUpdates';
 import { installAndroidUpdate } from '../../native/kadoshUpdate';
+
+const PUBLIC_CHECK_INTERVAL_MS = 60_000;
 
 const AndroidUpdateGate = ({ children }) => {
   const [installedVersion, setInstalledVersion] = useState('');
@@ -17,8 +24,9 @@ const AndroidUpdateGate = ({ children }) => {
   useEffect(() => {
     if (!isAndroid) return undefined;
     let unsubscribeUpdates = null;
-    let unsubscribeAuthRetry = null;
+    let unsubscribeAuth = null;
     let appStateListener = null;
+    let publicCheckTimer = null;
     let cancelled = false;
 
     const refreshInstalledVersion = async () => {
@@ -30,31 +38,39 @@ const AndroidUpdateGate = ({ children }) => {
       }
     };
 
-    const subscribeToUpdateConfig = () => {
+    const refreshPublicConfig = async () => {
+      try {
+        const nextConfig = await fetchPublishedAndroidUpdate();
+        if (!cancelled && nextConfig?.status === 'published') setConfig(nextConfig);
+      } catch (error) {
+        // La Function se desplegará junto con este updater. Mientras tanto,
+        // una sesión autenticada seguirá usando el listener Firestore existente.
+        console.warn('No se pudo consultar la actualización Android pública:', error);
+      }
+    };
+
+    const subscribeAuthenticatedConfig = () => {
       unsubscribeUpdates?.();
       unsubscribeUpdates = subscribeAppUpdates((updates) => {
-        if (cancelled) return;
-        setConfig(updates.android);
-      }, (nextError) => {
-        console.warn('No se pudo comprobar la actualización Android:', nextError);
-        if (cancelled || unsubscribeAuthRetry) return;
-
-        // Compatibilidad mientras la regla pública de sistema/appUpdates aún no esté desplegada.
-        // Cuando la lectura pública esté activa, este fallback no se utilizará.
-        unsubscribeAuthRetry = onAuthStateChanged(getAuth(), (firebaseUser) => {
-          if (!firebaseUser || cancelled) return;
-          unsubscribeAuthRetry?.();
-          unsubscribeAuthRetry = null;
-          subscribeToUpdateConfig();
-        });
-      });
+        if (!cancelled) setConfig(updates.android);
+      }, (error) => console.warn('No se pudo escuchar la actualización Android:', error));
     };
 
     void refreshInstalledVersion();
-    void subscribeToUpdateConfig();
+    void refreshPublicConfig();
+    publicCheckTimer = window.setInterval(() => void refreshPublicConfig(), PUBLIC_CHECK_INTERVAL_MS);
+
+    unsubscribeAuth = onAuthStateChanged(getAuth(), (firebaseUser) => {
+      unsubscribeUpdates?.();
+      unsubscribeUpdates = null;
+      if (firebaseUser) subscribeAuthenticatedConfig();
+      else void refreshPublicConfig();
+    });
 
     CapacitorApp.addListener('appStateChange', ({ isActive }) => {
-      if (isActive) void refreshInstalledVersion();
+      if (!isActive) return;
+      void refreshInstalledVersion();
+      void refreshPublicConfig();
     }).then((handle) => {
       if (cancelled) handle.remove();
       else appStateListener = handle;
@@ -63,8 +79,9 @@ const AndroidUpdateGate = ({ children }) => {
     return () => {
       cancelled = true;
       unsubscribeUpdates?.();
-      unsubscribeAuthRetry?.();
+      unsubscribeAuth?.();
       appStateListener?.remove();
+      if (publicCheckTimer) window.clearInterval(publicCheckTimer);
     };
   }, [isAndroid]);
 
