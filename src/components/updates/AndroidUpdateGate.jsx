@@ -12,10 +12,12 @@ const AndroidUpdateGate = ({ children }) => {
   const [dismissedVersion, setDismissedVersion] = useState('');
   const [installing, setInstalling] = useState(false);
   const [installMessage, setInstallMessage] = useState('');
+  const isAndroid = Capacitor.getPlatform() === 'android';
 
   useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return undefined;
+    if (!isAndroid) return undefined;
     let unsubscribeUpdates = null;
+    let unsubscribeAuthRetry = null;
     let appStateListener = null;
     let cancelled = false;
 
@@ -28,7 +30,29 @@ const AndroidUpdateGate = ({ children }) => {
       }
     };
 
+    const subscribeToUpdateConfig = () => {
+      unsubscribeUpdates?.();
+      unsubscribeUpdates = subscribeAppUpdates((updates) => {
+        if (cancelled) return;
+        setConfig(updates.android);
+      }, (nextError) => {
+        console.warn('No se pudo comprobar la actualización Android:', nextError);
+        if (cancelled || unsubscribeAuthRetry) return;
+
+        // Compatibilidad mientras la regla pública de sistema/appUpdates aún no esté desplegada.
+        // Cuando la lectura pública esté activa, este fallback no se utilizará.
+        unsubscribeAuthRetry = onAuthStateChanged(getAuth(), (firebaseUser) => {
+          if (!firebaseUser || cancelled) return;
+          unsubscribeAuthRetry?.();
+          unsubscribeAuthRetry = null;
+          subscribeToUpdateConfig();
+        });
+      });
+    };
+
     void refreshInstalledVersion();
+    void subscribeToUpdateConfig();
+
     CapacitorApp.addListener('appStateChange', ({ isActive }) => {
       if (isActive) void refreshInstalledVersion();
     }).then((handle) => {
@@ -36,27 +60,15 @@ const AndroidUpdateGate = ({ children }) => {
       else appStateListener = handle;
     }).catch(() => {});
 
-    const unsubscribeAuth = onAuthStateChanged(getAuth(), (firebaseUser) => {
-      unsubscribeUpdates?.();
-      unsubscribeUpdates = null;
-      if (!firebaseUser) {
-        setConfig(null);
-        return;
-      }
-      unsubscribeUpdates = subscribeAppUpdates((updates) => setConfig(updates.android), (nextError) => {
-        console.warn('No se pudo comprobar la actualización Android:', nextError);
-      });
-    });
-
     return () => {
       cancelled = true;
       unsubscribeUpdates?.();
-      unsubscribeAuth();
+      unsubscribeAuthRetry?.();
       appStateListener?.remove();
     };
-  }, []);
+  }, [isAndroid]);
 
-  if (!Capacitor.isNativePlatform() || !config || !installedVersion) return children;
+  if (!isAndroid || !config || !installedVersion) return children;
 
   const decision = getUpdateDecision({ installedVersion, config });
   const downloadUrl = decision.config.downloadUrl || getAndroidReleaseApkUrl(decision.config.latestVersion);
