@@ -164,7 +164,7 @@ const UpdateCenter = ({ user }) => {
   const [desktopState, setDesktopState] = useState({ status: 'idle', currentVersion: '', availableVersion: null });
   const [androidVersion, setAndroidVersion] = useState('');
   const [release, setRelease] = useState(null);
-  const [releaseLoading, setReleaseLoading] = useState(false);
+  const [releaseLoading, setReleaseLoading] = useState(true);
   const [releaseError, setReleaseError] = useState('');
   const [publishing, setPublishing] = useState(false);
   const canManage = isOwner(user);
@@ -203,8 +203,20 @@ const UpdateCenter = ({ user }) => {
   };
 
   useEffect(() => {
-    if (!canManage) return;
-    void refreshRelease();
+    if (!canManage) return undefined;
+    let active = true;
+    fetchLatestGitHubRelease()
+      .then((nextRelease) => {
+        if (active) setRelease(nextRelease);
+      })
+      .catch((error) => {
+        console.error('No se pudo detectar la última release:', error);
+        if (active) setReleaseError(error?.message || 'No se pudo consultar la última release.');
+      })
+      .finally(() => {
+        if (active) setReleaseLoading(false);
+      });
+    return () => { active = false; };
   }, [canManage]);
 
   const publishAndroid = async () => {
