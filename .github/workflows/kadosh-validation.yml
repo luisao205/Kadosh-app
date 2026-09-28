@@ -81,4 +81,6 @@ jobs:
       - run: npm run android:sync
       - name: Compile Android updater integration
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
