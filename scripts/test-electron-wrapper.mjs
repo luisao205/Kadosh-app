@@ -19,6 +19,7 @@ assert.doesNotMatch(packageJson.scripts['desktop:start'], /cmd \/d \/s \/c/i);
 assert.match(packageJson.scripts['desktop:build'], /patch-electron-builder-nsis\.mjs/);
 assert.match(packageJson.scripts['desktop:build'], /build:desktop/);
 assert.match(packageJson.scripts['desktop:build'], /electron-builder --win nsis/);
+assert.match(packageJson.scripts['desktop:build'], /--publish never/);
 assert.match(packageJson.scripts['build:android'], /vite build --mode android/);
 assert.match(packageJson.scripts['android:sync'], /cap sync android/);
 
