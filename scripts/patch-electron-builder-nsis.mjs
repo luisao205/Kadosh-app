@@ -46,9 +46,61 @@ const newRetry = 'MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(uninstallFaile
 
 if (installUtilSource.includes(oldRetry)) {
   installUtilSource = installUtilSource.replace(oldRetry, newRetry);
-  writeFileSync(installUtilPath, installUtilSource, 'utf8');
 } else if (!installUtilSource.includes(newRetry)) {
   fail(`no se encontró el bloque esperado de uninstallOldVersion en app-builder-lib ${appBuilderLibVersion}`);
 }
 
-console.log(`electron-builder NSIS compatibility patch: OK (app-builder-lib ${appBuilderLibVersion}, tasklist exact name)`);
+const legacyCheckResult = [
+  '    CheckResult:',
+  '      ${if} $R0 == 0',
+  '        Return',
+  '      ${endIf}',
+  '',
+  '    Sleep 1000',
+  '    Goto UninstallLoop'
+].join('\n');
+
+const legacyMigrationMarker = '# Kadosh legacy 1.1.1 migration: quarantine old program directory after legacy uninstaller exit code 2';
+const legacyMigrationResult = [
+  '    CheckResult:',
+  '      ${if} $R0 == 0',
+  '        Return',
+  '      ${endIf}',
+  '',
+  `    ${legacyMigrationMarker}`,
+  '    ${if} $R0 == 2',
+  '      !insertmacro readReg $R2 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
+  '      ${if} $R2 == "1.1.1"',
+  '        !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R1',
+  '        ${if} $R1 != 0',
+  '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
+  '          IfFileExists "$R3\\*.*" LegacyKadoshMigrationFailed 0',
+  '          ClearErrors',
+  '          Rename "$installationDir" "$R3"',
+  '          IfErrors LegacyKadoshMigrationFailed LegacyKadoshMigrationSucceeded',
+  '          LegacyKadoshMigrationSucceeded:',
+  '            DetailPrint "Legacy Kadosh 1.1.1 program directory quarantined for safe migration."',
+  '            ClearErrors',
+  '            Return',
+  '          LegacyKadoshMigrationFailed:',
+  '            DetailPrint "Legacy Kadosh migration could not quarantine: $installationDir"',
+  '        ${endIf}',
+  '      ${endIf}',
+  '    ${endIf}',
+  '',
+  '    Sleep 1000',
+  '    Goto UninstallLoop'
+].join('\n');
+
+if (!installUtilSource.includes(legacyMigrationMarker)) {
+  installUtilSource = replaceOnce(
+    installUtilSource,
+    legacyCheckResult,
+    legacyMigrationResult,
+    'legacy 1.1.1 quarantine fallback'
+  );
+}
+
+writeFileSync(installUtilPath, installUtilSource, 'utf8');
+
+console.log(`electron-builder NSIS compatibility patch: OK (app-builder-lib ${appBuilderLibVersion}, tasklist exact name + legacy 1.1.1 migration)`);
