@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot } from 'firebase/firestore';
-import { FileText, Music, Search, X } from 'lucide-react';
+import { FileText, Search, X } from 'lucide-react';
 import { db } from '../../config/firebase';
 import { getSongBaseKey } from '../../utils/songAssignments';
 import { getSongPreviewLines, printSongPdf, SONG_PRINT_MODES } from '../../utils/songPrint';
@@ -20,8 +20,42 @@ const PDF_ACTIONS = [
   { id: SONG_PRINT_MODES.STRUCTURE, label: 'PDF — Solo estructura' }
 ];
 
+const useBrowserPathname = () => {
+  const [pathname, setPathname] = useState(() => window.location.pathname);
+
+  useEffect(() => {
+    const updatePathname = () => setPathname(window.location.pathname);
+    const originalPushState = window.history.pushState;
+    const originalReplaceState = window.history.replaceState;
+
+    const wrappedPushState = function wrappedPushState(...args) {
+      const result = originalPushState.apply(this, args);
+      updatePathname();
+      return result;
+    };
+    const wrappedReplaceState = function wrappedReplaceState(...args) {
+      const result = originalReplaceState.apply(this, args);
+      updatePathname();
+      return result;
+    };
+
+    window.history.pushState = wrappedPushState;
+    window.history.replaceState = wrappedReplaceState;
+    window.addEventListener('popstate', updatePathname);
+
+    return () => {
+      if (window.history.pushState === wrappedPushState) window.history.pushState = originalPushState;
+      if (window.history.replaceState === wrappedReplaceState) window.history.replaceState = originalReplaceState;
+      window.removeEventListener('popstate', updatePathname);
+    };
+  }, []);
+
+  return pathname;
+};
+
 const SongExportCenter = () => {
   const { notify } = useFeedback();
+  const pathname = useBrowserPathname();
   const [authorized, setAuthorized] = useState(false);
   const [songs, setSongs] = useState([]);
   const [open, setOpen] = useState(false);
@@ -58,6 +92,10 @@ const SongExportCenter = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (pathname !== '/canciones') setOpen(false);
+  }, [pathname]);
+
   const filteredSongs = useMemo(() => {
     const needle = queryText.trim().toLowerCase();
     if (!needle) return songs.slice(0, 80);
@@ -88,18 +126,18 @@ const SongExportCenter = () => {
     }
   };
 
-  if (!authorized) return null;
+  if (!authorized || pathname !== '/canciones') return null;
 
   return (
     <>
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-20 right-5 z-[79] flex h-12 w-12 items-center justify-center rounded-2xl border border-violet-400/20 bg-zinc-900/95 text-violet-300 shadow-2xl shadow-black/40 backdrop-blur hover:bg-zinc-800"
-        aria-label="Abrir centro de canciones y PDFs"
-        title="Canciones y PDFs"
+        className="fixed bottom-20 right-5 z-[79] inline-flex h-12 items-center justify-center gap-2 rounded-2xl border border-violet-400/20 bg-zinc-900/95 px-4 text-xs font-black uppercase tracking-wide text-violet-200 shadow-2xl shadow-black/40 backdrop-blur hover:bg-zinc-800"
+        aria-label="Exportar canción a PDF"
+        title="Exportar PDF desde Repertorio"
       >
-        <Music size={19} />
+        <FileText size={17} /> Exportar PDF
       </button>
 
       {open && (
@@ -107,9 +145,9 @@ const SongExportCenter = () => {
           <div className="mx-auto max-w-7xl rounded-[2rem] border border-white/10 bg-zinc-950 p-4 shadow-2xl md:p-6">
             <div className="mb-5 flex items-start justify-between gap-4">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-violet-300">Kadosh Repertorio</p>
-                <h1 className="mt-1 text-3xl font-black text-white">Canciones y PDFs</h1>
-                <p className="mt-1 text-sm font-medium text-zinc-400">Vista musical, transposición y documentos imprimibles.</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-violet-300">Repertorio · PDF</p>
+                <h1 className="mt-1 text-3xl font-black text-white">Exportar canción</h1>
+                <p className="mt-1 text-sm font-medium text-zinc-400">Letra, acordes, combinación o estructura exacta desde el repertorio.</p>
               </div>
               <button type="button" onClick={() => setOpen(false)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white" aria-label="Cerrar"><X size={20} /></button>
             </div>
