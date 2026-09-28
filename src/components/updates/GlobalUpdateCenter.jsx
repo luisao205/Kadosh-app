@@ -3,6 +3,7 @@ import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { RefreshCw, X } from 'lucide-react';
 import { db } from '../../config/firebase';
+import { isOwner } from '../../utils/rolePermissions';
 import UpdateCenter from '../admin/UpdateCenter';
 
 const GlobalUpdateCenter = () => {
@@ -35,7 +36,7 @@ const GlobalUpdateCenter = () => {
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
   };
 
-  if (!user) return null;
+  if (!user || !isOwner(user)) return null;
 
   return (
     <>
@@ -43,8 +44,8 @@ const GlobalUpdateCenter = () => {
         type="button"
         onClick={() => setOpen(true)}
         className="fixed bottom-5 right-5 z-[80] flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-400/20 bg-zinc-900/95 text-cyan-300 shadow-2xl shadow-black/40 backdrop-blur hover:bg-zinc-800"
-        aria-label="Abrir centro de actualizaciones"
-        title="Centro de Actualizaciones"
+        aria-label="Abrir publicación de actualizaciones"
+        title="Publicación de actualizaciones"
       >
         <RefreshCw size={19} />
       </button>
@@ -53,7 +54,7 @@ const GlobalUpdateCenter = () => {
         <div className="fixed inset-0 z-[120] overflow-y-auto bg-black/75 p-4 backdrop-blur-sm md:p-8">
           <div className="mx-auto max-w-6xl">
             <div className="mb-3 flex justify-end">
-              <button type="button" onClick={close} className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white" aria-label="Cerrar centro de actualizaciones">
+              <button type="button" onClick={close} className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white" aria-label="Cerrar publicación de actualizaciones">
                 <X size={20} />
               </button>
             </div>
