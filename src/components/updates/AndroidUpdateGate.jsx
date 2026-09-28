@@ -1,17 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { Download, ShieldAlert } from 'lucide-react';
 import { getUpdateDecision, subscribeAppUpdates } from '../../utils/appUpdates';
 
-const AndroidUpdater = registerPlugin('KadoshUpdater');
+const openDownload = (url) => {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.target = '_blank';
+  anchor.rel = 'noopener noreferrer';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+};
 
 const AndroidUpdateGate = ({ children }) => {
   const [installedVersion, setInstalledVersion] = useState('');
   const [config, setConfig] = useState(null);
-  const [installing, setInstalling] = useState(false);
-  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return undefined;
@@ -41,18 +47,9 @@ const AndroidUpdateGate = ({ children }) => {
   const decision = getUpdateDecision({ installedVersion, config });
   if (!decision.required) return children;
 
-  const install = async () => {
-    if (!decision.config.downloadUrl || installing) return;
-    setInstalling(true);
-    setError('');
-    try {
-      await AndroidUpdater.installApk({ url: decision.config.downloadUrl });
-    } catch (installError) {
-      console.error('No se pudo iniciar la actualización obligatoria:', installError);
-      setError('No se pudo descargar o abrir el instalador. Revisa tu conexión e inténtalo nuevamente.');
-    } finally {
-      setInstalling(false);
-    }
+  const install = () => {
+    if (!decision.config.downloadUrl) return;
+    openDownload(decision.config.downloadUrl);
   };
 
   return (
@@ -87,15 +84,13 @@ const AndroidUpdateGate = ({ children }) => {
           </div>
         )}
 
-        {error && <p className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm font-bold text-red-300">{error}</p>}
-
         <button
           type="button"
           onClick={install}
-          disabled={installing || !decision.config.downloadUrl}
+          disabled={!decision.config.downloadUrl}
           className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-400 px-5 py-3.5 text-sm font-black uppercase tracking-wide text-zinc-950 transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <Download size={18} /> {installing ? 'Preparando actualización...' : 'Actualizar ahora'}
+          <Download size={18} /> Actualizar ahora
         </button>
         {!decision.config.downloadUrl && <p className="mt-3 text-center text-xs font-bold text-red-300">El administrador todavía no publicó una URL de APK válida.</p>}
       </div>
