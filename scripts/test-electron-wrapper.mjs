@@ -12,7 +12,9 @@ assert.match(packageJson.scripts['desktop:dev'], /vite --host 127\.0\.0\.1/);
 assert.match(packageJson.scripts['desktop:dev'], /wait-on tcp:127\.0\.0\.1:5173/);
 assert.match(packageJson.scripts['desktop:dev'], /electron \./);
 assert.match(packageJson.scripts['desktop:dev'], /set ELECTRON_RUN_AS_NODE=/);
+assert.doesNotMatch(packageJson.scripts['desktop:dev'], /cmd \/d \/s \/c/i);
 assert.match(packageJson.scripts['desktop:start'], /set ELECTRON_RUN_AS_NODE=/);
+assert.doesNotMatch(packageJson.scripts['desktop:start'], /cmd \/d \/s \/c/i);
 assert.match(packageJson.scripts['desktop:build'], /build:desktop/);
 assert.match(packageJson.scripts['desktop:build'], /electron-builder --win nsis/);
 
