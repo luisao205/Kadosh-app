@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.jsx'
 import AndroidUpdateGate from './components/updates/AndroidUpdateGate.jsx'
 import GlobalUpdateCenter from './components/updates/GlobalUpdateCenter.jsx'
+import SongExportCenter from './components/songs/SongExportCenter.jsx'
 import { FeedbackProvider } from './components/ui/FeedbackProvider.jsx'
 
 createRoot(document.getElementById('root')).render(
@@ -11,6 +12,7 @@ createRoot(document.getElementById('root')).render(
     <FeedbackProvider>
       <AndroidUpdateGate>
         <App />
+        <SongExportCenter />
         <GlobalUpdateCenter />
       </AndroidUpdateGate>
     </FeedbackProvider>
