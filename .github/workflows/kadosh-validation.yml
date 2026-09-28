@@ -1,0 +1,36 @@
+name: Kadosh validation
+
+on:
+  push:
+    branches:
+      - fix/windows-updater-single-instance
+  workflow_dispatch:
+
+jobs:
+  web-and-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node scripts/test-versioning.mjs
+      - run: node scripts/test-song-structure.mjs
+      - run: node scripts/test-electron-updater.mjs
+      - run: node scripts/test-electron-wrapper.mjs
+      - run: node --check functions/main.js
+      - run: npm run build
+      - run: npm run lint
+
+  windows-desktop-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run desktop:build
