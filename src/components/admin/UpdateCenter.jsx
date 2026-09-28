@@ -1,8 +1,14 @@
 import { useEffect, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
-import { Monitor, RefreshCw, Rocket, Smartphone, Save, ShieldAlert } from 'lucide-react';
-import { getUpdateDecision, saveAppUpdateConfig, subscribeAppUpdates } from '../../utils/appUpdates';
+import { CheckCircle2, Download, ExternalLink, Monitor, RefreshCw, Rocket, Smartphone } from 'lucide-react';
+import {
+  fetchLatestGitHubRelease,
+  getUpdateDecision,
+  publishDetectedAndroidRelease,
+  subscribeAppUpdates
+} from '../../utils/appUpdates';
+import { canUseNativeAndroidUpdater, installAndroidUpdate } from '../../native/kadoshUpdate';
 import { isAdmin, isMultimedia, isOwner } from '../../utils/rolePermissions';
 import { useFeedback } from '../ui/FeedbackProvider';
 
@@ -18,95 +24,138 @@ const emptyConfig = {
 
 const getDesktopUpdater = () => typeof window === 'undefined' ? null : window.kadoshDesktop?.updater || null;
 
-const openDownload = (url) => {
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.target = '_blank';
-  anchor.rel = 'noopener noreferrer';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
+const formatBytes = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
-const UpdateCard = ({ icon, title, installedVersion, config, decision, action, actionLabel, actionDisabled }) => (
-  <div className="kp-card rounded-3xl border border-white/10 p-5 md:p-6">
-    <div className="flex items-start justify-between gap-4">
-      <div className="flex min-w-0 items-start gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">{icon}</div>
-        <div className="min-w-0">
-          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500">{title}</p>
+const openExternal = (url) => {
+  if (!url) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+};
+
+const DesktopStatus = ({ updater, state }) => {
+  const busy = ['checking', 'downloading'].includes(state.status);
+  const installReady = state.status === 'downloaded';
+  const label = installReady
+    ? 'Reiniciar y actualizar'
+    : state.status === 'downloading'
+      ? `Descargando${Number.isFinite(state.progress?.percent) ? ` ${Math.round(state.progress.percent)}%` : '…'}`
+      : state.status === 'checking'
+        ? 'Comprobando…'
+        : 'Comprobar actualizaciones';
+
+  const action = async () => {
+    if (!updater || busy) return;
+    if (installReady) await updater.installUpdate();
+    else await updater.checkForUpdates();
+  };
+
+  return (
+    <div className="kp-card rounded-3xl border border-white/10 p-5 md:p-6">
+      <div className="flex items-start gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300"><Monitor size={20} /></div>
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500">Windows</p>
           <h2 className="mt-1 text-xl font-black text-white">Kadosh App</h2>
-          <div className="mt-3 space-y-1 text-sm font-semibold text-zinc-400">
-            <p>Versión instalada: <span className="text-zinc-100">{installedVersion || 'No disponible'}</span></p>
-            <p>Última publicada: <span className="text-zinc-100">{config.latestVersion || 'Sin publicar'}</span></p>
-            {config.minimumVersion && <p>Versión mínima: <span className="text-zinc-100">{config.minimumVersion}</span></p>}
-          </div>
+          <p className="mt-3 text-sm font-semibold text-zinc-400">Versión instalada: <span className="text-zinc-100">{state.currentVersion || 'No disponible'}</span></p>
+          {state.availableVersion && <p className="mt-1 text-sm font-semibold text-zinc-400">Versión detectada: <span className="text-zinc-100">{state.availableVersion}</span></p>}
+          <p className="mt-3 max-w-xl text-xs font-medium leading-relaxed text-zinc-500">Windows consulta GitHub Releases directamente. No necesita publicación manual desde este panel.</p>
         </div>
       </div>
-      {decision?.required && <ShieldAlert size={22} className="shrink-0 text-amber-300" />}
+      <button type="button" onClick={action} disabled={!updater || busy} className="kp-button-primary mt-5 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:cursor-not-allowed disabled:opacity-50">
+        <RefreshCw size={15} className={busy ? 'animate-spin' : ''} /> {label}
+      </button>
     </div>
+  );
+};
 
-    {config.releaseNotes && (
-      <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Notas de versión</p>
-        <p className="mt-2 whitespace-pre-wrap text-sm font-medium leading-relaxed text-zinc-300">{config.releaseNotes}</p>
+const AndroidStatus = ({ installedVersion, config }) => {
+  const { notify } = useFeedback();
+  const [installing, setInstalling] = useState(false);
+  const decision = getUpdateDecision({ installedVersion, config });
+
+  const install = async () => {
+    if (!decision.available || !config.downloadUrl || !canUseNativeAndroidUpdater() || installing) return;
+    setInstalling(true);
+    try {
+      await installAndroidUpdate({ url: config.downloadUrl, version: config.latestVersion });
+    } catch (error) {
+      console.error('No se pudo abrir el instalador Android:', error);
+      notify(error?.message || 'No se pudo iniciar la actualización Android.', { type: 'error' });
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <div className="kp-card rounded-3xl border border-white/10 p-5 md:p-6">
+      <div className="flex items-start gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300"><Smartphone size={20} /></div>
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500">Android</p>
+          <h2 className="mt-1 text-xl font-black text-white">Kadosh App</h2>
+          <p className="mt-3 text-sm font-semibold text-zinc-400">Versión instalada: <span className="text-zinc-100">{installedVersion || 'No disponible'}</span></p>
+          <p className="mt-1 text-sm font-semibold text-zinc-400">Última publicada: <span className="text-zinc-100">{config.latestVersion || 'Sin publicar'}</span></p>
+          <p className="mt-3 max-w-xl text-xs font-medium leading-relaxed text-zinc-500">Al publicar una release Android, los APK instalados reciben el aviso y las versiones anteriores quedan bloqueadas hasta actualizar.</p>
+        </div>
       </div>
-    )}
-
-    <div className="mt-5 flex flex-wrap items-center gap-2">
-      {decision?.available ? (
-        <button type="button" onClick={action} disabled={actionDisabled} className="kp-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:cursor-not-allowed disabled:opacity-50">
-          <Rocket size={15} /> {actionLabel}
+      {decision.available && canUseNativeAndroidUpdater() && (
+        <button type="button" onClick={install} disabled={installing || !config.downloadUrl} className="kp-button-primary mt-5 inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:opacity-50">
+          <Download size={15} /> {installing ? 'Preparando…' : 'Actualizar ahora'}
         </button>
-      ) : (
-        <span className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-black uppercase tracking-wide text-emerald-300">
-          {installedVersion && config.latestVersion ? 'Actualizado' : 'Sin actualización publicada'}
-        </span>
       )}
-      {decision?.required && <span className="text-xs font-bold text-amber-300">Actualización obligatoria</span>}
     </div>
-  </div>
-);
+  );
+};
 
-const PlatformEditor = ({ platform, value, onChange, onSave, onPublish, saving }) => (
-  <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-    <div className="mb-4 flex items-center justify-between gap-3">
-      <div>
-        <p className="text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500">Administración</p>
-        <h3 className="mt-1 text-lg font-black text-white">{platform === 'android' ? 'Android' : 'Windows'}</h3>
+const DetectedRelease = ({ release, loading, error, publishedConfig, onRefresh, onPublish, publishing }) => {
+  const alreadyPublished = Boolean(
+    release?.version
+    && publishedConfig.status === 'published'
+    && publishedConfig.latestVersion === release.version
+  );
+
+  return (
+    <section className="kp-card mt-6 rounded-3xl border border-white/10 p-5 md:p-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-violet-300">Control administrativo · Android</p>
+          <h2 className="mt-1 text-2xl font-black text-white">Release detectada automáticamente</h2>
+          <p className="mt-2 max-w-2xl text-sm font-medium text-zinc-400">Kadosh lee la última GitHub Release. No tienes que escribir versión, versión mínima ni URL del APK.</p>
+        </div>
+        <button type="button" onClick={onRefresh} disabled={loading} className="kp-button-secondary inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:opacity-50">
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar detección
+        </button>
       </div>
-      <select value={value.status} onChange={(event) => onChange({ ...value, status: event.target.value })} className="kp-input rounded-xl px-3 py-2 text-xs font-bold">
-        <option value="draft">Borrador</option>
-        <option value="testing">Testing</option>
-        <option value="published">Publicado</option>
-      </select>
-    </div>
 
-    <div className="grid gap-3 md:grid-cols-2">
-      <label className="text-xs font-bold text-zinc-400">Última versión
-        <input value={value.latestVersion} onChange={(event) => onChange({ ...value, latestVersion: event.target.value })} placeholder="1.1.2" className="kp-input mt-1 w-full rounded-xl px-3 py-2.5" />
-      </label>
-      <label className="text-xs font-bold text-zinc-400">Versión mínima
-        <input value={value.minimumVersion} onChange={(event) => onChange({ ...value, minimumVersion: event.target.value })} placeholder="1.1.1" className="kp-input mt-1 w-full rounded-xl px-3 py-2.5" />
-      </label>
-      <label className="md:col-span-2 text-xs font-bold text-zinc-400">URL de descarga {platform === 'android' ? 'APK' : '(opcional)'}
-        <input value={value.downloadUrl} onChange={(event) => onChange({ ...value, downloadUrl: event.target.value })} placeholder="https://..." className="kp-input mt-1 w-full rounded-xl px-3 py-2.5" />
-      </label>
-      <label className="md:col-span-2 text-xs font-bold text-zinc-400">Notas de versión
-        <textarea value={value.releaseNotes} onChange={(event) => onChange({ ...value, releaseNotes: event.target.value })} rows={4} className="kp-input mt-1 w-full resize-y rounded-xl px-3 py-2.5" />
-      </label>
-      <label className="md:col-span-2 flex items-center gap-2 text-sm font-bold text-zinc-300">
-        <input type="checkbox" checked={value.forceUpdate} onChange={(event) => onChange({ ...value, forceUpdate: event.target.checked })} />
-        Forzar actualización
-      </label>
-    </div>
+      {error && <p className="mt-5 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm font-bold text-rose-200">{error}</p>}
+      {!error && loading && !release && <p className="mt-5 text-sm font-bold text-zinc-500">Consultando GitHub Releases…</p>}
 
-    <div className="mt-4 flex flex-wrap gap-2">
-      <button type="button" disabled={saving} onClick={onSave} className="kp-button-secondary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:opacity-50"><Save size={14} /> Guardar</button>
-      <button type="button" disabled={saving} onClick={onPublish} className="kp-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:opacity-50"><Rocket size={14} /> Publicar</button>
-    </div>
-  </div>
-);
+      {release && (
+        <div className="mt-5 rounded-3xl border border-white/10 bg-black/20 p-5">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div><p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Versión</p><p className="mt-1 text-xl font-black text-white">{release.version}</p></div>
+            <div><p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">APK</p><p className={`mt-1 text-sm font-black ${release.android ? 'text-emerald-300' : 'text-rose-300'}`}>{release.android ? `${release.android.name}${release.android.size ? ` · ${formatBytes(release.android.size)}` : ''}` : 'No encontrado'}</p></div>
+            <div><p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Windows</p><p className={`mt-1 text-sm font-black ${release.windows ? 'text-emerald-300' : 'text-zinc-500'}`}>{release.windows?.name || 'Sin instalador'}</p></div>
+            <div><p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Estado Android</p><p className={`mt-1 text-sm font-black ${alreadyPublished ? 'text-emerald-300' : 'text-amber-300'}`}>{alreadyPublished ? 'Publicado' : 'Listo para publicar'}</p></div>
+          </div>
+
+          {release.releaseNotes && <p className="mt-4 whitespace-pre-wrap rounded-2xl border border-white/10 bg-zinc-950/50 p-4 text-sm font-medium leading-relaxed text-zinc-300">{release.releaseNotes}</p>}
+
+          <div className="mt-5 flex flex-wrap gap-2">
+            <button type="button" onClick={onPublish} disabled={publishing || alreadyPublished || !release.android?.url} className="kp-button-primary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase disabled:cursor-not-allowed disabled:opacity-50">
+              {alreadyPublished ? <CheckCircle2 size={15} /> : <Rocket size={15} />} {alreadyPublished ? 'Android ya publicado' : publishing ? 'Publicando…' : 'Publicar Android'}
+            </button>
+            {release.releaseUrl && <button type="button" onClick={() => openExternal(release.releaseUrl)} className="kp-button-secondary inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black uppercase"><ExternalLink size={14} /> Ver release</button>}
+          </div>
+          {!release.android?.url && <p className="mt-3 text-xs font-bold text-rose-300">La release no se puede publicar para Android hasta que contenga app-release.apk.</p>}
+          {!alreadyPublished && release.android?.url && <p className="mt-3 text-xs font-bold text-amber-200">Publicar hará esta versión obligatoria para todos los APK anteriores y activará la notificación de actualización.</p>}
+        </div>
+      )}
+    </section>
+  );
+};
 
 const UpdateCenter = ({ user }) => {
   const { notify } = useFeedback();
@@ -114,54 +163,61 @@ const UpdateCenter = ({ user }) => {
   const [updates, setUpdates] = useState({ windows: emptyConfig, android: emptyConfig });
   const [desktopState, setDesktopState] = useState({ status: 'idle', currentVersion: '', availableVersion: null });
   const [androidVersion, setAndroidVersion] = useState('');
-  const [editors, setEditors] = useState({ windows: emptyConfig, android: emptyConfig });
-  const [saving, setSaving] = useState(false);
+  const [release, setRelease] = useState(null);
+  const [releaseLoading, setReleaseLoading] = useState(false);
+  const [releaseError, setReleaseError] = useState('');
+  const [publishing, setPublishing] = useState(false);
   const canManage = isOwner(user) || isAdmin(user) || isMultimedia(user);
 
-  useEffect(() => subscribeAppUpdates((next) => {
-    setUpdates(next);
-    setEditors(next);
-  }, (error) => console.warn('No se pudo cargar el centro de actualizaciones:', error)), []);
+  useEffect(() => subscribeAppUpdates(setUpdates, (error) => console.warn('No se pudo cargar el centro de actualizaciones:', error)), []);
 
   useEffect(() => {
     if (!desktopUpdater) return undefined;
     let active = true;
     desktopUpdater.getUpdateState().then((state) => active && state && setDesktopState(state));
-    return desktopUpdater.onStateChange((state) => active && state && setDesktopState(state));
+    const unsubscribe = desktopUpdater.onStateChange((state) => active && state && setDesktopState(state));
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
   }, [desktopUpdater]);
 
   useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
-    CapacitorApp.getInfo().then((info) => setAndroidVersion(info.version || '')).catch(() => {});
+    if (!Capacitor.isNativePlatform()) return undefined;
+    let active = true;
+    CapacitorApp.getInfo().then((info) => active && setAndroidVersion(info.version || '')).catch(() => {});
+    return () => { active = false; };
   }, []);
 
-  const windowsDecision = getUpdateDecision({ installedVersion: desktopState.currentVersion, config: updates.windows });
-  const androidDecision = getUpdateDecision({ installedVersion: androidVersion, config: updates.android });
-
-  const installWindows = async () => {
-    if (!desktopUpdater) return;
-    if (desktopState.status === 'downloaded') {
-      await desktopUpdater.installUpdate();
-      return;
-    }
-    await desktopUpdater.checkForUpdates();
-  };
-
-  const installAndroid = () => {
-    if (!Capacitor.isNativePlatform() || !updates.android.downloadUrl) return;
-    openDownload(updates.android.downloadUrl);
-  };
-
-  const persist = async (platform, publish) => {
-    setSaving(true);
+  const refreshRelease = async () => {
+    setReleaseLoading(true);
+    setReleaseError('');
     try {
-      await saveAppUpdateConfig({ platform, config: editors[platform], publish });
-      notify(publish ? 'Actualización publicada.' : 'Configuración guardada.', { type: 'success' });
+      setRelease(await fetchLatestGitHubRelease());
     } catch (error) {
-      console.error('Error guardando actualización:', error);
-      notify(error.message || 'No se pudo guardar la actualización.', { type: 'error' });
+      console.error('No se pudo detectar la última release:', error);
+      setReleaseError(error?.message || 'No se pudo consultar la última release.');
     } finally {
-      setSaving(false);
+      setReleaseLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!canManage) return;
+    void refreshRelease();
+  }, [canManage]);
+
+  const publishAndroid = async () => {
+    if (!release || publishing) return;
+    setPublishing(true);
+    try {
+      await publishDetectedAndroidRelease(release);
+      notify(`Android ${release.version} publicado. Los APK anteriores deberán actualizar.`, { type: 'success' });
+    } catch (error) {
+      console.error('No se pudo publicar Android:', error);
+      notify(error?.message || 'No se pudo publicar la actualización Android.', { type: 'error' });
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -172,47 +228,18 @@ const UpdateCenter = ({ user }) => {
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-400/20 bg-cyan-400/10 text-cyan-300"><RefreshCw size={22} /></div>
           <div>
             <p className="text-[10px] font-black uppercase tracking-[0.24em] text-cyan-300">Kadosh App</p>
-            <h1 className="text-3xl font-black text-white">Centro de Actualizaciones</h1>
-            <p className="mt-1 text-sm font-medium text-zinc-400">Windows y Android desde un solo lugar.</p>
+            <h1 className="text-3xl font-black text-white">Actualizaciones</h1>
+            <p className="mt-1 text-sm font-medium text-zinc-400">Windows se actualiza por Electron. Android se publica aquí a partir de la release detectada.</p>
           </div>
         </div>
       </header>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <UpdateCard
-          icon={<Monitor size={20} />}
-          title="Windows"
-          installedVersion={desktopState.currentVersion}
-          config={updates.windows}
-          decision={windowsDecision}
-          action={installWindows}
-          actionLabel={desktopState.status === 'downloaded' ? 'Reiniciar y actualizar' : 'Buscar y descargar'}
-          actionDisabled={!desktopUpdater}
-        />
-        <UpdateCard
-          icon={<Smartphone size={20} />}
-          title="Android"
-          installedVersion={androidVersion}
-          config={updates.android}
-          decision={androidDecision}
-          action={installAndroid}
-          actionLabel="Descargar APK"
-          actionDisabled={!Capacitor.isNativePlatform() || !updates.android.downloadUrl}
-        />
+        <DesktopStatus updater={desktopUpdater} state={desktopState} />
+        <AndroidStatus installedVersion={androidVersion} config={updates.android} />
       </div>
 
-      {canManage && (
-        <section className="kp-card mt-6 rounded-3xl border border-white/10 p-5 md:p-6">
-          <div className="mb-5">
-            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500">Control administrativo</p>
-            <h2 className="mt-1 text-2xl font-black text-white">Publicación de versiones</h2>
-          </div>
-          <div className="grid gap-4 xl:grid-cols-2">
-            <PlatformEditor platform="windows" value={editors.windows} onChange={(value) => setEditors((current) => ({ ...current, windows: value }))} onSave={() => persist('windows', false)} onPublish={() => persist('windows', true)} saving={saving} />
-            <PlatformEditor platform="android" value={editors.android} onChange={(value) => setEditors((current) => ({ ...current, android: value }))} onSave={() => persist('android', false)} onPublish={() => persist('android', true)} saving={saving} />
-          </div>
-        </section>
-      )}
+      {canManage && <DetectedRelease release={release} loading={releaseLoading} error={releaseError} publishedConfig={updates.android} onRefresh={refreshRelease} onPublish={publishAndroid} publishing={publishing} />}
     </div>
   );
 };
