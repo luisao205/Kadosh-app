@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUp, BookOpen, Calendar, CheckCircle2, Eye, FileText, Im
 import { db } from '../../config/firebase';
 import { ACCOUNT_STATUSES, normalizeAccountStatus } from '../../utils/accountStatus';
 import { canCreatePreaching, canManageAnyPreaching, canUsePreachingMedia, isAdmin, isMultimedia, isOwner, isPastor, isPreacherLegacy, normalizeRole } from '../../utils/rolePermissions';
+import { PERMISSIONS, hasPermission } from '../../utils/permissions';
 import { formatEventDate } from '../../utils/dateUtils';
 import { useNavigationGuard } from '../../utils/navigationGuard';
 import { MEDIA_LIBRARY_COLLECTION, MEDIA_TYPES } from '../../utils/mediaLibrary';
@@ -222,6 +223,8 @@ const PreachingManagement = ({ user }) => {
   const isAssignedPastor = isPastor(user) && form.preacherType === 'user' && form.preacherId === user?.uid;
   const canEditShared = canManageShared || isAssignedPastor;
   const canEditCurrent = canEditShared && !isReadOnlyAdmin;
+  const canCreatePointBlocks = hasPermission(user, PERMISSIONS.SERMONS_CREATE_POINT);
+  const canCreateBiblePassageBlocks = hasPermission(user, PERMISSIONS.SERMONS_CREATE_BIBLE_PASSAGE);
   const canUseMediaInPreaching = canUsePreachingMedia(user, form);
   const canUploadMediaLibrary = canPerformMediaLibraryAction(user, MEDIA_LIBRARY_ACTIONS.ADD);
   const { items: preachingMediaItems, loading: preachingMediaLoading } = useMediaLibrary({ enabled: canUseMediaInPreaching, activeOnly: true });
@@ -230,6 +233,12 @@ const PreachingManagement = ({ user }) => {
   const canManageEventAssociation = isOwner(user);
   const currentSnapshot = useMemo(() => buildDirtySnapshot(form, privateNotes), [form, privateNotes]);
   const isDirty = canEditCurrent && currentSnapshot !== initialSnapshot;
+
+  const canCreateBlockType = (type) => {
+    if (type === 'point' || type === 'subpoint') return canCreatePointBlocks;
+    if (type === 'verse') return canCreateBiblePassageBlocks;
+    return true;
+  };
 
   const confirmDiscardChanges = useCallback(async () => {
     if (!isDirty) return true;
@@ -455,6 +464,12 @@ const PreachingManagement = ({ user }) => {
 
   const addBlock = (type) => {
     if (!ensureEditable()) return;
+    if (!canCreateBlockType(type)) {
+      notify(type === 'verse'
+        ? 'No tienes permiso para crear pasajes de Biblia en prédicas.'
+        : 'No tienes permiso para crear puntos en prédicas.', { type: 'warning' });
+      return;
+    }
     const block = createBlock(type);
     setForm(prev => ({ ...prev, blocks: sanitizeBlocks([...prev.blocks, block]) }));
   };
@@ -466,6 +481,10 @@ const PreachingManagement = ({ user }) => {
 
   const applyBiblePassageToBlock = (blockId, passage) => {
     if (!blockId || !passage || !ensureEditable()) return;
+    if (!canCreateBiblePassageBlocks) {
+      notify('No tienes permiso para crear pasajes de Biblia en prédicas.', { type: 'warning' });
+      return;
+    }
     const slides = splitPassageIntoSlides(passage);
     updateBlock(blockId, {
       reference: passage.reference || '',
@@ -798,7 +817,7 @@ const PreachingManagement = ({ user }) => {
 
         {block.type === 'verse' && (
           <div className="grid gap-3 md:grid-cols-2">
-            {canEditCurrent && (
+            {canEditCurrent && canCreateBiblePassageBlocks && (
               <div className="flex justify-end md:col-span-2">
                 <button
                   type="button"
@@ -1087,7 +1106,7 @@ const PreachingManagement = ({ user }) => {
               </div>
               {canEditCurrent && (
                 <div className="flex flex-wrap gap-2">
-                  {Object.entries(BLOCK_TYPES).map(([type, meta]) => {
+                  {Object.entries(BLOCK_TYPES).filter(([type]) => canCreateBlockType(type)).map(([type, meta]) => {
                     const Icon = meta.icon;
                     return (
                       <button key={type} type="button" onClick={() => addBlock(type)} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-black uppercase text-zinc-200 hover:bg-white/10">
@@ -1111,7 +1130,7 @@ const PreachingManagement = ({ user }) => {
       </div>
 
       <BiblePicker
-        open={Boolean(biblePickerBlockId)}
+        open={Boolean(biblePickerBlockId) && canCreateBiblePassageBlocks}
         onClose={() => setBiblePickerBlockId(null)}
         onUse={(passage) => applyBiblePassageToBlock(biblePickerBlockId, passage)}
         title="Buscar en Biblia"
