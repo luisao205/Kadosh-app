@@ -195,8 +195,9 @@ footer { position: fixed; bottom: -11mm; left: 0; right: 0; border-top: 1px soli
 };
 
 export const printSongPdf = (song, options = {}) => {
-  const popup = window.open('', '_blank', 'noopener,noreferrer');
+  const popup = window.open('', '_blank');
   if (!popup) throw new Error('El navegador bloqueó la ventana de impresión.');
+  popup.opener = null;
   popup.document.open();
   popup.document.write(buildSongPrintHtml(song, options));
   popup.document.close();
