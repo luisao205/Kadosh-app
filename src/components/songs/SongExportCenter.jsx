@@ -92,10 +92,6 @@ const SongExportCenter = () => {
     };
   }, []);
 
-  useEffect(() => {
-    if (pathname !== '/canciones') setOpen(false);
-  }, [pathname]);
-
   const filteredSongs = useMemo(() => {
     const needle = queryText.trim().toLowerCase();
     if (!needle) return songs.slice(0, 80);
