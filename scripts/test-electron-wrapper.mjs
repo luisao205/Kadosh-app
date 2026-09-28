@@ -5,6 +5,7 @@ const packageJson = JSON.parse(await readFile(new URL('../package.json', import.
 const mainSource = await readFile(new URL('../desktop/main.cjs', import.meta.url), 'utf8');
 const preloadSource = await readFile(new URL('../desktop/preload.cjs', import.meta.url), 'utf8');
 const builderConfig = await readFile(new URL('../electron-builder.yml', import.meta.url), 'utf8');
+const nsisPatchSource = await readFile(new URL('./patch-electron-builder-nsis.mjs', import.meta.url), 'utf8');
 
 assert.equal(packageJson.main, 'desktop/main.cjs');
 assert.equal(packageJson.version, '1.1.1');
@@ -15,10 +16,18 @@ assert.match(packageJson.scripts['desktop:dev'], /set ELECTRON_RUN_AS_NODE=/);
 assert.doesNotMatch(packageJson.scripts['desktop:dev'], /cmd \/d \/s \/c/i);
 assert.match(packageJson.scripts['desktop:start'], /set ELECTRON_RUN_AS_NODE=/);
 assert.doesNotMatch(packageJson.scripts['desktop:start'], /cmd \/d \/s \/c/i);
+assert.match(packageJson.scripts['desktop:build'], /patch-electron-builder-nsis\.mjs/);
 assert.match(packageJson.scripts['desktop:build'], /build:desktop/);
 assert.match(packageJson.scripts['desktop:build'], /electron-builder --win nsis/);
 assert.match(packageJson.scripts['build:android'], /vite build --mode android/);
 assert.match(packageJson.scripts['android:sync'], /cap sync android/);
+
+assert.match(nsisPatchSource, /APPEND_INSTALL_LOCATION_TO_PROCESS_PATH_FILTER/);
+assert.match(nsisPatchSource, /processPathFilter/);
+assert.match(nsisPatchSource, /TRIM_TRAILING_BACKSLASHES/);
+assert.match(nsisPatchSource, /\$R9 != ""/);
+assert.match(nsisPatchSource, /\$\(uninstallFailed\): \$R0/);
+assert.match(nsisPatchSource, /appBuilderLibVersion !== '26\.15\.3'/);
 
 assert.match(mainSource, /contextIsolation: true/);
 assert.match(mainSource, /nodeIntegration: false/);
