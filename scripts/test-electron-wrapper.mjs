@@ -40,6 +40,10 @@ assert.match(nsisPatchSource, /\$R2 == "1\.1\.1"/);
 assert.match(nsisPatchSource, /FIND_PROCESS "\$\{APP_EXECUTABLE_FILENAME\}"/);
 assert.match(nsisPatchSource, /Rename "\$installationDir" "\$R3"/);
 assert.match(nsisPatchSource, /\.legacy-1\.1\.1/);
+assert.match(nsisPatchSource, /already quarantined; continuing migration/);
+assert.match(nsisPatchSource, /LegacyKadoshMigrationSucceeded:[\s\S]*StrCpy \$R0 0/);
+assert.match(nsisPatchSource, /legacySuccessWithoutReset/);
+assert.match(nsisPatchSource, /legacySuccessWithReset/);
 assert.doesNotMatch(nsisPatchSource, /RMDir \/r "\$installationDir"/);
 assert.match(nsisPatchSource, /appBuilderLibVersion !== '26\.15\.3'/);
 
