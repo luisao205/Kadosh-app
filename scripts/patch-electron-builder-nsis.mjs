@@ -142,7 +142,11 @@ const legacyMigrationResult = [
   '        !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R1',
   '        ${if} $R1 != 0',
   '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
+  '          IfFileExists "$R3\\*.*" 0 LegacyKadoshMigrationPathReady',
+  '          StrCpy $R3 "$installationDir.legacy-1.1.1-update"',
   '          IfFileExists "$R3\\*.*" LegacyKadoshMigrationFailed 0',
+  '          LegacyKadoshMigrationPathReady:',
+  '          SetOutPath "$PLUGINSDIR"',
   '          ClearErrors',
   '          Rename "$installationDir" "$R3"',
   '          IfErrors LegacyKadoshMigrationFailed LegacyKadoshMigrationSucceeded',
@@ -178,6 +182,27 @@ installUtilSource = installUtilSource.replace(
   ].join('\n'),
   '      ${if} $kadoshPreviousVersion == "1.1.1"'
 );
+
+const legacySingleQuarantinePath = [
+  '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
+  '          IfFileExists "$R3\\*.*" LegacyKadoshMigrationFailed 0',
+  '          ClearErrors',
+  '          Rename "$installationDir" "$R3"'
+].join('\n');
+const legacyRepeatQuarantinePath = [
+  '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
+  '          IfFileExists "$R3\\*.*" 0 LegacyKadoshMigrationPathReady',
+  '          StrCpy $R3 "$installationDir.legacy-1.1.1-update"',
+  '          IfFileExists "$R3\\*.*" LegacyKadoshMigrationFailed 0',
+  '          LegacyKadoshMigrationPathReady:',
+  '          SetOutPath "$PLUGINSDIR"',
+  '          ClearErrors',
+  '          Rename "$installationDir" "$R3"'
+].join('\n');
+
+if (installUtilSource.includes(legacySingleQuarantinePath)) {
+  installUtilSource = installUtilSource.replace(legacySingleQuarantinePath, legacyRepeatQuarantinePath);
+}
 
 // Repair node_modules already patched by the migration version that did not
 // reset $R0 after a successful quarantine.
