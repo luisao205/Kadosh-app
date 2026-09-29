@@ -224,16 +224,22 @@ const SongExportCenter = () => {
                       </div>
                     </section>
 
-                    <section className="mt-4 rounded-3xl border border-white/10 bg-white p-5 text-zinc-900 md:p-7">
-                      <pre className="whitespace-pre-wrap font-mono text-sm font-semibold leading-relaxed">{previewLines.join('\n')}</pre>
+                    <section className="mt-4 rounded-3xl border border-violet-400/15 bg-violet-500/[0.04] p-4 md:p-5">
+                      <div className="mb-3">
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-300">PDF / impresión</p>
+                        <p className="mt-1 text-xs font-semibold text-zinc-500">Abre el formato que necesitas para revisarlo, imprimirlo o guardarlo como PDF.</p>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                        {PDF_ACTIONS.map((action) => (
+                          <button key={action.id} type="button" onClick={() => exportPdf(action.id)} className="kp-card flex items-center gap-3 rounded-2xl border border-white/10 px-4 py-3 text-left text-sm font-black text-zinc-200 hover:border-violet-400/30 hover:bg-violet-500/5">
+                            <FileText size={17} className="shrink-0 text-violet-300" /> {action.label}
+                          </button>
+                        ))}
+                      </div>
                     </section>
 
-                    <section className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                      {PDF_ACTIONS.map((action) => (
-                        <button key={action.id} type="button" onClick={() => exportPdf(action.id)} className="kp-card flex items-center gap-3 rounded-2xl border border-white/10 px-4 py-3 text-left text-sm font-black text-zinc-200 hover:border-violet-400/30 hover:bg-violet-500/5">
-                          <FileText size={17} className="shrink-0 text-violet-300" /> {action.label}
-                        </button>
-                      ))}
+                    <section className="mt-4 rounded-3xl border border-white/10 bg-white p-5 text-zinc-900 md:p-7">
+                      <pre className="whitespace-pre-wrap font-mono text-sm font-semibold leading-relaxed">{previewLines.join('\n')}</pre>
                     </section>
                   </>
                 )}
