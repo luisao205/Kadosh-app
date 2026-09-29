@@ -61,24 +61,27 @@ if (installUtilSource.includes(oldRetry)) {
 }
 
 // Preserve DisplayVersion before the old uninstaller runs. A failing legacy
-// uninstaller can remove its registry entry before returning exit code 2, so
-// re-reading DisplayVersion in CheckResult is too late.
-const previousVersionVar = '  Var /GLOBAL kadoshPreviousVersion';
-if (!installUtilSource.includes(previousVersionVar)) {
-  installUtilSource = replaceOnce(
-    installUtilSource,
-    '  Var /GLOBAL rootKey',
-    ['  Var /GLOBAL rootKey', previousVersionVar].join('\n'),
-    'cached previous version variable'
-  );
-}
-
-// NSIS requires ReadRegStr's root key to be a literal at compile time. The
-// electron-builder readReg macro accepts a runtime root variable for its own
-// call sites, but using it here caused makensis to reject the generated script.
-const previousVersionReadMarker = '# Kadosh migration: cache DisplayVersion with literal registry roots';
+// uninstaller can remove its registry entry before returning exit code 2. R4 is
+// unused by electron-builder's uninstallOldVersion flow, so it safely survives
+// ExecWait and avoids introducing a custom NSIS variable into readReg.
+const previousVersionReadMarker = '# Kadosh migration: cache DisplayVersion before old uninstaller';
 const previousVersionRead = [
   `  ${previousVersionReadMarker}`,
+  '  !insertmacro readReg $R4 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion'
+].join('\n');
+
+// Repair node_modules already patched by experimental cache variants.
+const legacyPreviousVersionVar = '  Var /GLOBAL kadoshPreviousVersion';
+installUtilSource = installUtilSource.replace(`${legacyPreviousVersionVar}\n`, '');
+
+const legacyDynamicPreviousVersionRead = '  !insertmacro readReg $kadoshPreviousVersion "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion';
+if (installUtilSource.includes(legacyDynamicPreviousVersionRead)) {
+  installUtilSource = installUtilSource.replace(legacyDynamicPreviousVersionRead, previousVersionRead);
+}
+
+const legacyLiteralPreviousVersionReadMarker = '# Kadosh migration: cache DisplayVersion with literal registry roots';
+const legacyLiteralPreviousVersionRead = [
+  `  ${legacyLiteralPreviousVersionReadMarker}`,
   '  ${if} $rootKey == "HKEY_CURRENT_USER"',
   '    ReadRegStr $kadoshPreviousVersion HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
   '  ${elseif} $rootKey == "HKEY_LOCAL_MACHINE"',
@@ -89,19 +92,19 @@ const previousVersionRead = [
   '    StrCpy $kadoshPreviousVersion ""',
   '  ${endIf}'
 ].join('\n');
-const legacyPreviousVersionRead = '  !insertmacro readReg $kadoshPreviousVersion "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion';
+if (installUtilSource.includes(legacyLiteralPreviousVersionRead)) {
+  installUtilSource = installUtilSource.replace(legacyLiteralPreviousVersionRead, previousVersionRead);
+}
+
+installUtilSource = installUtilSource.replaceAll('$kadoshPreviousVersion', '$R4');
 
 if (!installUtilSource.includes(previousVersionReadMarker)) {
-  if (installUtilSource.includes(legacyPreviousVersionRead)) {
-    installUtilSource = installUtilSource.replace(legacyPreviousVersionRead, previousVersionRead);
-  } else {
-    installUtilSource = replaceOnce(
-      installUtilSource,
-      '  Exch $rootKey',
-      ['  Exch $rootKey', '', previousVersionRead].join('\n'),
-      'cached previous version read'
-    );
-  }
+  installUtilSource = replaceOnce(
+    installUtilSource,
+    '  Exch $rootKey',
+    ['  Exch $rootKey', '', previousVersionRead].join('\n'),
+    'cached previous version read'
+  );
 }
 
 const legacyPreflightMarker = '# Kadosh legacy 1.1.1 migration: accept a program directory already quarantined by a previous attempt';
@@ -109,7 +112,7 @@ if (!installUtilSource.includes(legacyPreflightMarker)) {
   const oldUninstallerTempLine = '  StrCpy $uninstallerFileNameTemp "$PLUGINSDIR\\old-uninstaller.exe"';
   const legacyPreflight = [
     `  ${legacyPreflightMarker}`,
-    '  ${if} $kadoshPreviousVersion == "1.1.1"',
+    '  ${if} $R4 == "1.1.1"',
     '    StrCpy $R3 "$installationDir.legacy-1.1.1"',
     '    IfFileExists "$R3\\*.*" 0 LegacyKadoshPreflightDone',
     '    IfFileExists "$installationDir\\*.*" LegacyKadoshPreflightDone 0',
@@ -131,13 +134,14 @@ if (!installUtilSource.includes(legacyPreflightMarker)) {
   );
 }
 
-// Repair node_modules already patched by the previous preflight version.
+// Repair node_modules already patched by previous preflight versions. The
+// version must remain the value cached before the old uninstaller executes.
 installUtilSource = installUtilSource.replace(
   [
     '  !insertmacro readReg $R4 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
     '  ${if} $R4 == "1.1.1"'
   ].join('\n'),
-  '  ${if} $kadoshPreviousVersion == "1.1.1"'
+  '  ${if} $R4 == "1.1.1"'
 );
 
 const legacyCheckResult = [
@@ -159,7 +163,7 @@ const legacyMigrationResult = [
   '',
   `    ${legacyMigrationMarker}`,
   '    ${if} $R0 == 2',
-  '      ${if} $kadoshPreviousVersion == "1.1.1"',
+  '      ${if} $R4 == "1.1.1"',
   '        !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R1',
   '        ${if} $R1 != 0',
   '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
@@ -195,13 +199,13 @@ if (!installUtilSource.includes(legacyMigrationMarker)) {
   );
 }
 
-// Repair node_modules already patched by the previous fallback version.
+// Repair node_modules already patched by previous fallback versions.
 installUtilSource = installUtilSource.replace(
   [
     '      !insertmacro readReg $R2 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
     '      ${if} $R2 == "1.1.1"'
   ].join('\n'),
-  '      ${if} $kadoshPreviousVersion == "1.1.1"'
+  '      ${if} $R4 == "1.1.1"'
 );
 
 const legacySingleQuarantinePath = [
