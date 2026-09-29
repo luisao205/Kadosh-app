@@ -3,10 +3,10 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, onSnapshot, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
-import { Save, ArrowLeft, Edit3, AlertCircle, X } from 'lucide-react';
+import { Save, ArrowLeft, Edit3, AlertCircle, X, Scissors, Wand2 } from 'lucide-react';
 import { detectarTonoDesdeAcordes } from '../../utils/musicCore';
 import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
-import { getSectionKey, parsearCancion } from '../../utils/songParser';
+import { getSectionKey, isSongSectionTitle, parsearCancion } from '../../utils/songParser';
 import { MEDIA_LIBRARY_COLLECTION, MEDIA_PROVIDERS, createMediaReference, detectMediaProvider, detectMediaTypeFromUrl } from '../../utils/mediaLibrary';
 import { calculateMediaUsageFields, createOrReuseMediaLibraryResource } from '../../utils/mediaLibraryFirestoreSync';
 import { getSongQualityBadges } from '../../utils/songQuality';
@@ -28,6 +28,43 @@ const normalizeKey = (value, fallback = 'C') => {
   return match || clean || fallback;
 };
 
+
+const isSectionTitle = (value) => isSongSectionTitle(value);
+
+const limpiarTextoCancion = (value) => String(value || '')
+  .replace(/\r\n?/g, '\n')
+  .replace(/[“”]/g, '"')
+  .replace(/[’]/g, "'")
+  .replace(/\u00a0/g, ' ')
+  .replace(/[ \t]+$/gm, '')
+  .replace(/[ \t]{2,}/g, ' ')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
+
+const detectarSeccionesTexto = (value) => {
+  const lines = String(value || '').split(/\r?\n/);
+  let hasSection = false;
+  const processed = lines.map((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#')) {
+      hasSection = true;
+      return line;
+    }
+
+    const bracketMatch = trimmed.match(/^\[(.*?)\]$/);
+    if (bracketMatch && isSectionTitle(bracketMatch[1])) {
+      hasSection = true;
+      return `# ${bracketMatch[1].trim()}`;
+    }
+
+    if (!isSectionTitle(trimmed)) return line;
+    hasSection = true;
+    const title = trimmed.replace(/[:.-]\s*$/, '');
+    return `# ${title}`;
+  });
+
+  return { text: processed.join('\n').trim(), hasSection };
+};
 
 const sortObjectKeys = (value) => {
   if (Array.isArray(value)) return value.map(sortObjectKeys);
@@ -67,7 +104,7 @@ const EditSong = ({ user }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const returnTo = location.state?.returnTo || '/canciones';
-  const { notify } = useFeedback();
+  const { confirm: askConfirm, notify } = useFeedback();
 
   const [titulo, setTitulo] = useState('');
   const [artista, setArtista] = useState('');
@@ -276,6 +313,41 @@ const EditSong = ({ user }) => {
 
   const insertarIndicacion = (indicacion = 'Escribir indicación') => {
     setLetraRaw(prev => prev + (prev && !prev.endsWith('\n') ? '\n' : '') + `{cue: ${indicacion}}\n`);
+  };
+
+  const handleCleanFormat = async () => {
+    const cleaned = limpiarTextoCancion(letraRaw);
+    if (!cleaned) return;
+
+    const hasHeavyCleanup = /\n{3,}|\u00a0|\r/.test(letraRaw);
+    if (hasHeavyCleanup) {
+      const shouldClean = await askConfirm({
+        title: 'Limpiar formato',
+        message: 'Esto limpiará espacios excesivos y caracteres pegados, manteniendo máximo una línea vacía entre bloques. ¿Continuar?',
+        confirmLabel: 'Limpiar',
+        cancelLabel: 'Cancelar',
+      });
+      if (!shouldClean) return;
+    }
+
+    setLetraRaw(cleaned);
+    showToast('Formato limpiado. Revisa la letra antes de guardar.', 'success');
+  };
+
+  const handleDetectSections = () => {
+    const result = detectarSeccionesTexto(letraRaw);
+    if (!result.text) return;
+
+    setLetraRaw(
+      result.hasSection && !result.text.startsWith('#')
+        ? `# Inicio\n${result.text}`
+        : result.text
+    );
+
+    showToast(
+      result.hasSection ? 'Secciones detectadas.' : 'No se encontraron secciones claras.',
+      result.hasSection ? 'success' : 'info'
+    );
   };
 
   const handleAddRecurso = () => {
@@ -1015,6 +1087,25 @@ const EditSong = ({ user }) => {
                 </button>
               ))}
             </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button
+                type="button"
+                onClick={handleCleanFormat}
+                disabled={!letraRaw.trim()}
+                className="px-3 py-1.5 text-xs font-bold bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg border border-amber-200 transition-colors disabled:opacity-50 flex items-center gap-1"
+              >
+                <Scissors size={13}/> Limpiar formato
+              </button>
+              <button
+                type="button"
+                onClick={handleDetectSections}
+                disabled={!letraRaw.trim()}
+                className="px-3 py-1.5 text-xs font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg border border-emerald-200 transition-colors disabled:opacity-50 flex items-center gap-1"
+              >
+                <Wand2 size={13}/> Detectar secciones
+              </button>
+            </div>
+
             <div className="flex flex-wrap gap-2 mb-3">
               {CUE_PRESETS.map(cue => (
                 <button key={cue} type="button" onClick={() => insertarIndicacion(cue)} className="px-3 py-1 text-xs font-bold bg-violet-50 text-violet-700 hover:bg-violet-100 rounded-lg border border-violet-200 transition-colors active:scale-95">
