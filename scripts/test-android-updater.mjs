@@ -14,6 +14,11 @@ const packageJson = JSON.parse(await readFile(new URL('../package.json', import.
 assert.match(manifest, /android\.permission\.REQUEST_INSTALL_PACKAGES/);
 assert.match(manifest, /androidx\.core\.content\.FileProvider/);
 assert.match(mainActivity, /registerPlugin\(KadoshUpdatePlugin\.class\)/);
+assert.match(mainActivity, /navigator\.serviceWorker/);
+assert.match(mainActivity, /getRegistrations\(\)/);
+assert.match(mainActivity, /registration => registration\.unregister\(\)/);
+assert.match(mainActivity, /caches\.keys\(\)/);
+assert.match(mainActivity, /location\.reload\(\)/);
 assert.match(nativePlugin, /@CapacitorPlugin\(name = "KadoshUpdate"\)/);
 assert.match(nativePlugin, /canRequestPackageInstalls\(\)/);
 assert.match(nativePlugin, /ACTION_MANAGE_UNKNOWN_APP_SOURCES/);
