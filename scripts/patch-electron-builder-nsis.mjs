@@ -60,13 +60,35 @@ if (installUtilSource.includes(oldRetry)) {
   fail(`no se encontró el bloque esperado de uninstallOldVersion en app-builder-lib ${appBuilderLibVersion}`);
 }
 
+// Preserve DisplayVersion before the old uninstaller runs. A failing legacy
+// uninstaller can remove its registry entry before returning exit code 2, so
+// re-reading DisplayVersion in CheckResult is too late.
+const previousVersionVar = '  Var /GLOBAL kadoshPreviousVersion';
+if (!installUtilSource.includes(previousVersionVar)) {
+  installUtilSource = replaceOnce(
+    installUtilSource,
+    '  Var /GLOBAL rootKey',
+    ['  Var /GLOBAL rootKey', previousVersionVar].join('\n'),
+    'cached previous version variable'
+  );
+}
+
+const previousVersionRead = '  !insertmacro readReg $kadoshPreviousVersion "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion';
+if (!installUtilSource.includes(previousVersionRead)) {
+  installUtilSource = replaceOnce(
+    installUtilSource,
+    '  Exch $rootKey',
+    ['  Exch $rootKey', '', previousVersionRead].join('\n'),
+    'cached previous version read'
+  );
+}
+
 const legacyPreflightMarker = '# Kadosh legacy 1.1.1 migration: accept a program directory already quarantined by a previous attempt';
 if (!installUtilSource.includes(legacyPreflightMarker)) {
   const oldUninstallerTempLine = '  StrCpy $uninstallerFileNameTemp "$PLUGINSDIR\\old-uninstaller.exe"';
   const legacyPreflight = [
     `  ${legacyPreflightMarker}`,
-    '  !insertmacro readReg $R4 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
-    '  ${if} $R4 == "1.1.1"',
+    '  ${if} $kadoshPreviousVersion == "1.1.1"',
     '    StrCpy $R3 "$installationDir.legacy-1.1.1"',
     '    IfFileExists "$R3\\*.*" 0 LegacyKadoshPreflightDone',
     '    IfFileExists "$installationDir\\*.*" LegacyKadoshPreflightDone 0',
@@ -88,6 +110,15 @@ if (!installUtilSource.includes(legacyPreflightMarker)) {
   );
 }
 
+// Repair node_modules already patched by the previous preflight version.
+installUtilSource = installUtilSource.replace(
+  [
+    '  !insertmacro readReg $R4 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
+    '  ${if} $R4 == "1.1.1"'
+  ].join('\n'),
+  '  ${if} $kadoshPreviousVersion == "1.1.1"'
+);
+
 const legacyCheckResult = [
   '    CheckResult:',
   '      ${if} $R0 == 0',
@@ -107,8 +138,7 @@ const legacyMigrationResult = [
   '',
   `    ${legacyMigrationMarker}`,
   '    ${if} $R0 == 2',
-  '      !insertmacro readReg $R2 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
-  '      ${if} $R2 == "1.1.1"',
+  '      ${if} $kadoshPreviousVersion == "1.1.1"',
   '        !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R1',
   '        ${if} $R1 != 0',
   '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
@@ -140,9 +170,17 @@ if (!installUtilSource.includes(legacyMigrationMarker)) {
   );
 }
 
-// Repair node_modules already patched by the previous migration version: the
-// quarantine succeeded, but $R0 was left as 2, so handleUninstallResult still
-// treated the migration as a failure and showed an MB_OK error dialog.
+// Repair node_modules already patched by the previous fallback version.
+installUtilSource = installUtilSource.replace(
+  [
+    '      !insertmacro readReg $R2 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
+    '      ${if} $R2 == "1.1.1"'
+  ].join('\n'),
+  '      ${if} $kadoshPreviousVersion == "1.1.1"'
+);
+
+// Repair node_modules already patched by the migration version that did not
+// reset $R0 after a successful quarantine.
 const legacySuccessWithoutReset = [
   '          LegacyKadoshMigrationSucceeded:',
   '            DetailPrint "Legacy Kadosh 1.1.1 program directory quarantined for safe migration."',
