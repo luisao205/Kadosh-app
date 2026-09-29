@@ -73,14 +73,35 @@ if (!installUtilSource.includes(previousVersionVar)) {
   );
 }
 
-const previousVersionRead = '  !insertmacro readReg $kadoshPreviousVersion "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion';
-if (!installUtilSource.includes(previousVersionRead)) {
-  installUtilSource = replaceOnce(
-    installUtilSource,
-    '  Exch $rootKey',
-    ['  Exch $rootKey', '', previousVersionRead].join('\n'),
-    'cached previous version read'
-  );
+// NSIS requires ReadRegStr's root key to be a literal at compile time. The
+// electron-builder readReg macro accepts a runtime root variable for its own
+// call sites, but using it here caused makensis to reject the generated script.
+const previousVersionReadMarker = '# Kadosh migration: cache DisplayVersion with literal registry roots';
+const previousVersionRead = [
+  `  ${previousVersionReadMarker}`,
+  '  ${if} $rootKey == "HKEY_CURRENT_USER"',
+  '    ReadRegStr $kadoshPreviousVersion HKEY_CURRENT_USER "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
+  '  ${elseif} $rootKey == "HKEY_LOCAL_MACHINE"',
+  '    ReadRegStr $kadoshPreviousVersion HKEY_LOCAL_MACHINE "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
+  '  ${elseif} $rootKey == "SHELL_CONTEXT"',
+  '    ReadRegStr $kadoshPreviousVersion SHCTX "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
+  '  ${else}',
+  '    StrCpy $kadoshPreviousVersion ""',
+  '  ${endIf}'
+].join('\n');
+const legacyPreviousVersionRead = '  !insertmacro readReg $kadoshPreviousVersion "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion';
+
+if (!installUtilSource.includes(previousVersionReadMarker)) {
+  if (installUtilSource.includes(legacyPreviousVersionRead)) {
+    installUtilSource = installUtilSource.replace(legacyPreviousVersionRead, previousVersionRead);
+  } else {
+    installUtilSource = replaceOnce(
+      installUtilSource,
+      '  Exch $rootKey',
+      ['  Exch $rootKey', '', previousVersionRead].join('\n'),
+      'cached previous version read'
+    );
+  }
 }
 
 const legacyPreflightMarker = '# Kadosh legacy 1.1.1 migration: accept a program directory already quarantined by a previous attempt';
