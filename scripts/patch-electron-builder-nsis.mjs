@@ -98,12 +98,39 @@ if (installUtilSource.includes(legacyLiteralPreviousVersionRead)) {
 
 installUtilSource = installUtilSource.replaceAll('$kadoshPreviousVersion', '$R4');
 
+// An earlier patch anchored on the prefix `Exch $rootKey`, which also matches
+// `Exch $rootKey_uninstallResult` in handleUninstallResult. Repair that exact
+// malformed shape before inserting the cache into uninstallOldVersion.
+const malformedPreviousVersionRead = [
+  '  Exch $rootKey',
+  '',
+  previousVersionRead,
+  '_uninstallResult'
+].join('\n');
+if (installUtilSource.includes(malformedPreviousVersionRead)) {
+  installUtilSource = installUtilSource.replace(malformedPreviousVersionRead, '  Exch $rootKey_uninstallResult');
+}
+
+const uninstallRootExchange = [
+  '  ClearErrors',
+  '  Exch $rootKey',
+  '',
+  '  Push 0'
+].join('\n');
+
 if (!installUtilSource.includes(previousVersionReadMarker)) {
   installUtilSource = replaceOnce(
     installUtilSource,
-    '  Exch $rootKey',
-    ['  Exch $rootKey', '', previousVersionRead].join('\n'),
-    'cached previous version read'
+    uninstallRootExchange,
+    [
+      '  ClearErrors',
+      '  Exch $rootKey',
+      '',
+      previousVersionRead,
+      '',
+      '  Push 0'
+    ].join('\n'),
+    'cached previous version read in uninstallOldVersion'
   );
 }
 
