@@ -2,6 +2,8 @@ import fs from 'node:fs';
 
 const path = 'src/components/admin/EditSong.jsx';
 let content = fs.readFileSync(path, 'utf8');
+const NL = content.includes('\r\n') ? '\r\n' : '\n';
+const withLocalNewlines = (value) => value.replace(/\n/g, NL);
 
 const replaceOnce = (needle, replacement, label) => {
   if (!content.includes(needle)) {
@@ -29,20 +31,20 @@ replaceOnce(
 );
 
 const helperNeedle = "const sortObjectKeys = (value) => {";
-const helperBlock = `const isSectionTitle = (value) => isSongSectionTitle(value);
+const helperBlock = withLocalNewlines(`const isSectionTitle = (value) => isSongSectionTitle(value);
 
 const limpiarTextoCancion = (value) => String(value || '')
-  .replace(/\r\n?/g, '\n')
+  .replace(/\\r\\n?/g, '\\n')
   .replace(/[“”]/g, '"')
   .replace(/[’]/g, "'")
-  .replace(/\u00a0/g, ' ')
-  .replace(/[ \t]+$/gm, '')
-  .replace(/[ \t]{2,}/g, ' ')
-  .replace(/\n{3,}/g, '\n\n')
+  .replace(/\\u00a0/g, ' ')
+  .replace(/[ \\t]+$/gm, '')
+  .replace(/[ \\t]{2,}/g, ' ')
+  .replace(/\\n{3,}/g, '\\n\\n')
   .trim();
 
 const detectarSeccionesTexto = (value) => {
-  const lines = String(value || '').split(/\r?\n/);
+  const lines = String(value || '').split(/\\r?\\n/);
   let hasSection = false;
   const processed = lines.map((line) => {
     const trimmed = line.trim();
@@ -51,7 +53,7 @@ const detectarSeccionesTexto = (value) => {
       return line;
     }
 
-    const bracketMatch = trimmed.match(/^\[(.*?)\]$/);
+    const bracketMatch = trimmed.match(/^\\[(.*?)\\]$/);
     if (bracketMatch && isSectionTitle(bracketMatch[1])) {
       hasSection = true;
       return \`# \${bracketMatch[1].trim()}\`;
@@ -59,22 +61,22 @@ const detectarSeccionesTexto = (value) => {
 
     if (!isSectionTitle(trimmed)) return line;
     hasSection = true;
-    const title = trimmed.replace(/[:.-]\s*$/, '');
+    const title = trimmed.replace(/[:.-]\\s*$/, '');
     return \`# \${title}\`;
   });
 
-  return { text: processed.join('\n').trim(), hasSection };
+  return { text: processed.join('\\n').trim(), hasSection };
 };
 
-`;
+`);
 replaceOnce(helperNeedle, helperBlock + helperNeedle, 'helpers de formato');
 
 const handlerNeedle = "  const handleAddRecurso = () => {";
-const handlerBlock = `  const handleCleanFormat = async () => {
+const handlerBlock = withLocalNewlines(`  const handleCleanFormat = async () => {
     const cleaned = limpiarTextoCancion(letraRaw);
     if (!cleaned) return;
 
-    const hasHeavyCleanup = /\n{3,}|\u00a0|\r/.test(letraRaw);
+    const hasHeavyCleanup = /\\n{3,}|\\u00a0|\\r/.test(letraRaw);
     if (hasHeavyCleanup) {
       const shouldClean = await askConfirm({
         title: 'Limpiar formato',
@@ -95,7 +97,7 @@ const handlerBlock = `  const handleCleanFormat = async () => {
 
     setLetraRaw(
       result.hasSection && !result.text.startsWith('#')
-        ? \`# Inicio\n\${result.text}\`
+        ? \`# Inicio\\n\${result.text}\`
         : result.text
     );
 
@@ -105,13 +107,18 @@ const handlerBlock = `  const handleCleanFormat = async () => {
     );
   };
 
-`;
+`);
 replaceOnce(handlerNeedle, handlerBlock + handlerNeedle, 'handlers de formato');
 
-const buttonNeedle = `            <div className="flex flex-wrap gap-2 mb-3">
-              {CUE_PRESETS.map(cue => (`;
+const cueMarker = '{CUE_PRESETS.map(cue => (';
+const cueIndex = content.indexOf(cueMarker);
+if (cueIndex < 0) throw new Error('No se encontró: CUE_PRESETS');
 
-const buttonBlock = `            <div className="flex flex-wrap gap-2 mb-3">
+const cueContainerStart = content.lastIndexOf('<div className="flex flex-wrap gap-2 mb-3">', cueIndex);
+if (cueContainerStart < 0) throw new Error('No se encontró: contenedor de CUE_PRESETS');
+
+const lineStart = content.lastIndexOf(NL, cueContainerStart) + NL.length;
+const buttonBlock = withLocalNewlines(`            <div className="flex flex-wrap gap-2 mb-3">
               <button
                 type="button"
                 onClick={handleCleanFormat}
@@ -130,8 +137,8 @@ const buttonBlock = `            <div className="flex flex-wrap gap-2 mb-3">
               </button>
             </div>
 
-`;
-replaceOnce(buttonNeedle, buttonBlock + buttonNeedle, 'botones Limpiar/Detectar');
+`);
+content = content.slice(0, lineStart) + buttonBlock + content.slice(lineStart);
 
 fs.writeFileSync(path, content, 'utf8');
 console.log('EditSong actualizado: Limpiar formato + Detectar secciones');
