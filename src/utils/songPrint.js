@@ -150,29 +150,29 @@ export const buildSongPrintHtml = (song, options = {}) => {
 <meta charset="utf-8" />
 <title>${escapeHtml(model.title)} — ${escapeHtml(modeTitle)}</title>
 <style>
-@page { size: A4; margin: 16mm 15mm 17mm; }
+@page { size: A4; margin: 13mm 14mm 14mm; }
 * { box-sizing: border-box; }
-body { margin: 0; color: #18181b; font-family: Arial, Helvetica, sans-serif; font-size: 11pt; line-height: 1.45; }
-header { border-bottom: 2px solid #18181b; padding-bottom: 10px; margin-bottom: 18px; }
-.brand { font-size: 8pt; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; color: #52525b; }
-h1 { margin: 5px 0 2px; font-size: 24pt; line-height: 1.08; }
-.artist { font-size: 11pt; color: #52525b; font-weight: 700; }
-.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-size: 9pt; font-weight: 700; }
+body { margin: 0; color: #18181b; font-family: Arial, Helvetica, sans-serif; font-size: 10.25pt; line-height: 1.32; }
+header { border-bottom: 1.5px solid #18181b; padding-bottom: 7px; margin-bottom: 11px; }
+.brand { font-size: 7pt; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: #71717a; }
+h1 { margin: 3px 0 1px; font-size: 21pt; line-height: 1.05; }
+.artist { font-size: 9.5pt; color: #52525b; font-weight: 700; }
+.meta { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 6px; font-size: 8pt; font-weight: 700; }
 .meta span { white-space: nowrap; }
-.song-section { break-inside: avoid; margin: 0 0 18px; }
-.song-section h2 { margin: 0 0 7px; font-size: 11pt; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid #d4d4d8; padding-bottom: 3px; }
-.lyrics-line { min-height: 1.45em; }
+.song-section { break-inside: auto; page-break-inside: auto; margin: 0 0 10px; }
+.song-section h2 { break-after: avoid-page; page-break-after: avoid; margin: 0 0 4px; font-size: 9.5pt; text-transform: uppercase; letter-spacing: .07em; border-bottom: 1px solid #e4e4e7; padding-bottom: 2px; }
+.lyrics-line, .chords-line, .combined-line, .cue { break-inside: avoid; page-break-inside: avoid; }
+.lyrics-line { min-height: 1.32em; orphans: 2; widows: 2; }
 .chords-line, .combined-line { font-family: "Courier New", monospace; white-space: pre-wrap; font-weight: 700; }
 .chords-line { color: #3f3f46; }
-.combined-line { line-height: 1.55; }
-.cue { margin: 4px 0; font-size: 9pt; font-style: italic; color: #52525b; }
-.blank-line { height: .8em; }
-.structure-row { display: grid; grid-template-columns: 38px 1fr; gap: 10px; padding: 7px 0; border-bottom: 1px solid #e4e4e7; break-inside: avoid; }
-.structure-number { font-size: 10pt; font-weight: 900; color: #71717a; }
-.structure-title { font-size: 11pt; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; }
-.structure-cue { margin-top: 2px; font-size: 9pt; color: #52525b; font-style: italic; }
-footer { position: fixed; bottom: -11mm; left: 0; right: 0; border-top: 1px solid #e4e4e7; padding-top: 4px; font-size: 7.5pt; color: #71717a; display: flex; justify-content: space-between; }
-@media screen { body { max-width: 820px; margin: 24px auto; padding: 24px; box-shadow: 0 15px 50px rgba(0,0,0,.12); } footer { display: none; } }
+.combined-line { line-height: 1.4; }
+.cue { margin: 2px 0; font-size: 8.25pt; font-style: italic; color: #71717a; }
+.blank-line { height: .35em; }
+.structure-row { display: grid; grid-template-columns: 32px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid #e4e4e7; break-inside: avoid; page-break-inside: avoid; }
+.structure-number { font-size: 8.5pt; font-weight: 900; color: #71717a; }
+.structure-title { font-size: 9.5pt; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; }
+.structure-cue { margin-top: 1px; font-size: 8pt; color: #71717a; font-style: italic; }
+@media screen { body { max-width: 820px; margin: 24px auto; padding: 24px; box-shadow: 0 15px 50px rgba(0,0,0,.12); } }
 </style>
 </head>
 <body>
@@ -188,7 +188,6 @@ footer { position: fixed; bottom: -11mm; left: 0; right: 0; border-top: 1px soli
   </div>
 </header>
 <main>${body}</main>
-<footer><span>Kadosh App</span><span>${escapeHtml(model.title)}</span></footer>
 <script>window.addEventListener('load', () => setTimeout(() => window.print(), 150));</script>
 </body>
 </html>`;
