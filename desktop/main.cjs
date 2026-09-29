@@ -51,6 +51,11 @@ const registerRendererProtocol = () => {
   });
 };
 
+const closeManagedOutputWindows = () => {
+  if (!outputWindowManager) return;
+  outputWindowManager.closeAllOutputs();
+};
+
 const createMainWindow = () => {
   Menu.setApplicationMenu(null);
 
@@ -72,6 +77,10 @@ const createMainWindow = () => {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('close', closeManagedOutputWindows);
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 
   if (isDevelopment) {
     mainWindow.loadURL(developmentServerUrl);
@@ -82,44 +91,62 @@ const createMainWindow = () => {
   return mainWindow;
 };
 
-app.whenReady().then(() => {
-  Menu.setApplicationMenu(null);
-  registerRendererProtocol();
-  initializeWindowsStartup({ app });
-  app.on('web-contents-created', (_event, webContents) => {
-    attachNativeWindowBehavior(webContents, BrowserWindow);
-    webContents.setWindowOpenHandler(({ url }) => {
-      if (outputWindowManager?.handleWindowOpen({ openerUrl: webContents.getURL(), targetUrl: url })) return { action: 'deny' };
-      return { action: 'allow' };
+const focusMainWindow = () => {
+  const window = mainWindow;
+  if (!window || window.isDestroyed?.()) return;
+  if (window.isMinimized?.()) window.restore();
+  window.show();
+  window.focus();
+};
+
+const hasSingleInstanceLock = isDevelopment ? true : app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.exit(0);
+} else {
+  if (!isDevelopment) app.on('second-instance', focusMainWindow);
+
+  app.whenReady().then(() => {
+    Menu.setApplicationMenu(null);
+    registerRendererProtocol();
+    initializeWindowsStartup({ app });
+    app.on('web-contents-created', (_event, webContents) => {
+      attachNativeWindowBehavior(webContents, BrowserWindow);
+      webContents.setWindowOpenHandler(({ url }) => {
+        if (outputWindowManager?.handleWindowOpen({ openerUrl: webContents.getURL(), targetUrl: url })) return { action: 'deny' };
+        return { action: 'allow' };
+      });
+    });
+    outputWindowManager = createOutputWindowManager({
+      app,
+      BrowserWindow,
+      screen,
+      ipcMain,
+      getMainWindow: () => mainWindow,
+      isDevelopment,
+      developmentServerUrl,
+      appOrigin: APP_ORIGIN,
+      preloadPath: path.join(__dirname, 'preload.cjs'),
+      iconPath: getIconPath()
+    });
+    outputWindowManager.initialize();
+    createMainWindow();
+    createUpdateManager({
+      app,
+      ipcMain,
+      getMainWindow: () => mainWindow,
+      isDevelopment,
+      developmentServerUrl
+    }).initialize();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
     });
   });
-  outputWindowManager = createOutputWindowManager({
-    app,
-    BrowserWindow,
-    screen,
-    ipcMain,
-    getMainWindow: () => mainWindow,
-    isDevelopment,
-    developmentServerUrl,
-    appOrigin: APP_ORIGIN,
-    preloadPath: path.join(__dirname, 'preload.cjs'),
-    iconPath: getIconPath()
-  });
-  outputWindowManager.initialize();
-  createMainWindow();
-  createUpdateManager({
-    app,
-    ipcMain,
-    getMainWindow: () => mainWindow,
-    isDevelopment,
-    developmentServerUrl
-  }).initialize();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
-  });
-});
+  app.on('before-quit', closeManagedOutputWindows);
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+}

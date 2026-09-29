@@ -94,6 +94,7 @@ assert.deepEqual(await checkHandler({ sender: webContents }), { accepted: false,
 const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const builderConfig = await readFile(new URL('../electron-builder.yml', import.meta.url), 'utf8');
 const preloadSource = await readFile(new URL('../desktop/preload.cjs', import.meta.url), 'utf8');
+const updaterSource = await readFile(new URL('../desktop/updateManager.cjs', import.meta.url), 'utf8');
 const rendererSource = await readFile(new URL('../src/components/admin/DesktopUpdateStatus.jsx', import.meta.url), 'utf8');
 
 assert.equal(packageJson.dependencies['electron-updater'], '6.8.9');
@@ -107,6 +108,10 @@ assert.match(preloadSource, /checkForUpdates/);
 assert.match(preloadSource, /installUpdate/);
 assert.doesNotMatch(preloadSource, /ipcRenderer:\s*ipcRenderer/);
 assert.doesNotMatch(preloadSource, /send:\s*ipcRenderer\.send/);
+assert.match(updaterSource, /updater\.quitAndInstall\(false, true\)/);
+assert.doesNotMatch(updaterSource, /mainWindow\.(close|destroy)\(/);
+assert.doesNotMatch(updaterSource, /app\.(quit|exit)\(/);
+assert.doesNotMatch(updaterSource, /getAppMetrics\(/);
 assert.match(rendererSource, /window\.kadoshDesktop\?\.updater/);
 
 console.log('electron updater contract: OK');

@@ -1,4 +1,4 @@
-export const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|estrofa|pre[\s-]?(?:coro|chorus)|precoro|prechorus|coro|chorus|refr[aá]n|refrain|puente|bridge|tag|vamp|break(?:down)?|coda|solo|rap|final|outro|interludio|interlude|instrumental|ministraci[oó]n|espont[aá]neo|espontaneo)(?:\s*\d+|\s*[:.-])?\s*$/i;
+export const SECTION_TITLE_REGEX = /^\s*(intro|verso|verse|estrofa|pre[\s-]?(?:coro|chorus)|precoro|prechorus|coro|chorus|refr[aá]n|refrain|puente|bridge|tag|vamp|break(?:down)?|coda|solo|rap|final|outro|interludio|interlude|instrumental|ministraci[oó]n|espont[aá]neo|espontaneo)(?:\s*\d+)?(?:\s*[:.\-—–]\s*.+)?\s*$/i;
 
 export const isSongSectionTitle = (value) => SECTION_TITLE_REGEX.test(String(value || '').trim());
 
@@ -57,7 +57,7 @@ export const parsearCancion = (textoRaw) => {
         secciones.push(seccionActual);
       }
 
-      const tokens = lineaLimpia.match(/(\[[^\]]+\]|[^\[\s]+|\s+)/g) || [];
+      const tokens = lineaLimpia.match(/(\[[^\]]+\]|[^\s[]+|\s+)/g) || [];
       const lineaEstructurada = [];
       let palabraActual = [];
       let acordeActual = '';

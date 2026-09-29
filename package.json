@@ -1,16 +1,18 @@
 {
   "name": "sistema-musical",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.1.3",
   "type": "module",
   "main": "desktop/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "build:desktop": "vite build --mode electron",
-    "desktop:dev": "concurrently -k --names VITE,ELECTRON --prefix-colors blue,green \"vite --host 127.0.0.1\" \"wait-on tcp:127.0.0.1:5173 && cmd /d /s /c \\\"set ELECTRON_RUN_AS_NODE=&& electron .\\\"\"",
-    "desktop:start": "cmd /d /s /c \"set ELECTRON_RUN_AS_NODE=&& electron .\"",
-    "desktop:build": "npm run build:desktop && electron-builder --win nsis",
+    "build:android": "vite build --mode android",
+    "android:sync": "npm run build:android && cap sync android",
+    "desktop:dev": "concurrently -k --names VITE,ELECTRON --prefix-colors blue,green \"vite --host 127.0.0.1\" \"wait-on tcp:127.0.0.1:5173 && set ELECTRON_RUN_AS_NODE=&& electron .\"",
+    "desktop:start": "set ELECTRON_RUN_AS_NODE=&& electron .",
+    "desktop:build": "node scripts/patch-electron-builder-nsis.mjs && npm run build:desktop && electron-builder --win nsis --publish never",
     "test:rules": "firebase emulators:exec --only firestore \"node scripts/test-firestore-rules.mjs\"",
     "lint": "eslint .",
     "preview": "vite preview"
