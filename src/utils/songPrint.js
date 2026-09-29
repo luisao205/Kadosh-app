@@ -158,7 +158,7 @@ export const buildSongPrintHtml = (song, options = {}) => {
 <meta charset="utf-8" />
 <title>${escapeHtml(model.title)} — ${escapeHtml(modeTitle)}</title>
 <style>
-@page { size: A4; margin: 16mm 17mm 17mm; }
+@page { size: A4; margin: 0; }
 * { box-sizing: border-box; }
 html { background: #27272a; }
 body { margin: 0; color: #18181b; font-family: Arial, Helvetica, sans-serif; font-size: 10.25pt; line-height: 1.32; background: transparent; }
@@ -188,7 +188,15 @@ h1 { margin: 3px 0 1px; font-size: 21pt; line-height: 1.05; }
 }
 @media print {
   html, body { background: #fff; }
-  .print-sheet { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+  .print-sheet {
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 14mm 16mm 16mm;
+    box-shadow: none;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
 }
 </style>
 </head>
