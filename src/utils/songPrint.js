@@ -114,6 +114,14 @@ export const getSongPreviewLines = (song, options = {}) => {
   return lines;
 };
 
+const trimOuterBlankItems = (items = []) => {
+  let start = 0;
+  let end = items.length;
+  while (start < end && items[start]?.type === 'blank') start += 1;
+  while (end > start && items[end - 1]?.type === 'blank') end -= 1;
+  return items.slice(start, end);
+};
+
 const renderSection = (section, mode, sectionIndex) => {
   if (mode === SONG_PRINT_MODES.STRUCTURE) {
     const cues = section.items
@@ -123,7 +131,7 @@ const renderSection = (section, mode, sectionIndex) => {
     return `<section class="structure-row"><div class="structure-number">${String(sectionIndex + 1).padStart(2, '0')}</div><div><div class="structure-title">${escapeHtml(section.title)}</div>${cues}</div></section>`;
   }
 
-  const body = section.items.map((item) => {
+  const body = trimOuterBlankItems(section.items).map((item) => {
     if (item.type === 'blank') return '<div class="blank-line"></div>';
     if (item.type === 'cue') return `<div class="cue">${escapeHtml(item.text)}</div>`;
     if (mode === SONG_PRINT_MODES.LYRICS) return `<div class="lyrics-line">${escapeHtml(item.lyrics)}</div>`;
@@ -150,9 +158,11 @@ export const buildSongPrintHtml = (song, options = {}) => {
 <meta charset="utf-8" />
 <title>${escapeHtml(model.title)} — ${escapeHtml(modeTitle)}</title>
 <style>
-@page { size: A4; margin: 13mm 14mm 14mm; }
+@page { size: A4; margin: 16mm 17mm 17mm; }
 * { box-sizing: border-box; }
-body { margin: 0; color: #18181b; font-family: Arial, Helvetica, sans-serif; font-size: 10.25pt; line-height: 1.32; }
+html { background: #27272a; }
+body { margin: 0; color: #18181b; font-family: Arial, Helvetica, sans-serif; font-size: 10.25pt; line-height: 1.32; background: transparent; }
+.print-sheet { background: #fff; }
 header { border-bottom: 1.5px solid #18181b; padding-bottom: 7px; margin-bottom: 11px; }
 .brand { font-size: 7pt; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: #71717a; }
 h1 { margin: 3px 0 1px; font-size: 21pt; line-height: 1.05; }
@@ -167,15 +177,23 @@ h1 { margin: 3px 0 1px; font-size: 21pt; line-height: 1.05; }
 .chords-line { color: #3f3f46; }
 .combined-line { line-height: 1.4; }
 .cue { margin: 2px 0; font-size: 8.25pt; font-style: italic; color: #71717a; }
-.blank-line { height: .35em; }
+.blank-line { height: .25em; }
 .structure-row { display: grid; grid-template-columns: 32px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid #e4e4e7; break-inside: avoid; page-break-inside: avoid; }
 .structure-number { font-size: 8.5pt; font-weight: 900; color: #71717a; }
 .structure-title { font-size: 9.5pt; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; }
 .structure-cue { margin-top: 1px; font-size: 8pt; color: #71717a; font-style: italic; }
-@media screen { body { max-width: 820px; margin: 24px auto; padding: 24px; box-shadow: 0 15px 50px rgba(0,0,0,.12); } }
+@media screen {
+  body { min-height: 100vh; padding: 24px; }
+  .print-sheet { width: min(210mm, 100%); min-height: 297mm; margin: 0 auto; padding: 15mm 16mm 18mm; box-shadow: 0 15px 50px rgba(0,0,0,.28); }
+}
+@media print {
+  html, body { background: #fff; }
+  .print-sheet { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+}
 </style>
 </head>
 <body>
+<div class="print-sheet">
 <header>
   <div class="brand">Kadosh App · Repertorio</div>
   <h1>${escapeHtml(model.title)}</h1>
@@ -188,6 +206,7 @@ h1 { margin: 3px 0 1px; font-size: 21pt; line-height: 1.05; }
   </div>
 </header>
 <main>${body}</main>
+</div>
 <script>window.addEventListener('load', () => setTimeout(() => window.print(), 150));</script>
 </body>
 </html>`;
