@@ -8,7 +8,7 @@ const builderConfig = await readFile(new URL('../electron-builder.yml', import.m
 const nsisPatchSource = await readFile(new URL('./patch-electron-builder-nsis.mjs', import.meta.url), 'utf8');
 
 assert.equal(packageJson.main, 'desktop/main.cjs');
-assert.equal(packageJson.version, '1.1.4');
+assert.match(packageJson.version, /^\d+\.\d+\.\d+$/);
 assert.match(packageJson.scripts['desktop:dev'], /vite --host 127\.0\.0\.1/);
 assert.match(packageJson.scripts['desktop:dev'], /wait-on tcp:127\.0\.0\.1:5173/);
 assert.match(packageJson.scripts['desktop:dev'], /electron \./);
@@ -34,11 +34,11 @@ assert.match(nsisPatchSource, /allowSource\.replaceAll\(legacyCmdPathToken, dire
 assert.doesNotMatch(nsisPatchSource, /processPathFilter/);
 assert.doesNotMatch(nsisPatchSource, /\$\$_\.Name/);
 assert.match(nsisPatchSource, /\$\(uninstallFailed\): \$R0/);
-assert.match(nsisPatchSource, /legacy 1\.1\.1 migration/);
+assert.match(nsisPatchSource, /Kadosh update migration/);
 assert.match(nsisPatchSource, /previousVersionReadMarker/);
 assert.match(nsisPatchSource, /cache DisplayVersion before old uninstaller/);
 assert.match(nsisPatchSource, /readReg \$R4/);
-assert.match(nsisPatchSource, /\$R4 == "1\.1\.1"/);
+assert.match(nsisPatchSource, /\$R4 != ""/);
 assert.match(nsisPatchSource, /legacyPreviousVersionVar/);
 assert.match(nsisPatchSource, /legacyDynamicPreviousVersionRead/);
 assert.match(nsisPatchSource, /legacyLiteralPreviousVersionRead/);
@@ -49,8 +49,8 @@ assert.match(nsisPatchSource, /uninstallRootExchange/);
 assert.match(nsisPatchSource, /cached previous version read in uninstallOldVersion/);
 assert.match(nsisPatchSource, /FIND_PROCESS "\$\{APP_EXECUTABLE_FILENAME\}"/);
 assert.match(nsisPatchSource, /Rename "\$installationDir" "\$R3"/);
-assert.match(nsisPatchSource, /\.legacy-1\.1\.1/);
-assert.match(nsisPatchSource, /\.legacy-1\.1\.1-update/);
+assert.match(nsisPatchSource, /\.previous-\$R4/);
+assert.match(nsisPatchSource, /\.previous-\$R4-update/);
 assert.match(nsisPatchSource, /SetOutPath "\$PLUGINSDIR"/);
 assert.match(nsisPatchSource, /LegacyKadoshMigrationPathReady/);
 assert.match(nsisPatchSource, /already quarantined; continuing migration/);

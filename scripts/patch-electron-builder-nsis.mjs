@@ -134,16 +134,16 @@ if (!installUtilSource.includes(previousVersionReadMarker)) {
   );
 }
 
-const legacyPreflightMarker = '# Kadosh legacy 1.1.1 migration: accept a program directory already quarantined by a previous attempt';
+const legacyPreflightMarker = '# Kadosh update migration: accept a program directory already quarantined by a previous attempt';
 if (!installUtilSource.includes(legacyPreflightMarker)) {
   const oldUninstallerTempLine = '  StrCpy $uninstallerFileNameTemp "$PLUGINSDIR\\old-uninstaller.exe"';
   const legacyPreflight = [
     `  ${legacyPreflightMarker}`,
-    '  ${if} $R4 == "1.1.1"',
-    '    StrCpy $R3 "$installationDir.legacy-1.1.1"',
+    '  ${if} $R4 != ""',
+    '    StrCpy $R3 "$installationDir.previous-$R4"',
     '    IfFileExists "$R3\\*.*" 0 LegacyKadoshPreflightDone',
     '    IfFileExists "$installationDir\\*.*" LegacyKadoshPreflightDone 0',
-    '    DetailPrint "Legacy Kadosh 1.1.1 program directory was already quarantined; continuing migration."',
+    '    DetailPrint "Previous Kadosh program directory was already quarantined; continuing migration."',
     '    StrCpy $R0 0',
     '    ClearErrors',
     '    Return',
@@ -166,9 +166,9 @@ if (!installUtilSource.includes(legacyPreflightMarker)) {
 installUtilSource = installUtilSource.replace(
   [
     '  !insertmacro readReg $R4 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
-    '  ${if} $R4 == "1.1.1"'
+    '  ${if} $R4 != ""'
   ].join('\n'),
-  '  ${if} $R4 == "1.1.1"'
+  '  ${if} $R4 != ""'
 );
 
 const legacyCheckResult = [
@@ -181,7 +181,7 @@ const legacyCheckResult = [
   '    Goto UninstallLoop'
 ].join('\n');
 
-const legacyMigrationMarker = '# Kadosh legacy 1.1.1 migration: quarantine old program directory after legacy uninstaller exit code 2';
+const legacyMigrationMarker = '# Kadosh update migration: quarantine old program directory after legacy uninstaller exit code 2';
 const legacyMigrationResult = [
   '    CheckResult:',
   '      ${if} $R0 == 0',
@@ -190,12 +190,12 @@ const legacyMigrationResult = [
   '',
   `    ${legacyMigrationMarker}`,
   '    ${if} $R0 == 2',
-  '      ${if} $R4 == "1.1.1"',
+  '      ${if} $R4 != ""',
   '        !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R1',
   '        ${if} $R1 != 0',
-  '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
+  '          StrCpy $R3 "$installationDir.previous-$R4"',
   '          IfFileExists "$R3\\*.*" 0 LegacyKadoshMigrationPathReady',
-  '          StrCpy $R3 "$installationDir.legacy-1.1.1-update"',
+  '          StrCpy $R3 "$installationDir.previous-$R4-update"',
   '          IfFileExists "$R3\\*.*" LegacyKadoshMigrationFailed 0',
   '          LegacyKadoshMigrationPathReady:',
   '          SetOutPath "$PLUGINSDIR"',
@@ -203,7 +203,7 @@ const legacyMigrationResult = [
   '          Rename "$installationDir" "$R3"',
   '          IfErrors LegacyKadoshMigrationFailed LegacyKadoshMigrationSucceeded',
   '          LegacyKadoshMigrationSucceeded:',
-  '            DetailPrint "Legacy Kadosh 1.1.1 program directory quarantined for safe migration."',
+  '            DetailPrint "Previous Kadosh program directory quarantined for safe migration."',
   '            StrCpy $R0 0',
   '            ClearErrors',
   '            Return',
@@ -232,19 +232,19 @@ installUtilSource = installUtilSource.replace(
     '      !insertmacro readReg $R2 "$rootKey" "${UNINSTALL_REGISTRY_KEY}" DisplayVersion',
     '      ${if} $R2 == "1.1.1"'
   ].join('\n'),
-  '      ${if} $R4 == "1.1.1"'
+  '      ${if} $R4 != ""'
 );
 
 const legacySingleQuarantinePath = [
-  '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
+  '          StrCpy $R3 "$installationDir.previous-$R4"',
   '          IfFileExists "$R3\\*.*" LegacyKadoshMigrationFailed 0',
   '          ClearErrors',
   '          Rename "$installationDir" "$R3"'
 ].join('\n');
 const legacyRepeatQuarantinePath = [
-  '          StrCpy $R3 "$installationDir.legacy-1.1.1"',
+  '          StrCpy $R3 "$installationDir.previous-$R4"',
   '          IfFileExists "$R3\\*.*" 0 LegacyKadoshMigrationPathReady',
-  '          StrCpy $R3 "$installationDir.legacy-1.1.1-update"',
+  '          StrCpy $R3 "$installationDir.previous-$R4-update"',
   '          IfFileExists "$R3\\*.*" LegacyKadoshMigrationFailed 0',
   '          LegacyKadoshMigrationPathReady:',
   '          SetOutPath "$PLUGINSDIR"',
@@ -260,13 +260,13 @@ if (installUtilSource.includes(legacySingleQuarantinePath)) {
 // reset $R0 after a successful quarantine.
 const legacySuccessWithoutReset = [
   '          LegacyKadoshMigrationSucceeded:',
-  '            DetailPrint "Legacy Kadosh 1.1.1 program directory quarantined for safe migration."',
+  '            DetailPrint "Previous Kadosh program directory quarantined for safe migration."',
   '            ClearErrors',
   '            Return'
 ].join('\n');
 const legacySuccessWithReset = [
   '          LegacyKadoshMigrationSucceeded:',
-  '            DetailPrint "Legacy Kadosh 1.1.1 program directory quarantined for safe migration."',
+  '            DetailPrint "Previous Kadosh program directory quarantined for safe migration."',
   '            StrCpy $R0 0',
   '            ClearErrors',
   '            Return'
@@ -278,4 +278,4 @@ if (installUtilSource.includes(legacySuccessWithoutReset)) {
 
 writeFileSync(installUtilPath, installUtilSource, 'utf8');
 
-console.log(`electron-builder NSIS compatibility patch: OK (app-builder-lib ${appBuilderLibVersion}, tasklist exact name + legacy 1.1.1 migration)`);
+console.log(`electron-builder NSIS compatibility patch: OK (app-builder-lib ${appBuilderLibVersion}, tasklist exact name + generic update migration)`);
