@@ -48,7 +48,7 @@ const AndroidUpdateGate = ({ children }) => {
     const refreshPublicConfig = async () => {
       try {
         const nextConfig = await fetchPublishedAndroidUpdate();
-        if (!cancelled && !authenticated) setConfig(nextConfig);
+        if (!cancelled) setConfig(nextConfig);
       } catch (error) {
         // La Function se desplegará junto con este updater. Mientras tanto,
         // una sesión autenticada seguirá usando el listener Firestore existente.
@@ -78,7 +78,6 @@ const AndroidUpdateGate = ({ children }) => {
       unsubscribeUpdates = null;
 
       if (authenticated) {
-        stopPublicPolling();
         subscribeAuthenticatedConfig();
       } else {
         startPublicPolling();
@@ -88,7 +87,7 @@ const AndroidUpdateGate = ({ children }) => {
     CapacitorApp.addListener('appStateChange', ({ isActive }) => {
       if (!isActive) return;
       void refreshInstalledVersion();
-      if (!authenticated) void refreshPublicConfig();
+      void refreshPublicConfig();
     }).then((handle) => {
       if (cancelled) handle.remove();
       else appStateListener = handle;
