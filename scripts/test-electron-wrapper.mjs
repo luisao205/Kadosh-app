@@ -8,7 +8,7 @@ const builderConfig = await readFile(new URL('../electron-builder.yml', import.m
 const nsisPatchSource = await readFile(new URL('./patch-electron-builder-nsis.mjs', import.meta.url), 'utf8');
 
 assert.equal(packageJson.main, 'desktop/main.cjs');
-assert.equal(packageJson.version, '1.1.2');
+assert.equal(packageJson.version, '1.1.3');
 assert.match(packageJson.scripts['desktop:dev'], /vite --host 127\.0\.0\.1/);
 assert.match(packageJson.scripts['desktop:dev'], /wait-on tcp:127\.0\.0\.1:5173/);
 assert.match(packageJson.scripts['desktop:dev'], /electron \./);
@@ -41,8 +41,13 @@ assert.match(nsisPatchSource, /\$kadoshPreviousVersion == "1\.1\.1"/);
 assert.match(nsisPatchSource, /FIND_PROCESS "\$\{APP_EXECUTABLE_FILENAME\}"/);
 assert.match(nsisPatchSource, /Rename "\$installationDir" "\$R3"/);
 assert.match(nsisPatchSource, /\.legacy-1\.1\.1/);
+assert.match(nsisPatchSource, /\.legacy-1\.1\.1-update/);
+assert.match(nsisPatchSource, /SetOutPath "\$PLUGINSDIR"/);
+assert.match(nsisPatchSource, /LegacyKadoshMigrationPathReady/);
 assert.match(nsisPatchSource, /already quarantined; continuing migration/);
 assert.match(nsisPatchSource, /LegacyKadoshMigrationSucceeded:[\s\S]*StrCpy \$R0 0/);
+assert.match(nsisPatchSource, /legacySingleQuarantinePath/);
+assert.match(nsisPatchSource, /legacyRepeatQuarantinePath/);
 assert.match(nsisPatchSource, /legacySuccessWithoutReset/);
 assert.match(nsisPatchSource, /legacySuccessWithReset/);
 assert.doesNotMatch(nsisPatchSource, /RMDir \/r "\$installationDir"/);
