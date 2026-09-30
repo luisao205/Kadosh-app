@@ -27,6 +27,7 @@ import {
   isMultitrackCacheSupported,
   prepareMultitrackSetlist,
 } from '../../utils/multitrackAudioCache';
+import { getMusicalPosition } from '../../utils/musicalGrid';
 
 const EMPTY_PLAYBACK = {
   playing: false,
@@ -71,6 +72,7 @@ const MultitrackLive = ({ user }) => {
   const [prepareSummary, setPrepareSummary] = useState(null);
   const [checkingReadiness, setCheckingReadiness] = useState(false);
   const [readiness, setReadiness] = useState(null);
+  const [gridOffsets, setGridOffsets] = useState({});
 
   useEffect(() => {
     let cancelled = false;
@@ -217,6 +219,24 @@ const MultitrackLive = ({ user }) => {
     (readiness?.songs || []).map((song) => [String(song.key), song])
   ), [readiness]);
 
+  const currentSongGridKey = String(currentSong?.id || currentSong?.setlistItemId || '');
+  const currentBpm = Number(currentSong?.bpm) || 0;
+  const currentBeatsPerBar = Math.max(1, Math.min(16, Math.round(
+    Number(
+      currentSong?.playbackConfig?.timeSignature?.[0]
+      || currentSong?.playbackConfig?.beatsPerBar
+      || currentSong?.beatsPerBar
+      || 4
+    ) || 4
+  )));
+  const currentGridOffset = Number(gridOffsets[currentSongGridKey]) || 0;
+  const musicalPosition = useMemo(() => getMusicalPosition({
+    time: playback.currentTime,
+    bpm: currentBpm,
+    beatsPerBar: currentBeatsPerBar,
+    gridOffsetSeconds: currentGridOffset,
+  }), [playback.currentTime, currentBpm, currentBeatsPerBar, currentGridOffset]);
+
   const togglePlay = async () => {
     if (loadingAudio || audioError || playback.stems.length === 0) return;
     if (engineRef.current.getState().playing) engineRef.current.pause();
@@ -258,6 +278,22 @@ const MultitrackLive = ({ user }) => {
   const changeMasterVolume = (value) => {
     engineRef.current.setMasterVolume(value);
     setPlayback(engineRef.current.getState());
+  };
+
+  const markGridStart = () => {
+    if (!currentSongGridKey || !currentBpm || playback.stems.length === 0) return;
+    setGridOffsets((previous) => ({
+      ...previous,
+      [currentSongGridKey]: playback.currentTime,
+    }));
+  };
+
+  const resetGridStart = () => {
+    if (!currentSongGridKey) return;
+    setGridOffsets((previous) => ({
+      ...previous,
+      [currentSongGridKey]: 0,
+    }));
   };
 
   const handlePrepareSetlist = async () => {
@@ -328,7 +364,7 @@ const MultitrackLive = ({ user }) => {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="truncate text-base font-black md:text-lg">Multitrack Live</p>
-                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 1.5</span>
+                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 2A</span>
               </div>
               <p className="truncate text-[11px] font-semibold text-zinc-500">{evento?.titulo || 'Setlist'} · Operador: {user?.nombre || 'Usuario'}</p>
             </div>
@@ -492,6 +528,77 @@ const MultitrackLive = ({ user }) => {
                   <div className="rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-right">
                     <p className="font-mono text-2xl font-black tabular-nums text-white md:text-3xl">{formatTime(playback.currentTime)}</p>
                     <p className="mt-1 font-mono text-[10px] font-bold text-zinc-600">de {formatTime(playback.duration)}</p>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+                  <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.05] p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">Reloj musical</p>
+                        <p className="mt-1 text-[10px] font-semibold text-zinc-500">Base para compases, secciones y loops cuantizados.</p>
+                      </div>
+                      <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 font-mono text-[10px] font-black text-zinc-400">{currentBeatsPerBar}/4</span>
+                    </div>
+
+                    {currentBpm > 0 ? (
+                      <>
+                        <div className="mt-4 grid grid-cols-3 gap-2">
+                          <div className="rounded-xl border border-white/8 bg-black/25 p-3 text-center">
+                            <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Compás</p>
+                            <p className="mt-1 font-mono text-2xl font-black text-white">{musicalPosition.beforeStart ? 'PRE' : musicalPosition.bar}</p>
+                          </div>
+                          <div className="rounded-xl border border-white/8 bg-black/25 p-3 text-center">
+                            <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Beat</p>
+                            <p className="mt-1 font-mono text-2xl font-black text-cyan-200">{musicalPosition.beforeStart ? '--' : musicalPosition.beat}<span className="text-xs text-zinc-600">/{currentBeatsPerBar}</span></p>
+                          </div>
+                          <div className="rounded-xl border border-white/8 bg-black/25 p-3 text-center">
+                            <p className="text-[9px] font-black uppercase tracking-widest text-zinc-600">BPM</p>
+                            <p className="mt-1 font-mono text-2xl font-black text-white">{currentBpm}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                          {Array.from({ length: currentBeatsPerBar }, (_, beatIndex) => {
+                            const activeBeat = !musicalPosition.beforeStart && musicalPosition.beat === beatIndex + 1;
+                            return (
+                              <span
+                                key={beatIndex}
+                                className={'h-2.5 flex-1 rounded-full transition-colors ' + (activeBeat ? 'bg-cyan-300' : 'bg-zinc-800')}
+                              />
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="mt-4 rounded-xl border border-amber-400/20 bg-amber-400/[0.06] p-3 text-xs font-bold text-amber-200">
+                        Esta canción no tiene BPM configurado. El reloj musical queda desactivado hasta definirlo.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-zinc-400">Alineación</p>
+                    <p className="mt-2 text-[10px] font-semibold leading-relaxed text-zinc-600">Marca el instante exacto donde comienza el compás 1. Por ahora esta referencia vive solo durante esta sesión.</p>
+                    <p className="mt-3 font-mono text-xs font-black text-zinc-300">Inicio: {formatTime(currentGridOffset)}</p>
+                    <div className="mt-3 grid gap-2">
+                      <button
+                        type="button"
+                        onClick={markGridStart}
+                        disabled={!currentBpm || playback.stems.length === 0}
+                        className="rounded-xl bg-cyan-400 px-3 py-2.5 text-[10px] font-black uppercase tracking-wide text-zinc-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-600"
+                      >
+                        Marcar compás 1 aquí
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetGridStart}
+                        disabled={!currentSongGridKey || currentGridOffset === 0}
+                        className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-[10px] font-black uppercase tracking-wide text-zinc-400 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+                      >
+                        Reiniciar a 0:00
+                      </button>
+                    </div>
                   </div>
                 </div>
 
