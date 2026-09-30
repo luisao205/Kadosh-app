@@ -2,7 +2,7 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, updateDoc, collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '../../config/firebase';
-import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX, Cake, Edit3 } from 'lucide-react';
+import { Calendar, Music, Users, ArrowLeft, Play, Mic2, Tag, FileText, Info, Printer, MessageSquare, Send, Trash2, Clock, CheckCircle2, XCircle, Clock4, Presentation, Monitor, AlertCircle, Pause, SkipBack, SkipForward, PlayCircle, X, ChevronDown, ListMusic, SlidersHorizontal, Volume2, VolumeX, Cake, Edit3, Radio } from 'lucide-react';
 import { calcularOffsetSemitonos, transponerNota, traducirAcorde } from '../../utils/musicCore';
 import { parsearCancion } from '../../utils/songParser';
 import { getEventChoirsForSong, getEventSingerForSong, getSingerTone, getSongBaseKey } from '../../utils/songAssignments';
@@ -422,6 +422,11 @@ const SetlistViewer = ({ user }) => {
           </div>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+          {playlist.some(song => (Array.isArray(song?.multitracks) && song.multitracks.some(track => track?.url)) || song?.audioUrl) && (
+            <button onClick={() => navigate(`/multitrack-live/${id}`)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 text-white rounded-xl hover:bg-sky-500 font-bold text-sm shadow-sm transition-colors active:scale-95 w-full sm:w-max">
+              <Radio size={16} /> Multitrack Live
+            </button>
+          )}
           {playlist.length > 0 && (
             <button onClick={() => { setShowEnsayoPlayer(true); setCurrentTrackIdx(0); }} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 font-bold text-sm shadow-sm transition-colors active:scale-95 w-full sm:w-max animate-pulse">
               <PlayCircle size={16} /> Modo Ensayo

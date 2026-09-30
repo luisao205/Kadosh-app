@@ -8,6 +8,7 @@ import OutputRouter from './components/live/OutputRouter';
 import StageDisplay from './components/live/StageDisplay';
 import StageDisplayMusicos from './components/live/StageDisplayMusicos';
 import MultimediaHub from './components/live/MultimediaHub';
+import MultitrackLive from './components/live/MultitrackLive';
 import AdminLayout from './components/layout/AdminLayout';
 import AdminDashboard from './components/admin/AdminDashboard';
 import Login from './components/layout/Login';
@@ -149,10 +150,10 @@ function App() {
           });
 
           let perm = await PushNotifications.requestPermissions();
-          
+
           if (perm.receive === 'granted') {
             PushNotifications.removeAllListeners();
-            
+
             PushNotifications.addListener('registration', async (token) => {
               // Actualizamos el token siempre para asegurar que no sea uno viejo
               const userRef = doc(db, 'usuarios', uid);
@@ -179,10 +180,10 @@ function App() {
           // 💻 MODO WEB
           const messaging = await getMessagingIfSupported();
           if (!messaging || !('Notification' in window)) return;
-          
+
           const permission = await Notification.requestPermission();
           let registration = await navigator.serviceWorker.ready;
-          
+
           if (!registration) return;
 
 
@@ -206,7 +207,7 @@ function App() {
     const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         const docRef = doc(db, 'usuarios', firebaseUser.uid);
-        
+
         const docSnap = await getDoc(docRef);
 
         let initialUserData = docSnap.exists() ? docSnap.data() : null;
@@ -343,22 +344,25 @@ function App() {
         <Route path="/anuncios" element={canManageAnnouncements(user) ? <AdminLayout user={user}><AnnouncementManagement user={user} /></AdminLayout> : <Navigate to="/" replace />} />
         <Route path="/setlist/:id" element={<ProtectedAdminRoute user={user} allowed={canViewEventsAndSetlists(user)} message="Tu rol no tiene acceso a este setlist."><SetlistViewer user={user} /></ProtectedAdminRoute>} />
         <Route path="/perfil" element={<AdminLayout user={user}><UserProfile user={user} /></AdminLayout>} />
-        
+
+        {/* Multitrack Live - motor independiente del modo ensayo */}
+        <Route path="/multitrack-live/:eventoId" element={<ProtectedLiveRoute allowed={canViewEventsAndSetlists(user)} message="Tu rol no tiene acceso a Multitrack Live."><MultitrackLive user={user} /></ProtectedLiveRoute>} />
+
         {/* Ruta del Modo Culto (Pantalla Completa, SIN Layout) */}
         <Route path="/live/:id" element={
           <LiveModeUI user={user} esGuitarrista={true} preferences={userPreferences} />
         } />
-        
+
         {/* Ruta Pública del Proyector para la Congregación */}
         <Route path="/proyector/:eventoId" element={<Proyector user={user} />} />
         <Route path="/predicador/:eventoId" element={<PreacherDisplay user={user} />} />
         <Route path="/output/:eventoId/:outputId" element={<OutputRouter user={user} />} />
         <Route path="/output/global/:outputId" element={<OutputRouter user={user} />} />
-        
+
         {/* Ruta Privada de Retorno para los Másicos en Tarima */}
         <Route path="/retorno/:eventoId" element={<StageDisplay />} />
         <Route path="/retorno-musicos/:eventoId" element={<StageDisplayMusicos user={user} />} />
-        
+
         {/* Ruta del Controlador Multimedia */}
         <Route path="/control-proyector/:eventoId" element={<ProtectedLiveRoute allowed={canAccessController(user)} message="Solo el equipo multimedia autorizado puede abrir el controlador."><ProyectorController user={user} /></ProtectedLiveRoute>} />
         </Routes>
