@@ -84,6 +84,7 @@ const MultitrackLive = ({ user }) => {
   const [sectionDraft, setSectionDraft] = useState({ label: '', bar: 1 });
   const [savingLiveMap, setSavingLiveMap] = useState(false);
   const [liveMapNotice, setLiveMapNotice] = useState('');
+  const [navigationNotice, setNavigationNotice] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -359,6 +360,7 @@ const MultitrackLive = ({ user }) => {
   const stopPlayback = () => {
     engineRef.current.stop();
     setPlayback(engineRef.current.getState());
+    setNavigationNotice('');
   };
 
   const seekPlayback = async (event) => {
@@ -368,6 +370,11 @@ const MultitrackLive = ({ user }) => {
 
   const changeSong = (nextIndex) => {
     if (nextIndex < 0 || nextIndex >= playlist.length || nextIndex === currentIndex) return;
+    if (liveRunnerMode && playback.playing) {
+      setNavigationNotice('La canción sigue reproduciéndose. Pulsa Stop o Pausa antes de cambiar de tema.');
+      return;
+    }
+    setNavigationNotice('');
     engineRef.current.stop();
     setCurrentIndex(nextIndex);
   };
@@ -841,6 +848,7 @@ const MultitrackLive = ({ user }) => {
             {playlist.map((song, index) => {
               const count = getSongAudioCount(song);
               const active = index === currentIndex;
+              const next = liveRunnerMode && index === currentIndex + 1;
               const songReadiness = readinessByKey.get(String(song.setlistItemId));
               const ready = songReadiness?.status === 'ready';
               const partial = songReadiness?.status === 'partial';
@@ -849,12 +857,16 @@ const MultitrackLive = ({ user }) => {
                   key={song.setlistItemId}
                   type="button"
                   onClick={() => changeSong(index)}
-                  className={`min-w-[230px] rounded-2xl border p-3 text-left transition-all xl:min-w-0 ${active ? 'border-emerald-400/40 bg-emerald-400/10 shadow-[0_0_25px_rgba(16,185,129,.08)]' : 'border-white/8 bg-black/20 hover:border-white/20 hover:bg-white/[0.04]'}`}
+                  className={`min-w-[230px] rounded-2xl border p-3 text-left transition-all xl:min-w-0 ${active ? 'border-emerald-400/40 bg-emerald-400/10 shadow-[0_0_25px_rgba(16,185,129,.08)]' : next ? 'border-cyan-400/25 bg-cyan-400/[0.055] hover:border-cyan-300/40' : 'border-white/8 bg-black/20 hover:border-white/20 hover:bg-white/[0.04]'}`}
                 >
                   <div className="flex items-start gap-3">
                     <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-black ${active ? 'bg-emerald-400 text-zinc-950' : 'bg-white/8 text-zinc-500'}`}>{index + 1}</span>
                     <div className="min-w-0 flex-1">
-                      <p className={`truncate text-sm font-black ${active ? 'text-white' : 'text-zinc-300'}`}>{song.titulo}</p>
+                      <div className="flex items-center gap-2">
+                        <p className={`min-w-0 flex-1 truncate text-sm font-black ${active ? 'text-white' : 'text-zinc-300'}`}>{song.titulo}</p>
+                        {liveRunnerMode && active && <span className="shrink-0 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-emerald-300">Actual</span>}
+                        {next && <span className="shrink-0 rounded-full border border-cyan-400/25 bg-cyan-400/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-cyan-200">Siguiente</span>}
+                      </div>
                       <p className="mt-1 truncate text-[10px] font-semibold text-zinc-600">{song.artista || 'Sin artista'} · {song.bpm || '--'} BPM</p>
                       <div className="mt-2 flex items-center gap-1.5">
                         {count === 0 ? (
@@ -902,6 +914,19 @@ const MultitrackLive = ({ user }) => {
                     <p className="mt-1 font-mono text-[10px] font-bold text-zinc-600">de {formatTime(playback.duration)}</p>
                   </div>
                 </div>
+
+                {liveRunnerMode && (
+                  <div className="mt-5 grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-emerald-400/25 bg-emerald-400/[0.07] p-3">
+                      <p className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300">Ahora en Live</p>
+                      <p className="mt-1 truncate text-sm font-black text-white">{currentSong.titulo}</p>
+                    </div>
+                    <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.045] p-3">
+                      <p className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-300">Siguiente</p>
+                      <p className="mt-1 truncate text-sm font-black text-zinc-200">{playlist[currentIndex + 1]?.titulo || 'Fin del setlist'}</p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
                   <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.05] p-4">
@@ -1182,6 +1207,12 @@ const MultitrackLive = ({ user }) => {
                       </div>
                       <div className="font-mono text-sm font-black text-zinc-300">{formatTime(playback.currentTime)} / {formatTime(playback.duration)}</div>
                     </div>
+                    {navigationNotice && (
+                      <div className="mt-3 flex items-center gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.07] px-3 py-2 text-[10px] font-bold text-amber-200">
+                        <AlertTriangle size={14} className="shrink-0" />
+                        {navigationNotice}
+                      </div>
+                    )}
                     <div className="mt-4 grid grid-cols-[60px_60px_minmax(120px,1fr)_60px] items-center gap-3">
                       <button type="button" onClick={() => changeSong(currentIndex - 1)} disabled={currentIndex === 0} className="flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 disabled:opacity-25" title="Canción anterior"><SkipBack size={22} /></button>
                       <button type="button" onClick={stopPlayback} disabled={loadingAudio || playback.stems.length === 0} className="flex h-14 items-center justify-center rounded-2xl border border-red-400/20 bg-red-400/10 text-red-200 hover:bg-red-400/20 disabled:opacity-25" title="Stop"><Square size={20} fill="currentColor" /></button>
