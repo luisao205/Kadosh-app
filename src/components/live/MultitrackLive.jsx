@@ -22,6 +22,7 @@ import {
 import { db } from '../../config/firebase';
 import { getEventSetlistItems, getEventSongIds } from '../../utils/setlistUtils';
 import MultitrackPlaybackEngine from '../../utils/multitrackPlaybackEngine';
+import { isMultitrackCacheSupported, prepareMultitrackSetlist } from '../../utils/multitrackAudioCache';
 
 const EMPTY_PLAYBACK = {
   playing: false,
@@ -57,10 +58,13 @@ const MultitrackLive = ({ user }) => {
   const [setlistError, setSetlistError] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loadingAudio, setLoadingAudio] = useState(false);
-  const [loadProgress, setLoadProgress] = useState({ completed: 0, total: 0 });
+  const [loadProgress, setLoadProgress] = useState({ completed: 0, total: 0, cacheHits: 0 });
   const [audioError, setAudioError] = useState('');
   const [stemErrors, setStemErrors] = useState([]);
   const [playback, setPlayback] = useState(EMPTY_PLAYBACK);
+  const [preparingSetlist, setPreparingSetlist] = useState(false);
+  const [prepareProgress, setPrepareProgress] = useState({ completed: 0, total: 0, cached: 0, downloaded: 0, errors: 0 });
+  const [prepareSummary, setPrepareSummary] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,7 +131,7 @@ const MultitrackLive = ({ user }) => {
     setLoadingAudio(true);
     setAudioError('');
     setStemErrors([]);
-    setLoadProgress({ completed: 0, total: getSongAudioCount(currentSong) });
+    setLoadProgress({ completed: 0, total: getSongAudioCount(currentSong), cacheHits: 0 });
     setPlayback(EMPTY_PLAYBACK);
 
     engineRef.current.loadSong(currentSong, (progress) => {
@@ -210,6 +214,23 @@ const MultitrackLive = ({ user }) => {
     setPlayback(engineRef.current.getState());
   };
 
+  const handlePrepareSetlist = async () => {
+    if (preparingSetlist || playlist.length === 0 || !isMultitrackCacheSupported()) return;
+
+    setPreparingSetlist(true);
+    setPrepareSummary(null);
+    setPrepareProgress({ completed: 0, total: 0, cached: 0, downloaded: 0, errors: 0 });
+
+    try {
+      const result = await prepareMultitrackSetlist(playlist, setPrepareProgress, { concurrency: 3 });
+      setPrepareSummary(result);
+    } catch (error) {
+      setPrepareSummary({ error: error?.message || 'No se pudo preparar el setlist.' });
+    } finally {
+      setPreparingSetlist(false);
+    }
+  };
+
   if (loadingSetlist) {
     return (
       <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center p-6">
@@ -236,6 +257,9 @@ const MultitrackLive = ({ user }) => {
     );
   }
 
+  const cacheSupported = isMultitrackCacheSupported();
+  const prepareHasErrors = Boolean(prepareSummary?.error || prepareSummary?.errors?.length);
+
   return (
     <div className="min-h-screen bg-[#050608] text-zinc-100">
       <header className="sticky top-0 z-30 border-b border-white/10 bg-[#050608]/95 px-3 py-3 backdrop-blur md:px-5">
@@ -255,12 +279,48 @@ const MultitrackLive = ({ user }) => {
               <p className="truncate text-[11px] font-semibold text-zinc-500">{evento?.titulo || 'Setlist'} · Operador: {user?.nombre || 'Usuario'}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
-            <div className={`h-2.5 w-2.5 rounded-full ${playback.playing ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,.9)]' : 'bg-zinc-600'}`} />
-            <span className="text-[10px] font-black uppercase tracking-[0.16em] text-zinc-400">{playback.playing ? 'Reproduciendo' : loadingAudio ? 'Cargando' : 'Listo'}</span>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={handlePrepareSetlist}
+              disabled={!cacheSupported || preparingSetlist || playlist.length === 0}
+              title={cacheSupported ? 'Descarga los audios del setlist para evitar depender de la red durante el servicio.' : 'Este dispositivo no soporta la preparación local de audios.'}
+              className={`flex items-center gap-2 rounded-2xl border px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${prepareSummary && !prepareHasErrors ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : prepareHasErrors ? 'border-amber-400/30 bg-amber-400/10 text-amber-200' : 'border-violet-400/25 bg-violet-400/10 text-violet-200 hover:bg-violet-400/15'}`}
+            >
+              {preparingSetlist ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+              {preparingSetlist
+                ? `Preparando ${prepareProgress.completed}/${prepareProgress.total || '...'}`
+                : prepareSummary && !prepareHasErrors
+                  ? 'Setlist preparado'
+                  : 'Preparar setlist'}
+            </button>
+            <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
+              <div className={`h-2.5 w-2.5 rounded-full ${playback.playing ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,.9)]' : 'bg-zinc-600'}`} />
+              <span className="text-[10px] font-black uppercase tracking-[0.16em] text-zinc-400">{playback.playing ? 'Reproduciendo' : loadingAudio ? 'Cargando' : 'Listo'}</span>
+            </div>
           </div>
         </div>
       </header>
+
+      {(preparingSetlist || prepareSummary) && (
+        <div className="mx-auto max-w-[1800px] px-3 pt-3 md:px-5 md:pt-4">
+          <div className={`rounded-2xl border px-4 py-3 ${prepareHasErrors ? 'border-amber-400/20 bg-amber-400/[0.06]' : 'border-emerald-400/20 bg-emerald-400/[0.06]'}`}>
+            {preparingSetlist ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-black text-zinc-200">Preparando audios del setlist para uso local</p>
+                <p className="font-mono text-[10px] font-bold text-zinc-500">{prepareProgress.completed}/{prepareProgress.total || 0} · caché {prepareProgress.cached} · descargados {prepareProgress.downloaded}</p>
+              </div>
+            ) : prepareSummary?.error ? (
+              <p className="text-xs font-bold text-amber-200">{prepareSummary.error}</p>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-black text-emerald-200">{prepareSummary.ready} de {prepareSummary.total} audios preparados localmente.</p>
+                <p className="font-mono text-[10px] font-bold text-zinc-500">ya estaban {prepareSummary.cached} · nuevos {prepareSummary.downloaded} · errores {prepareSummary.errors.length}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <main className="mx-auto grid max-w-[1800px] gap-3 p-3 md:gap-4 md:p-5 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
         <aside className="order-2 rounded-3xl border border-white/10 bg-white/[0.035] p-3 xl:order-1 xl:sticky xl:top-[82px] xl:h-[calc(100vh-102px)] xl:overflow-hidden">
@@ -354,7 +414,7 @@ const MultitrackLive = ({ user }) => {
                       <Loader2 size={18} className="animate-spin text-blue-300" />
                       <div>
                         <p className="text-xs font-black text-blue-100">Decodificando audio para reproducción sincronizada</p>
-                        <p className="mt-1 text-[10px] font-bold text-blue-200/60">{loadProgress.completed} de {loadProgress.total || getSongAudioCount(currentSong)} archivos preparados</p>
+                        <p className="mt-1 text-[10px] font-bold text-blue-200/60">{loadProgress.completed} de {loadProgress.total || getSongAudioCount(currentSong)} archivos preparados{loadProgress.cacheHits ? ` · ${loadProgress.cacheHits} desde almacenamiento local` : ''}</p>
                       </div>
                     </div>
                   </div>
@@ -407,9 +467,9 @@ const MultitrackLive = ({ user }) => {
             <div className="rounded-3xl border border-dashed border-violet-400/20 bg-violet-400/[0.04] p-4">
               <div className="flex items-center gap-2 text-violet-200">
                 <SlidersHorizontal size={17} />
-                <h3 className="text-xs font-black uppercase tracking-[0.16em]">Siguiente fase</h3>
+                <h3 className="text-xs font-black uppercase tracking-[0.16em]">Preparación Live</h3>
               </div>
-              <p className="mt-3 text-xs font-semibold leading-relaxed text-zinc-500">Loops por compás, secciones musicales y salida cuantizada se agregarán después de validar primero este motor y el mixer.</p>
+              <p className="mt-3 text-xs font-semibold leading-relaxed text-zinc-500">Usa “Preparar setlist” antes del servicio. Kadosh guarda los archivos comprimidos localmente; al abrir una canción solo queda decodificarlos manteniendo el motor sincronizado.</p>
             </div>
           </div>
         </section>
