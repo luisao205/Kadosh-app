@@ -11,6 +11,8 @@ import {
   Radio,
   Search,
   SlidersHorizontal,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../config/firebase';
@@ -74,6 +76,7 @@ const MultitrackLiveManagement = () => {
   const [preparingEventId, setPreparingEventId] = useState('');
   const [prepareProgress, setPrepareProgress] = useState({});
   const [prepareResults, setPrepareResults] = useState({});
+  const [showArchivedEvents, setShowArchivedEvents] = useState(false);
 
   useEffect(() => {
     const unsubscribeSongs = onSnapshot(collection(db, 'canciones'), (snapshot) => {
@@ -173,6 +176,17 @@ const MultitrackLiveManagement = () => {
       .some((value) => String(value).toLocaleLowerCase('es').includes(query)));
   }, [eventCards, setlistSearch]);
 
+  const activeEventCards = useMemo(() => visibleEventCards.filter(({ event }) => (
+    !event?.completado && event?.estado !== 'cancelado'
+  )), [visibleEventCards]);
+
+  const archivedEventCards = useMemo(() => visibleEventCards.filter(({ event }) => (
+    Boolean(event?.completado) || event?.estado === 'cancelado'
+  )), [visibleEventCards]);
+
+  const displayedEventCards = useMemo(() => (
+    showArchivedEvents ? [...activeEventCards, ...archivedEventCards] : activeEventCards
+  ), [activeEventCards, archivedEventCards, showArchivedEvents]);
   useEffect(() => {
     if (activeTab !== 'setlists' || loadingSongs || loadingEvents || events.length === 0) return undefined;
     let cancelled = false;
@@ -241,10 +255,10 @@ const MultitrackLiveManagement = () => {
   };
 
   const setlistCounts = useMemo(() => ({
-    total: eventCards.length,
-    ready: eventCards.filter((card) => card.readyForLive).length,
-    pending: eventCards.filter((card) => card.totalSongs > 0 && !card.readyForLive).length,
-  }), [eventCards]);
+    total: activeEventCards.length,
+    ready: activeEventCards.filter((card) => card.readyForLive).length,
+    pending: activeEventCards.filter((card) => card.totalSongs > 0 && !card.readyForLive).length,
+  }), [activeEventCards]);
 
   return (
     <div className="space-y-6 pb-10">
@@ -283,7 +297,7 @@ const MultitrackLiveManagement = () => {
           <div className="grid grid-cols-3 gap-2 sm:min-w-[360px]">
             <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-center">
               <p className="text-xl font-black text-white">{setlistCounts.total}</p>
-              <p className="mt-1 text-[9px] font-black uppercase tracking-wider text-zinc-600">Setlists</p>
+              <p className="mt-1 text-[9px] font-black uppercase tracking-wider text-zinc-600">Activos</p>
             </div>
             <div className="rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.05] p-3 text-center">
               <p className="text-xl font-black text-emerald-300">{setlistCounts.ready}</p>
@@ -425,16 +439,32 @@ const MultitrackLiveManagement = () => {
             </p>
           </div>
 
+          {!loadingEvents && !loadingSongs && archivedEventCards.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowArchivedEvents((previous) => !previous)}
+              className="flex w-full items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-left transition-colors hover:bg-white/[0.04]"
+            >
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-zinc-400">Eventos anteriores / cerrados</p>
+                <p className="mt-1 text-[10px] font-semibold text-zinc-600">{archivedEventCards.length} oculto{archivedEventCards.length === 1 ? '' : 's'} · finalizados o cancelados</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2 text-[10px] font-black uppercase tracking-wide text-zinc-500">
+                {showArchivedEvents ? 'Ocultar' : 'Mostrar'}
+                {showArchivedEvents ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </button>
+          )}
           {loadingEvents || loadingSongs ? (
             <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-10 text-center text-sm font-bold text-zinc-500">Cargando setlists...</div>
-          ) : visibleEventCards.length === 0 ? (
+          ) : displayedEventCards.length === 0 ? (
             <div className="rounded-3xl border border-dashed border-white/10 p-10 text-center">
               <CalendarDays className="mx-auto text-zinc-700" size={34} />
-              <p className="mt-3 text-sm font-black text-zinc-400">No hay setlists que coincidan.</p>
+              <p className="mt-3 text-sm font-black text-zinc-400">No hay setlists activos que coincidan.</p>
             </div>
           ) : (
             <div className="grid gap-4 xl:grid-cols-2">
-              {visibleEventCards.map((card) => {
+              {displayedEventCards.map((card) => {
                 const { event, eventSongs, totalSongs, readyMaps, noAudioSongs, incompleteMaps, readiness, readyForLive } = card;
                 const progress = prepareProgress[event.id];
                 const result = prepareResults[event.id];
@@ -443,15 +473,17 @@ const MultitrackLiveManagement = () => {
                 const totalAudio = readiness?.totalAudio || eventSongs.reduce((sum, song) => sum + getAudioCount(song), 0);
                 const pendingAudio = readiness?.pendingAudio ?? Math.max(0, totalAudio - cachedAudio);
                 const mapPending = Math.max(0, totalSongs - readyMaps);
+                const isArchived = Boolean(event.completado) || event.estado === 'cancelado';
+                const archivedLabel = event.estado === 'cancelado' ? 'Cancelado' : 'Finalizado';
 
                 return (
-                  <div key={event.id} className={`rounded-3xl border p-4 md:p-5 ${readyForLive ? 'border-emerald-400/25 bg-emerald-400/[0.045]' : 'border-white/10 bg-white/[0.03]'}`}>
+                  <div key={event.id} className={`rounded-3xl border p-4 md:p-5 ${isArchived ? 'border-white/8 bg-black/15 opacity-75 hover:opacity-100' : readyForLive ? 'border-emerald-400/25 bg-emerald-400/[0.045]' : 'border-white/10 bg-white/[0.03]'}`}>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <h2 className="truncate text-lg font-black text-white">{event.titulo || 'Evento sin título'}</h2>
-                          <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${readyForLive ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-amber-400/20 bg-amber-400/10 text-amber-300'}`}>
-                            {readyForLive ? 'Listo para Live' : totalSongs === 0 ? 'Sin canciones' : 'Falta preparar'}
+                          <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${isArchived ? 'border-zinc-500/20 bg-zinc-500/10 text-zinc-400' : readyForLive ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-amber-400/20 bg-amber-400/10 text-amber-300'}`}>
+                            {isArchived ? archivedLabel : readyForLive ? 'Listo para Live' : totalSongs === 0 ? 'Sin canciones' : 'Falta preparar'}
                           </span>
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-semibold text-zinc-600">
