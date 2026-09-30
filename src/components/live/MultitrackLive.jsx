@@ -56,6 +56,7 @@ const getSongAudioCount = (song) => {
 const MultitrackLive = ({ user }) => {
   const { eventoId, songId } = useParams();
   const standaloneSongMode = Boolean(songId);
+  const liveRunnerMode = !standaloneSongMode;
   const navigate = useNavigate();
   const engineRef = useRef(null);
   if (!engineRef.current) engineRef.current = new MultitrackPlaybackEngine();
@@ -733,12 +734,13 @@ const MultitrackLive = ({ user }) => {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="truncate text-base font-black md:text-lg">Multitrack Live</p>
-                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 2F</span>
+                <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-200">{liveRunnerMode ? 'Live Runner' : 'Editor'}</span>
               </div>
               <p className="truncate text-[11px] font-semibold text-zinc-500">{standaloneSongMode ? 'Editor de canción' : (evento?.titulo || 'Setlist')} · Operador: {user?.nombre || 'Usuario'}</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+{standaloneSongMode && (
             <button
               type="button"
               onClick={handlePrepareSetlist}
@@ -753,6 +755,7 @@ const MultitrackLive = ({ user }) => {
                   ? (standaloneSongMode ? 'Canción preparada' : 'Setlist preparado')
                   : (standaloneSongMode ? 'Preparar canción' : 'Preparar setlist')}
             </button>
+            )}
             <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
               <div className={`h-2.5 w-2.5 rounded-full ${playback.playing ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,.9)]' : 'bg-zinc-600'}`} />
               <span className="text-[10px] font-black uppercase tracking-[0.16em] text-zinc-400">{playback.playing ? 'Reproduciendo' : loadingAudio ? 'Cargando' : 'Listo'}</span>
@@ -948,26 +951,21 @@ const MultitrackLive = ({ user }) => {
 
                   <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
                     <p className="text-[10px] font-black uppercase tracking-[0.16em] text-zinc-400">Alineación</p>
-                    <p className="mt-2 text-[10px] font-semibold leading-relaxed text-zinc-600">Marca el instante exacto donde comienza el compás 1. Por ahora esta referencia vive solo durante esta sesión.</p>
-                    <p className="mt-3 font-mono text-xs font-black text-zinc-300">Inicio: {formatTime(currentGridOffset)}</p>
-                    <div className="mt-3 grid gap-2">
-                      <button
-                        type="button"
-                        onClick={markGridStart}
-                        disabled={!currentBpm || playback.stems.length === 0}
-                        className="rounded-xl bg-cyan-400 px-3 py-2.5 text-[10px] font-black uppercase tracking-wide text-zinc-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-600"
-                      >
-                        Marcar compás 1 aquí
-                      </button>
-                      <button
-                        type="button"
-                        onClick={resetGridStart}
-                        disabled={!currentSongGridKey || currentGridOffset === 0}
-                        className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-[10px] font-black uppercase tracking-wide text-zinc-400 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
-                      >
-                        Reiniciar a 0:00
-                      </button>
-                    </div>
+                    {standaloneSongMode ? (
+                      <>
+                        <p className="mt-2 text-[10px] font-semibold leading-relaxed text-zinc-600">Marca el instante exacto donde comienza el compás 1. Esta referencia se guarda dentro del Live Map.</p>
+                        <p className="mt-3 font-mono text-xs font-black text-zinc-300">Inicio: {formatTime(currentGridOffset)}</p>
+                        <div className="mt-3 grid gap-2">
+                          <button type="button" onClick={markGridStart} disabled={!currentBpm || playback.stems.length === 0} className="rounded-xl bg-cyan-400 px-3 py-2.5 text-[10px] font-black uppercase tracking-wide text-zinc-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-600">Marcar compás 1 aquí</button>
+                          <button type="button" onClick={resetGridStart} disabled={!currentSongGridKey || currentGridOffset === 0} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-[10px] font-black uppercase tracking-wide text-zinc-400 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30">Reiniciar a 0:00</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="mt-2 text-[10px] font-semibold leading-relaxed text-zinc-600">Alineación cargada desde el Live Map. En modo Live no se modifica accidentalmente.</p>
+                        <p className="mt-3 font-mono text-xs font-black text-emerald-200">Compás 1: {formatTime(currentGridOffset)}</p>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -1027,6 +1025,32 @@ const MultitrackLive = ({ user }) => {
                   <p className="mt-3 text-[9px] font-semibold text-zinc-700">Mover la línea de tiempo o pulsar Stop cancela el loop por seguridad.</p>
                 </div>
 
+                {liveRunnerMode && (
+                  <div className="mt-3 rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.045] p-4">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">Secciones rápidas</p>
+                      <p className="mt-1 text-[10px] font-semibold text-zinc-500">Salta o repite partes usando el Live Map guardado. Aquí no se edita la estructura.</p>
+                    </div>
+                    {currentSections.length > 0 ? (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {currentSections.map((section, sectionIndex) => (
+                          <div key={section.id} className="grid grid-cols-[1fr_66px] gap-2 rounded-2xl border border-white/8 bg-black/20 p-2">
+                            <button type="button" onClick={() => goToSection(section)} className="min-h-14 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 text-left hover:bg-cyan-400/20">
+                              <p className="truncate text-sm font-black text-cyan-100">{section.label}</p>
+                              <p className="mt-1 font-mono text-[9px] font-bold text-cyan-300/55">Compás {section.bar} · {formatTime(section.start)}</p>
+                            </button>
+                            <button type="button" onClick={() => loopSection(sectionIndex)} disabled={sectionIndex >= currentSections.length - 1} className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/10 text-[9px] font-black uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-400/20 disabled:cursor-not-allowed disabled:opacity-25">Loop</button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-xl border border-amber-400/15 bg-amber-400/[0.05] p-3 text-[10px] font-bold text-amber-200">Esta canción no tiene secciones guardadas. Configúrala desde Administración antes del servicio.</div>
+                    )}
+                    {sectionError && <div className="mt-3 flex gap-2 rounded-xl border border-red-400/20 bg-red-400/[0.07] p-3 text-red-200"><AlertTriangle size={15} className="mt-0.5 shrink-0" /><p className="text-[10px] font-bold leading-relaxed">{sectionError}</p></div>}
+                  </div>
+                )}
+
+                {standaloneSongMode && (
                 <div className="mt-3 rounded-2xl border border-violet-400/20 bg-violet-400/[0.045] p-4">
                   <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                     <div className="min-w-0">
@@ -1147,6 +1171,28 @@ const MultitrackLive = ({ user }) => {
                     </div>
                   )}
                 </div>
+                )}
+
+                {liveRunnerMode && (
+                  <div className="mt-5 rounded-3xl border border-emerald-400/20 bg-emerald-400/[0.055] p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-300">Operación Live</p>
+                        <p className="mt-1 text-[10px] font-semibold text-zinc-500">Controles grandes para reducir toques accidentales durante el servicio.</p>
+                      </div>
+                      <div className="font-mono text-sm font-black text-zinc-300">{formatTime(playback.currentTime)} / {formatTime(playback.duration)}</div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-[60px_60px_minmax(120px,1fr)_60px] items-center gap-3">
+                      <button type="button" onClick={() => changeSong(currentIndex - 1)} disabled={currentIndex === 0} className="flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 disabled:opacity-25" title="Canción anterior"><SkipBack size={22} /></button>
+                      <button type="button" onClick={stopPlayback} disabled={loadingAudio || playback.stems.length === 0} className="flex h-14 items-center justify-center rounded-2xl border border-red-400/20 bg-red-400/10 text-red-200 hover:bg-red-400/20 disabled:opacity-25" title="Stop"><Square size={20} fill="currentColor" /></button>
+                      <button type="button" onClick={togglePlay} disabled={loadingAudio || Boolean(audioError) || playback.stems.length === 0} className="flex h-16 items-center justify-center gap-3 rounded-2xl bg-emerald-400 px-5 text-sm font-black uppercase tracking-[0.12em] text-zinc-950 hover:bg-emerald-300 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500">
+                        {loadingAudio ? <Loader2 size={24} className="animate-spin" /> : playback.playing ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
+                        {loadingAudio ? 'Cargando' : playback.playing ? 'Pausa' : 'Play'}
+                      </button>
+                      <button type="button" onClick={() => changeSong(currentIndex + 1)} disabled={currentIndex >= playlist.length - 1} className="flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 disabled:opacity-25" title="Canción siguiente"><SkipForward size={22} /></button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-7">
                   <input
@@ -1165,6 +1211,7 @@ const MultitrackLive = ({ user }) => {
                   </div>
                 </div>
 
+{standaloneSongMode && (
                 <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
                   <button type="button" onClick={() => changeSong(currentIndex - 1)} disabled={currentIndex === 0} className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 disabled:opacity-25">
                     <SkipBack size={21} />
@@ -1179,6 +1226,7 @@ const MultitrackLive = ({ user }) => {
                     <SkipForward size={21} />
                   </button>
                 </div>
+                )}
 
                 {loadingAudio && (
                   <div className="mt-6 rounded-2xl border border-blue-400/20 bg-blue-400/10 p-4">
@@ -1228,6 +1276,7 @@ const MultitrackLive = ({ user }) => {
             )}
           </div>
 
+{standaloneSongMode && (
           <div className="grid gap-3 md:grid-cols-2">
             <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-4">
               <div className="flex items-center gap-2 text-zinc-300">
@@ -1244,13 +1293,14 @@ const MultitrackLive = ({ user }) => {
               <p className="mt-3 text-xs font-semibold leading-relaxed text-zinc-500">Usa “Preparar setlist” antes del servicio. Kadosh guarda los archivos comprimidos localmente; al abrir una canción solo queda decodificarlos manteniendo el motor sincronizado.</p>
             </div>
           </div>
+          )}
         </section>
 
         <aside className="order-3 rounded-3xl border border-white/10 bg-white/[0.035] p-3 xl:sticky xl:top-[82px] xl:h-[calc(100vh-102px)] xl:overflow-hidden">
           <div className="mb-3 flex items-center justify-between px-1">
             <div className="flex items-center gap-2">
               <SlidersHorizontal size={16} className="text-blue-300" />
-              <h2 className="text-xs font-black uppercase tracking-[0.16em] text-zinc-300">Mixer</h2>
+              <h2 className="text-xs font-black uppercase tracking-[0.16em] text-zinc-300">{liveRunnerMode ? 'Mixer Live' : 'Mixer'}</h2>
             </div>
             <span className="text-[10px] font-bold text-zinc-600">{playback.stems.length} stems</span>
           </div>
