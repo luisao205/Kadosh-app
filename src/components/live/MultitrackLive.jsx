@@ -54,7 +54,8 @@ const getSongAudioCount = (song) => {
 };
 
 const MultitrackLive = ({ user }) => {
-  const { eventoId } = useParams();
+  const { eventoId, songId } = useParams();
+  const standaloneSongMode = Boolean(songId);
   const navigate = useNavigate();
   const engineRef = useRef(null);
   if (!engineRef.current) engineRef.current = new MultitrackPlaybackEngine();
@@ -90,22 +91,31 @@ const MultitrackLive = ({ user }) => {
       setLoadingSetlist(true);
       setSetlistError('');
       try {
-        const eventSnap = await getDoc(doc(db, 'eventos', eventoId));
-        if (!eventSnap.exists()) throw new Error('El evento no existe.');
-        const eventData = eventSnap.data();
-        const songIds = [...new Set(getEventSongIds(eventData))];
-        const songSnaps = await Promise.all(songIds.map((songId) => getDoc(doc(db, 'canciones', songId))));
-        const map = {};
-        songSnaps.forEach((snap) => {
-          if (snap.exists()) map[snap.id] = { id: snap.id, ...snap.data() };
-        });
-
-        if (!cancelled) {
-          setEvento(eventData);
-          setSongsById(map);
+        if (standaloneSongMode) {
+          const songSnap = await getDoc(doc(db, 'canciones', songId));
+          if (!songSnap.exists()) throw new Error('La canción no existe.');
+          const song = { id: songSnap.id, ...songSnap.data() };
+          if (!cancelled) {
+            setEvento({ titulo: 'Editor de Live Map' });
+            setSongsById({ [song.id]: song });
+          }
+        } else {
+          const eventSnap = await getDoc(doc(db, 'eventos', eventoId));
+          if (!eventSnap.exists()) throw new Error('El evento no existe.');
+          const eventData = eventSnap.data();
+          const songIds = [...new Set(getEventSongIds(eventData))];
+          const songSnaps = await Promise.all(songIds.map((id) => getDoc(doc(db, 'canciones', id))));
+          const map = {};
+          songSnaps.forEach((snap) => {
+            if (snap.exists()) map[snap.id] = { id: snap.id, ...snap.data() };
+          });
+          if (!cancelled) {
+            setEvento(eventData);
+            setSongsById(map);
+          }
         }
       } catch (error) {
-        if (!cancelled) setSetlistError(error?.message || 'No se pudo cargar el setlist.');
+        if (!cancelled) setSetlistError(error?.message || (standaloneSongMode ? 'No se pudo cargar la canción.' : 'No se pudo cargar el setlist.'));
       } finally {
         if (!cancelled) setLoadingSetlist(false);
       }
@@ -113,9 +123,13 @@ const MultitrackLive = ({ user }) => {
 
     loadSetlist();
     return () => { cancelled = true; };
-  }, [eventoId]);
+  }, [eventoId, songId, standaloneSongMode]);
 
   const playlist = useMemo(() => {
+    if (standaloneSongMode) {
+      const song = songsById[songId];
+      return song ? [{ ...song, setlistItemId: 'song_' + song.id }] : [];
+    }
     if (!evento) return [];
     return getEventSetlistItems(evento)
       .filter((item) => item.type === 'song')
@@ -128,7 +142,7 @@ const MultitrackLive = ({ user }) => {
         };
       })
       .filter(Boolean);
-  }, [evento, songsById]);
+  }, [standaloneSongMode, songId, evento, songsById]);
 
   const currentSong = playlist[currentIndex] || null;
 
@@ -187,6 +201,7 @@ const MultitrackLive = ({ user }) => {
     }).then((result) => {
       if (cancelled || result?.cancelled) return;
       setStemErrors(result.errors || []);
+      engineRef.current.applyMixerPreset(currentSong?.livePlayback?.mixer);
       setPlayback(engineRef.current.getState());
 
       getMultitrackSetlistReadiness(playlist)
@@ -204,7 +219,7 @@ const MultitrackLive = ({ user }) => {
       cancelled = true;
       engineRef.current.stop();
     };
-  }, [currentSong?.setlistItemId, playlist]);
+  }, [currentSong?.setlistItemId]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -294,7 +309,17 @@ const MultitrackLive = ({ user }) => {
       baseLabel: String(section.baseLabel || section.label || ''),
       bar: Math.max(1, Math.round(Number(section.bar) || 1)),
     })).sort((a, b) => a.bar - b.bar),
-  }), [currentBpm, currentBeatsPerBar, currentGridOffset, currentSections]);
+    mixer: {
+      masterVolume: Number((playback.masterVolume ?? 1).toFixed(3)),
+      stems: playback.stems.map((stem) => ({
+        id: String(stem.id),
+        name: String(stem.name || ''),
+        volume: Number((stem.volume ?? 1).toFixed(3)),
+        muted: Boolean(stem.muted),
+        solo: Boolean(stem.solo),
+      })).sort((a, b) => a.id.localeCompare(b.id)),
+    },
+  }), [currentBpm, currentBeatsPerBar, currentGridOffset, currentSections, playback.masterVolume, playback.stems]);
 
   const savedLiveMapSignature = useMemo(() => {
     const saved = currentSong?.livePlayback;
@@ -308,6 +333,16 @@ const MultitrackLive = ({ user }) => {
         baseLabel: String(section?.baseLabel || section?.label || ''),
         bar: Math.max(1, Math.round(Number(section?.bar) || 1)),
       })).sort((a, b) => a.bar - b.bar),
+      mixer: {
+        masterVolume: Number((Number(saved?.mixer?.masterVolume ?? 1)).toFixed(3)),
+        stems: Object.entries(saved?.mixer?.stems || {}).map(([id, stem]) => ({
+          id: String(id),
+          name: String(stem?.name || ''),
+          volume: Number((Number(stem?.volume ?? 1)).toFixed(3)),
+          muted: Boolean(stem?.muted),
+          solo: Boolean(stem?.solo),
+        })).sort((a, b) => a.id.localeCompare(b.id)),
+      },
     });
   }, [currentSong?.livePlayback, currentSong?.bpm]);
 
@@ -354,6 +389,12 @@ const MultitrackLive = ({ user }) => {
   const changeMasterVolume = (value) => {
     engineRef.current.setMasterVolume(value);
     setPlayback(engineRef.current.getState());
+  };
+  const restoreSavedMixer = () => {
+    if (!currentSong?.livePlayback?.mixer || playback.stems.length === 0) return;
+    engineRef.current.applyMixerPreset(currentSong.livePlayback.mixer);
+    setPlayback(engineRef.current.getState());
+    setLiveMapNotice('Mezcla guardada restaurada.');
   };
 
   const markGridStart = () => {
@@ -580,12 +621,28 @@ const MultitrackLive = ({ user }) => {
       bar: Math.max(1, Math.round(Number(section.bar) || 1)),
     })).sort((a, b) => a.bar - b.bar);
 
+    if (getSongAudioCount(currentSong) > 0 && playback.stems.length === 0) {
+      setLiveMapNotice('Espera a que termine de cargar el audio antes de guardar la mezcla.');
+      return;
+    }
+
+    const mixer = {
+      masterVolume: Number((playback.masterVolume ?? 1).toFixed(3)),
+      stems: Object.fromEntries(playback.stems.map((stem) => [String(stem.id), {
+        name: String(stem.name || ''),
+        volume: Number((stem.volume ?? 1).toFixed(3)),
+        muted: Boolean(stem.muted),
+        solo: Boolean(stem.solo),
+      }])),
+    };
+
     const livePlayback = {
-      version: 1,
+      version: 2,
       bpm: currentBpm,
       timeSignature: { beats: currentBeatsPerBar, unit: 4 },
       gridOffsetSeconds: Number(currentGridOffset.toFixed(3)),
       sections,
+      mixer,
       updatedAt: new Date().toISOString(),
     };
 
@@ -645,8 +702,8 @@ const MultitrackLive = ({ user }) => {
           <AlertTriangle className="mx-auto mb-4 text-red-300" size={36} />
           <h1 className="text-2xl font-black">No se pudo abrir Multitrack Live</h1>
           <p className="mt-3 text-sm font-semibold text-red-100/70">{setlistError}</p>
-          <button type="button" onClick={() => navigate(`/setlist/${eventoId}`)} className="mt-6 rounded-2xl bg-white px-5 py-3 text-sm font-black text-zinc-950">
-            Volver al setlist
+          <button type="button" onClick={() => navigate(standaloneSongMode ? '/multitrack-live' : `/setlist/${eventoId}`)} className="mt-6 rounded-2xl bg-white px-5 py-3 text-sm font-black text-zinc-950">
+            {standaloneSongMode ? 'Volver a Multitrack Live' : 'Volver al setlist'}
           </button>
         </div>
       </div>
@@ -667,7 +724,7 @@ const MultitrackLive = ({ user }) => {
       <header className="sticky top-0 z-30 border-b border-white/10 bg-[#050608]/95 px-3 py-3 backdrop-blur md:px-5">
         <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <button type="button" onClick={() => navigate(`/setlist/${eventoId}`)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white" title="Volver al setlist">
+            <button type="button" onClick={() => navigate(standaloneSongMode ? '/multitrack-live' : `/setlist/${eventoId}`)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white" title={standaloneSongMode ? 'Volver a Multitrack Live' : 'Volver al setlist'}>
               <ArrowLeft size={18} />
             </button>
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
@@ -676,9 +733,9 @@ const MultitrackLive = ({ user }) => {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="truncate text-base font-black md:text-lg">Multitrack Live</p>
-                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 2E</span>
+                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 2F</span>
               </div>
-              <p className="truncate text-[11px] font-semibold text-zinc-500">{evento?.titulo || 'Setlist'} · Operador: {user?.nombre || 'Usuario'}</p>
+              <p className="truncate text-[11px] font-semibold text-zinc-500">{standaloneSongMode ? 'Editor de canción' : (evento?.titulo || 'Setlist')} · Operador: {user?.nombre || 'Usuario'}</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -693,8 +750,8 @@ const MultitrackLive = ({ user }) => {
               {preparingSetlist
                 ? `Preparando ${prepareProgress.completed}/${prepareProgress.total || '...'}`
                 : readyForLive
-                  ? 'Setlist preparado'
-                  : 'Preparar setlist'}
+                  ? (standaloneSongMode ? 'Canción preparada' : 'Setlist preparado')
+                  : (standaloneSongMode ? 'Preparar canción' : 'Preparar setlist')}
             </button>
             <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
               <div className={`h-2.5 w-2.5 rounded-full ${playback.playing ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,.9)]' : 'bg-zinc-600'}`} />
@@ -724,8 +781,8 @@ const MultitrackLive = ({ user }) => {
                       : !cacheSupported
                         ? 'Preparación local no disponible en este dispositivo'
                         : readyForLive
-                          ? 'Setlist listo para Live'
-                          : 'Setlist pendiente de preparación'}
+                          ? (standaloneSongMode ? 'Canción lista para Live' : 'Setlist listo para Live')
+                          : (standaloneSongMode ? 'Canción pendiente de preparación' : 'Setlist pendiente de preparación')}
                 </p>
                 <p className="mt-1 text-[10px] font-semibold text-zinc-500">
                   {readiness?.error
@@ -772,7 +829,7 @@ const MultitrackLive = ({ user }) => {
           <div className="mb-3 flex items-center justify-between px-1">
             <div className="flex items-center gap-2">
               <ListMusic size={16} className="text-violet-300" />
-              <h2 className="text-xs font-black uppercase tracking-[0.16em] text-zinc-300">Setlist</h2>
+              <h2 className="text-xs font-black uppercase tracking-[0.16em] text-zinc-300">{standaloneSongMode ? 'Canción' : 'Setlist'}</h2>
             </div>
             <span className="text-[10px] font-bold text-zinc-600">{playlist.length} canciones</span>
           </div>
@@ -999,7 +1056,7 @@ const MultitrackLive = ({ user }) => {
                           {currentSong?.livePlayback && !liveMapDirty ? 'Guardado' : currentSong?.livePlayback ? 'Cambios sin guardar' : 'Sin guardar'}
                         </span>
                       </div>
-                      <p className="mt-1 text-[10px] font-semibold text-zinc-500">Guarda BPM, compás, alineación y secciones directamente en la canción.</p>
+                      <p className="mt-1 text-[10px] font-semibold text-zinc-500">Guarda BPM, compás, alineación, secciones y la mezcla completa directamente en la canción.</p>
                       {liveMapNotice && <p className="mt-1 text-[10px] font-bold text-zinc-300">{liveMapNotice}</p>}
                     </div>
                     <button
@@ -1197,6 +1254,23 @@ const MultitrackLive = ({ user }) => {
             </div>
             <span className="text-[10px] font-bold text-zinc-600">{playback.stems.length} stems</span>
           </div>
+
+          {currentSong?.livePlayback?.mixer && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.05] p-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-300">Mezcla guardada</p>
+                <p className="mt-1 text-[9px] font-semibold text-zinc-600">Volumen, Mute, Solo y Master forman parte del Live Map.</p>
+              </div>
+              <button type="button" onClick={restoreSavedMixer} disabled={playback.stems.length === 0} className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-[9px] font-black uppercase tracking-wide text-emerald-200 hover:bg-emerald-400/20 disabled:opacity-30">Restaurar mezcla guardada</button>
+            </div>
+          )}
+
+          {playback.stems.some((stem) => stem.solo) && (
+            <div className="mb-3 flex gap-2 rounded-xl border border-amber-400/20 bg-amber-400/[0.06] p-3 text-amber-200">
+              <AlertTriangle size={14} className="shrink-0" />
+              <p className="text-[9px] font-bold leading-relaxed">Hay uno o más canales en Solo. Si guardas el Live Map, ese estado se restaurará la próxima vez.</p>
+            </div>
+          )}
 
           <div className="mb-3 rounded-2xl border border-white/10 bg-black/25 p-3">
             <div className="flex items-center gap-3">

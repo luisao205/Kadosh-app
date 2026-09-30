@@ -414,6 +414,30 @@ export class MultitrackPlaybackEngine {
     this.masterVolume = clamp(Number(volume) || 0, 0, 1);
     if (this.masterGain) this.masterGain.gain.value = this.masterVolume;
   }
+  applyMixerPreset(preset = {}) {
+    const rawMaster = Number(preset?.masterVolume);
+    this.masterVolume = Number.isFinite(rawMaster) ? clamp(rawMaster, 0, 1) : 1;
+    if (this.masterGain) this.masterGain.gain.value = this.masterVolume;
+
+    const savedStems = preset?.stems && typeof preset.stems === 'object' ? preset.stems : {};
+    const savedValues = Object.values(savedStems);
+    this.stems.forEach((stem) => {
+      const saved = savedStems[stem.id] || savedValues.find((item) => String(item?.name || '') === stem.name);
+      if (!saved) {
+        stem.volume = 1;
+        stem.muted = false;
+        stem.solo = false;
+        return;
+      }
+      const rawVolume = Number(saved.volume);
+      stem.volume = Number.isFinite(rawVolume) ? clamp(rawVolume, 0, 1) : 1;
+      stem.muted = Boolean(saved.muted);
+      stem.solo = Boolean(saved.solo);
+    });
+
+    this.applyMixerState();
+    return this.getState();
+  }
 
   applyMixerState() {
     const hasSolo = this.stems.some((stem) => stem.solo);

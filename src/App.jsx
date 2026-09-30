@@ -9,6 +9,7 @@ import StageDisplay from './components/live/StageDisplay';
 import StageDisplayMusicos from './components/live/StageDisplayMusicos';
 import MultimediaHub from './components/live/MultimediaHub';
 import MultitrackLive from './components/live/MultitrackLive';
+import MultitrackLiveManagement from './components/admin/MultitrackLiveManagement';
 import AdminLayout from './components/layout/AdminLayout';
 import AdminDashboard from './components/admin/AdminDashboard';
 import Login from './components/layout/Login';
@@ -344,8 +345,10 @@ function App() {
         <Route path="/anuncios" element={canManageAnnouncements(user) ? <AdminLayout user={user}><AnnouncementManagement user={user} /></AdminLayout> : <Navigate to="/" replace />} />
         <Route path="/setlist/:id" element={<ProtectedAdminRoute user={user} allowed={canViewEventsAndSetlists(user)} message="Tu rol no tiene acceso a este setlist."><SetlistViewer user={user} /></ProtectedAdminRoute>} />
         <Route path="/perfil" element={<AdminLayout user={user}><UserProfile user={user} /></AdminLayout>} />
+        <Route path="/multitrack-live" element={<ProtectedAdminRoute user={user} allowed={canManageSongs(user)} message="Solo el equipo autorizado puede preparar Multitrack Live."><MultitrackLiveManagement user={user} /></ProtectedAdminRoute>} />
 
         {/* Multitrack Live - motor independiente del modo ensayo */}
+        <Route path="/multitrack-live/cancion/:songId" element={<ProtectedLiveRoute allowed={canManageSongs(user)} message="Solo el equipo autorizado puede preparar canciones para Multitrack Live."><MultitrackLive user={user} /></ProtectedLiveRoute>} />
         <Route path="/multitrack-live/:eventoId" element={<ProtectedLiveRoute allowed={canViewEventsAndSetlists(user)} message="Tu rol no tiene acceso a Multitrack Live."><MultitrackLive user={user} /></ProtectedLiveRoute>} />
 
         {/* Ruta del Modo Culto (Pantalla Completa, SIN Layout) */}
