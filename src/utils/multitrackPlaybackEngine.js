@@ -1,3 +1,5 @@
+import { fetchMultitrackAudio } from './multitrackAudioCache';
+
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 const getAudioContextClass = () => {
@@ -56,6 +58,7 @@ export class MultitrackPlaybackEngine {
 
   async loadSong(song, onProgress) {
     const token = ++this.loadToken;
+    const loadStartedAt = Date.now();
     this.stop();
     this.stems = [];
     this.duration = 0;
@@ -68,18 +71,19 @@ export class MultitrackPlaybackEngine {
     }
 
     let completed = 0;
+    let cacheHits = 0;
     const results = await Promise.all(candidates.map(async (candidate) => {
       try {
-        const response = await fetch(candidate.url, { mode: 'cors' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const { response, cached } = await fetchMultitrackAudio(candidate.url);
+        if (cached) cacheHits += 1;
         const bytes = await response.arrayBuffer();
         const buffer = await context.decodeAudioData(bytes.slice(0));
-        return { candidate, buffer, error: null };
+        return { candidate, buffer, error: null, cached };
       } catch (error) {
-        return { candidate, buffer: null, error };
+        return { candidate, buffer: null, error, cached: false };
       } finally {
         completed += 1;
-        onProgress?.({ completed, total: candidates.length });
+        onProgress?.({ completed, total: candidates.length, cacheHits });
       }
     }));
 
@@ -122,6 +126,8 @@ export class MultitrackPlaybackEngine {
       stems: this.getStemState(),
       duration: this.duration,
       errors,
+      cacheHits,
+      loadMs: Date.now() - loadStartedAt,
     };
   }
 
