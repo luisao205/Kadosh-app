@@ -24,6 +24,7 @@ export class MultitrackPlaybackEngine {
     this.masterVolume = 1;
     this.loadToken = 0;
     this.loop = null;
+    this.loopExitTimer = null;
   }
 
   async ensureContext() {
@@ -137,6 +138,13 @@ export class MultitrackPlaybackEngine {
     return Math.min(...this.stems.map((stem) => stem.buffer.duration));
   }
 
+  clearLoopExitTimer() {
+    if (this.loopExitTimer) {
+      clearTimeout(this.loopExitTimer);
+      this.loopExitTimer = null;
+    }
+  }
+
   applyLoopToSource(source) {
     if (!this.loop || this.loop.exitRequested) return;
     source.loopStart = this.loop.start;
@@ -176,13 +184,17 @@ export class MultitrackPlaybackEngine {
   pause() {
     if (!this.playing) return;
     this.offset = this.getCurrentTime();
-    if (this.loop?.exitRequested) this.loop = null;
+    if (this.loop?.exitRequested || this.loop?.exitQueued) {
+      this.clearLoopExitTimer();
+      this.loop = null;
+    }
     this.stopSources();
     this.playing = false;
     this.startedAt = 0;
   }
 
   stop() {
+    this.clearLoopExitTimer();
     this.stopSources();
     this.playing = false;
     this.offset = 0;
@@ -207,6 +219,7 @@ export class MultitrackPlaybackEngine {
   }
 
   clearLoopForSeek() {
+    this.clearLoopExitTimer();
     this.sources.forEach((source) => {
       source.loop = false;
     });
@@ -242,10 +255,12 @@ export class MultitrackPlaybackEngine {
       throw new Error('El punto actual ya pasó el final de ese loop.');
     }
 
+    this.clearLoopExitTimer();
     this.loop = {
       start,
       end,
       bars: Math.max(1, Math.round(Number(metadata.bars) || 1)),
+      exitQueued: false,
       exitRequested: false,
       exitRequestedAtContextTime: 0,
       exitAtContextTime: 0,
@@ -265,6 +280,7 @@ export class MultitrackPlaybackEngine {
     if (!this.loop) return this.getState();
 
     const current = this.getCurrentTime();
+    this.clearLoopExitTimer();
     this.sources.forEach((source) => {
       source.loop = false;
     });
@@ -278,6 +294,31 @@ export class MultitrackPlaybackEngine {
     return this.getState();
   }
 
+  beginLoopExit() {
+    if (!this.loop || !this.playing || !this.context) return this.cancelLoop();
+
+    const current = this.getCurrentTime();
+    if (!this.loop) return this.getState();
+
+    this.clearLoopExitTimer();
+    this.sources.forEach((source) => {
+      source.loop = false;
+    });
+
+    const anchor = Math.max(this.context.currentTime, this.startedAt || 0);
+    const remaining = Math.max(0, this.loop.end - current);
+    this.loop = {
+      ...this.loop,
+      exitQueued: false,
+      exitRequested: true,
+      exitRequestedAtContextTime: anchor,
+      exitAtContextTime: anchor + remaining,
+      exitFromTime: current,
+    };
+
+    return this.getState();
+  }
+
   requestLoopExit() {
     if (!this.loop) return this.getState();
 
@@ -288,21 +329,23 @@ export class MultitrackPlaybackEngine {
       return this.cancelLoop();
     }
 
-    this.sources.forEach((source) => {
-      source.loop = false;
-    });
+    if (this.loop.exitRequested || this.loop.exitQueued) return this.getState();
 
-    const anchor = Math.max(this.context.currentTime, this.startedAt || 0);
     const remaining = Math.max(0, this.loop.end - current);
-    this.loop = {
-      ...this.loop,
-      exitRequested: true,
-      exitRequestedAtContextTime: anchor,
-      exitAtContextTime: anchor + remaining,
-      exitFromTime: current,
-    };
+    const boundaryGuardSeconds = 0.12;
 
-    return this.getState();
+    if (remaining <= boundaryGuardSeconds) {
+      this.loop = { ...this.loop, exitQueued: true };
+      const waitMs = Math.max(20, Math.round((remaining + 0.04) * 1000));
+      this.loopExitTimer = setTimeout(() => {
+        this.loopExitTimer = null;
+        if (!this.loop?.exitQueued || !this.playing) return;
+        this.beginLoopExit();
+      }, waitMs);
+      return this.getState();
+    }
+
+    return this.beginLoopExit();
   }
 
   finalizeLoopExitIfNeeded() {
@@ -393,13 +436,14 @@ export class MultitrackPlaybackEngine {
 
   getLoopState(currentTime) {
     if (!this.loop) return null;
+    const exiting = this.loop.exitQueued || this.loop.exitRequested;
     return {
       active: true,
       start: this.loop.start,
       end: this.loop.end,
       bars: this.loop.bars,
-      exitRequested: this.loop.exitRequested,
-      phase: this.loop.exitRequested
+      exitRequested: exiting,
+      phase: exiting
         ? 'exiting'
         : currentTime < this.loop.start
           ? 'armed'
