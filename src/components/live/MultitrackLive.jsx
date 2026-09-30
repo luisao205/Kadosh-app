@@ -1,0 +1,473 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { doc, getDoc } from 'firebase/firestore';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  Headphones,
+  ListMusic,
+  Loader2,
+  Music2,
+  Pause,
+  Play,
+  Radio,
+  SkipBack,
+  SkipForward,
+  SlidersHorizontal,
+  Square,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import { db } from '../../config/firebase';
+import { getEventSetlistItems, getEventSongIds } from '../../utils/setlistUtils';
+import MultitrackPlaybackEngine from '../../utils/multitrackPlaybackEngine';
+
+const EMPTY_PLAYBACK = {
+  playing: false,
+  currentTime: 0,
+  duration: 0,
+  masterVolume: 1,
+  stems: [],
+};
+
+const formatTime = (value) => {
+  const seconds = Number(value) || 0;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.floor(seconds % 60);
+  return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+};
+
+const getSongAudioCount = (song) => {
+  if (Array.isArray(song?.multitracks) && song.multitracks.length > 0) {
+    return song.multitracks.filter((track) => track?.url).length;
+  }
+  return song?.audioUrl ? 1 : 0;
+};
+
+const MultitrackLive = ({ user }) => {
+  const { eventoId } = useParams();
+  const navigate = useNavigate();
+  const engineRef = useRef(null);
+  if (!engineRef.current) engineRef.current = new MultitrackPlaybackEngine();
+
+  const [evento, setEvento] = useState(null);
+  const [songsById, setSongsById] = useState({});
+  const [loadingSetlist, setLoadingSetlist] = useState(true);
+  const [setlistError, setSetlistError] = useState('');
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [loadingAudio, setLoadingAudio] = useState(false);
+  const [loadProgress, setLoadProgress] = useState({ completed: 0, total: 0 });
+  const [audioError, setAudioError] = useState('');
+  const [stemErrors, setStemErrors] = useState([]);
+  const [playback, setPlayback] = useState(EMPTY_PLAYBACK);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSetlist = async () => {
+      setLoadingSetlist(true);
+      setSetlistError('');
+      try {
+        const eventSnap = await getDoc(doc(db, 'eventos', eventoId));
+        if (!eventSnap.exists()) throw new Error('El evento no existe.');
+        const eventData = eventSnap.data();
+        const songIds = [...new Set(getEventSongIds(eventData))];
+        const songSnaps = await Promise.all(songIds.map((songId) => getDoc(doc(db, 'canciones', songId))));
+        const map = {};
+        songSnaps.forEach((snap) => {
+          if (snap.exists()) map[snap.id] = { id: snap.id, ...snap.data() };
+        });
+
+        if (!cancelled) {
+          setEvento(eventData);
+          setSongsById(map);
+        }
+      } catch (error) {
+        if (!cancelled) setSetlistError(error?.message || 'No se pudo cargar el setlist.');
+      } finally {
+        if (!cancelled) setLoadingSetlist(false);
+      }
+    };
+
+    loadSetlist();
+    return () => { cancelled = true; };
+  }, [eventoId]);
+
+  const playlist = useMemo(() => {
+    if (!evento) return [];
+    return getEventSetlistItems(evento)
+      .filter((item) => item.type === 'song')
+      .map((item, index) => {
+        const song = songsById[item.value];
+        if (!song) return null;
+        return {
+          ...song,
+          setlistItemId: item.idLocal || `${item.value}_${index}`,
+        };
+      })
+      .filter(Boolean);
+  }, [evento, songsById]);
+
+  const currentSong = playlist[currentIndex] || null;
+
+  useEffect(() => {
+    if (currentIndex < playlist.length) return;
+    setCurrentIndex(Math.max(0, playlist.length - 1));
+  }, [currentIndex, playlist.length]);
+
+  useEffect(() => {
+    if (!currentSong) {
+      engineRef.current.stop();
+      setPlayback(EMPTY_PLAYBACK);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setLoadingAudio(true);
+    setAudioError('');
+    setStemErrors([]);
+    setLoadProgress({ completed: 0, total: getSongAudioCount(currentSong) });
+    setPlayback(EMPTY_PLAYBACK);
+
+    engineRef.current.loadSong(currentSong, (progress) => {
+      if (!cancelled) setLoadProgress(progress);
+    }).then((result) => {
+      if (cancelled || result?.cancelled) return;
+      setStemErrors(result.errors || []);
+      setPlayback(engineRef.current.getState());
+    }).catch((error) => {
+      if (!cancelled) setAudioError(error?.message || 'No se pudo preparar el audio.');
+    }).finally(() => {
+      if (!cancelled) setLoadingAudio(false);
+    });
+
+    return () => {
+      cancelled = true;
+      engineRef.current.stop();
+    };
+  }, [currentSong?.setlistItemId]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const engine = engineRef.current;
+      if (engine.isFinished()) engine.pause();
+      setPlayback(engine.getState());
+    }, 80);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => () => {
+    engineRef.current?.dispose();
+  }, []);
+
+  const durationSpread = useMemo(() => {
+    if (playback.stems.length < 2) return 0;
+    const values = playback.stems.map((stem) => stem.duration);
+    return Math.max(...values) - Math.min(...values);
+  }, [playback.stems]);
+
+  const togglePlay = async () => {
+    if (loadingAudio || audioError || playback.stems.length === 0) return;
+    if (engineRef.current.getState().playing) engineRef.current.pause();
+    else await engineRef.current.play();
+    setPlayback(engineRef.current.getState());
+  };
+
+  const stopPlayback = () => {
+    engineRef.current.stop();
+    setPlayback(engineRef.current.getState());
+  };
+
+  const seekPlayback = async (event) => {
+    await engineRef.current.seek(Number(event.target.value));
+    setPlayback(engineRef.current.getState());
+  };
+
+  const changeSong = (nextIndex) => {
+    if (nextIndex < 0 || nextIndex >= playlist.length || nextIndex === currentIndex) return;
+    engineRef.current.stop();
+    setCurrentIndex(nextIndex);
+  };
+
+  const toggleMute = (stemId) => {
+    engineRef.current.toggleStemMute(stemId);
+    setPlayback(engineRef.current.getState());
+  };
+
+  const toggleSolo = (stemId) => {
+    engineRef.current.toggleStemSolo(stemId);
+    setPlayback(engineRef.current.getState());
+  };
+
+  const changeStemVolume = (stemId, value) => {
+    engineRef.current.setStemVolume(stemId, value);
+    setPlayback(engineRef.current.getState());
+  };
+
+  const changeMasterVolume = (value) => {
+    engineRef.current.setMasterVolume(value);
+    setPlayback(engineRef.current.getState());
+  };
+
+  if (loadingSetlist) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center p-6">
+        <div className="text-center">
+          <Loader2 className="mx-auto mb-4 animate-spin text-emerald-400" size={38} />
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-zinc-400">Preparando Multitrack Live</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (setlistError) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-xl rounded-3xl border border-red-500/25 bg-red-500/10 p-7 text-center">
+          <AlertTriangle className="mx-auto mb-4 text-red-300" size={36} />
+          <h1 className="text-2xl font-black">No se pudo abrir Multitrack Live</h1>
+          <p className="mt-3 text-sm font-semibold text-red-100/70">{setlistError}</p>
+          <button type="button" onClick={() => navigate(`/setlist/${eventoId}`)} className="mt-6 rounded-2xl bg-white px-5 py-3 text-sm font-black text-zinc-950">
+            Volver al setlist
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#050608] text-zinc-100">
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#050608]/95 px-3 py-3 backdrop-blur md:px-5">
+        <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <button type="button" onClick={() => navigate(`/setlist/${eventoId}`)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white" title="Volver al setlist">
+              <ArrowLeft size={18} />
+            </button>
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
+              <Radio size={20} />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="truncate text-base font-black md:text-lg">Multitrack Live</p>
+                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 1</span>
+              </div>
+              <p className="truncate text-[11px] font-semibold text-zinc-500">{evento?.titulo || 'Setlist'} · Operador: {user?.nombre || 'Usuario'}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
+            <div className={`h-2.5 w-2.5 rounded-full ${playback.playing ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,.9)]' : 'bg-zinc-600'}`} />
+            <span className="text-[10px] font-black uppercase tracking-[0.16em] text-zinc-400">{playback.playing ? 'Reproduciendo' : loadingAudio ? 'Cargando' : 'Listo'}</span>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto grid max-w-[1800px] gap-3 p-3 md:gap-4 md:p-5 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+        <aside className="order-2 rounded-3xl border border-white/10 bg-white/[0.035] p-3 xl:order-1 xl:sticky xl:top-[82px] xl:h-[calc(100vh-102px)] xl:overflow-hidden">
+          <div className="mb-3 flex items-center justify-between px-1">
+            <div className="flex items-center gap-2">
+              <ListMusic size={16} className="text-violet-300" />
+              <h2 className="text-xs font-black uppercase tracking-[0.16em] text-zinc-300">Setlist</h2>
+            </div>
+            <span className="text-[10px] font-bold text-zinc-600">{playlist.length} canciones</span>
+          </div>
+
+          <div className="flex gap-2 overflow-x-auto pb-1 xl:h-[calc(100%-32px)] xl:flex-col xl:overflow-y-auto xl:overflow-x-hidden xl:pr-1">
+            {playlist.map((song, index) => {
+              const count = getSongAudioCount(song);
+              const active = index === currentIndex;
+              return (
+                <button
+                  key={song.setlistItemId}
+                  type="button"
+                  onClick={() => changeSong(index)}
+                  className={`min-w-[230px] rounded-2xl border p-3 text-left transition-all xl:min-w-0 ${active ? 'border-emerald-400/40 bg-emerald-400/10 shadow-[0_0_25px_rgba(16,185,129,.08)]' : 'border-white/8 bg-black/20 hover:border-white/20 hover:bg-white/[0.04]'}`}
+                >
+                  <div className="flex items-start gap-3">
+                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-black ${active ? 'bg-emerald-400 text-zinc-950' : 'bg-white/8 text-zinc-500'}`}>{index + 1}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className={`truncate text-sm font-black ${active ? 'text-white' : 'text-zinc-300'}`}>{song.titulo}</p>
+                      <p className="mt-1 truncate text-[10px] font-semibold text-zinc-600">{song.artista || 'Sin artista'} · {song.bpm || '--'} BPM</p>
+                      <div className="mt-2 flex items-center gap-1.5">
+                        {count > 0 ? <CheckCircle2 size={12} className="text-emerald-400" /> : <AlertTriangle size={12} className="text-amber-300" />}
+                        <span className={`text-[9px] font-black uppercase tracking-wide ${count > 0 ? 'text-emerald-400/80' : 'text-amber-300/80'}`}>{count > 0 ? `${count} audio${count === 1 ? '' : 's'}` : 'Sin audio'}</span>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        <section className="order-1 min-w-0 space-y-3 xl:order-2">
+          <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-zinc-900 to-black p-4 shadow-2xl shadow-black/30 md:p-6">
+            {currentSong ? (
+              <>
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-[0.22em] text-emerald-400">Canción {currentIndex + 1} de {playlist.length}</p>
+                    <h1 className="mt-1 truncate text-3xl font-black tracking-tight text-white md:text-5xl">{currentSong.titulo}</h1>
+                    <p className="mt-2 text-sm font-semibold text-zinc-500">{currentSong.artista || 'Sin artista'} · {currentSong.bpm || '--'} BPM · Tono {currentSong.tonoOriginal || currentSong.tono || '--'}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-right">
+                    <p className="font-mono text-2xl font-black tabular-nums text-white md:text-3xl">{formatTime(playback.currentTime)}</p>
+                    <p className="mt-1 font-mono text-[10px] font-bold text-zinc-600">de {formatTime(playback.duration)}</p>
+                  </div>
+                </div>
+
+                <div className="mt-7">
+                  <input
+                    type="range"
+                    min="0"
+                    max={playback.duration || 1}
+                    step="0.01"
+                    value={Math.min(playback.currentTime, playback.duration || 0)}
+                    onChange={seekPlayback}
+                    disabled={loadingAudio || playback.duration <= 0}
+                    className="h-3 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                  />
+                  <div className="mt-2 flex justify-between font-mono text-[10px] font-bold text-zinc-600">
+                    <span>{formatTime(playback.currentTime)}</span>
+                    <span>{formatTime(playback.duration)}</span>
+                  </div>
+                </div>
+
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                  <button type="button" onClick={() => changeSong(currentIndex - 1)} disabled={currentIndex === 0} className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 disabled:opacity-25">
+                    <SkipBack size={21} />
+                  </button>
+                  <button type="button" onClick={stopPlayback} disabled={loadingAudio || playback.stems.length === 0} className="flex h-12 w-12 items-center justify-center rounded-2xl border border-red-400/20 bg-red-400/10 text-red-200 hover:bg-red-400/20 disabled:opacity-25" title="Stop">
+                    <Square size={18} fill="currentColor" />
+                  </button>
+                  <button type="button" onClick={togglePlay} disabled={loadingAudio || Boolean(audioError) || playback.stems.length === 0} className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-400 text-zinc-950 shadow-[0_0_40px_rgba(52,211,153,.22)] transition-transform hover:bg-emerald-300 active:scale-95 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500">
+                    {loadingAudio ? <Loader2 size={30} className="animate-spin" /> : playback.playing ? <Pause size={31} fill="currentColor" /> : <Play size={31} fill="currentColor" className="ml-1" />}
+                  </button>
+                  <button type="button" onClick={() => changeSong(currentIndex + 1)} disabled={currentIndex >= playlist.length - 1} className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 disabled:opacity-25">
+                    <SkipForward size={21} />
+                  </button>
+                </div>
+
+                {loadingAudio && (
+                  <div className="mt-6 rounded-2xl border border-blue-400/20 bg-blue-400/10 p-4">
+                    <div className="flex items-center gap-3">
+                      <Loader2 size={18} className="animate-spin text-blue-300" />
+                      <div>
+                        <p className="text-xs font-black text-blue-100">Decodificando audio para reproducción sincronizada</p>
+                        <p className="mt-1 text-[10px] font-bold text-blue-200/60">{loadProgress.completed} de {loadProgress.total || getSongAudioCount(currentSong)} archivos preparados</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {audioError && (
+                  <div className="mt-6 flex gap-3 rounded-2xl border border-red-400/25 bg-red-400/10 p-4 text-red-100">
+                    <AlertTriangle size={20} className="shrink-0 text-red-300" />
+                    <div>
+                      <p className="text-xs font-black">No se pudo preparar esta canción</p>
+                      <p className="mt-1 text-[11px] font-semibold text-red-100/65">{audioError}</p>
+                    </div>
+                  </div>
+                )}
+
+                {stemErrors.length > 0 && !audioError && (
+                  <div className="mt-6 flex gap-3 rounded-2xl border border-amber-400/25 bg-amber-400/10 p-4 text-amber-100">
+                    <AlertTriangle size={20} className="shrink-0 text-amber-300" />
+                    <div>
+                      <p className="text-xs font-black">La canción cargó con {stemErrors.length} track(s) omitido(s)</p>
+                      <p className="mt-1 text-[10px] font-semibold text-amber-100/60">{stemErrors.map((item) => item.name).join(', ')}</p>
+                    </div>
+                  </div>
+                )}
+
+                {durationSpread > 0.12 && (
+                  <div className="mt-3 flex gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/5 p-3 text-amber-200/80">
+                    <AlertTriangle size={16} className="shrink-0" />
+                    <p className="text-[10px] font-bold">Los stems no tienen exactamente la misma duración. Diferencia detectada: {durationSpread.toFixed(2)} s. Revisa los archivos antes de usar esta canción en vivo.</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="py-20 text-center">
+                <Music2 className="mx-auto text-zinc-700" size={44} />
+                <h1 className="mt-4 text-2xl font-black">Este setlist no tiene canciones</h1>
+                <p className="mt-2 text-sm font-semibold text-zinc-600">Agrega canciones al evento y vuelve a intentarlo.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-4">
+              <div className="flex items-center gap-2 text-zinc-300">
+                <Headphones size={17} className="text-emerald-300" />
+                <h3 className="text-xs font-black uppercase tracking-[0.16em]">Motor sincronizado</h3>
+              </div>
+              <p className="mt-3 text-xs font-semibold leading-relaxed text-zinc-500">Los stems cargados se disparan contra el mismo reloj de Web Audio. Esta pantalla no reutiliza el reproductor de ensayo ni modifica su comportamiento.</p>
+            </div>
+            <div className="rounded-3xl border border-dashed border-violet-400/20 bg-violet-400/[0.04] p-4">
+              <div className="flex items-center gap-2 text-violet-200">
+                <SlidersHorizontal size={17} />
+                <h3 className="text-xs font-black uppercase tracking-[0.16em]">Siguiente fase</h3>
+              </div>
+              <p className="mt-3 text-xs font-semibold leading-relaxed text-zinc-500">Loops por compás, secciones musicales y salida cuantizada se agregarán después de validar primero este motor y el mixer.</p>
+            </div>
+          </div>
+        </section>
+
+        <aside className="order-3 rounded-3xl border border-white/10 bg-white/[0.035] p-3 xl:sticky xl:top-[82px] xl:h-[calc(100vh-102px)] xl:overflow-hidden">
+          <div className="mb-3 flex items-center justify-between px-1">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal size={16} className="text-blue-300" />
+              <h2 className="text-xs font-black uppercase tracking-[0.16em] text-zinc-300">Mixer</h2>
+            </div>
+            <span className="text-[10px] font-bold text-zinc-600">{playback.stems.length} stems</span>
+          </div>
+
+          <div className="mb-3 rounded-2xl border border-white/10 bg-black/25 p-3">
+            <div className="flex items-center gap-3">
+              <Volume2 size={16} className="shrink-0 text-emerald-300" />
+              <div className="min-w-0 flex-1">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Master</span>
+                  <span className="font-mono text-[10px] font-bold text-zinc-600">{Math.round(playback.masterVolume * 100)}%</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.01" value={playback.masterVolume} onChange={(event) => changeMasterVolume(Number(event.target.value))} className="h-2 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-emerald-400" />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2 xl:h-[calc(100%-94px)] xl:overflow-y-auto xl:pr-1">
+            {playback.stems.map((stem) => (
+              <div key={stem.id} className="rounded-2xl border border-white/8 bg-black/25 p-3">
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-black text-zinc-200">{stem.name}</p>
+                    <p className="mt-0.5 font-mono text-[9px] font-semibold text-zinc-600">{formatTime(stem.duration)}</p>
+                  </div>
+                  <button type="button" onClick={() => toggleMute(stem.id)} className={`flex h-9 w-9 items-center justify-center rounded-xl text-[10px] font-black ${stem.muted ? 'bg-red-500 text-white' : 'border border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10'}`} title="Mute">
+                    {stem.muted ? <VolumeX size={15} /> : 'M'}
+                  </button>
+                  <button type="button" onClick={() => toggleSolo(stem.id)} className={`flex h-9 w-9 items-center justify-center rounded-xl text-[10px] font-black ${stem.solo ? 'bg-amber-400 text-zinc-950' : 'border border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10'}`} title="Solo">S</button>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <Volume2 size={13} className="shrink-0 text-zinc-600" />
+                  <input type="range" min="0" max="1" step="0.01" value={stem.volume} onChange={(event) => changeStemVolume(stem.id, Number(event.target.value))} className="h-1.5 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-zinc-800 accent-blue-400" />
+                  <span className="w-8 text-right font-mono text-[9px] font-bold text-zinc-600">{Math.round(stem.volume * 100)}</span>
+                </div>
+              </div>
+            ))}
+
+            {!loadingAudio && playback.stems.length === 0 && (
+              <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center">
+                <Music2 className="mx-auto text-zinc-700" size={28} />
+                <p className="mt-3 text-xs font-bold text-zinc-600">Selecciona una canción con audio para cargar el mixer.</p>
+              </div>
+            )}
+          </div>
+        </aside>
+      </main>
+    </div>
+  );
+};
+
+export default MultitrackLive;
