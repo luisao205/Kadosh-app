@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   CalendarDays,
   CheckCircle2,
-  Clock3,
   Download,
   ExternalLink,
   Loader2,
@@ -17,7 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import { db } from '../../config/firebase';
 import { getSongSearchMatch } from '../../utils/songSearch';
 import { getEventSetlistItems } from '../../utils/setlistUtils';
-import { formatEventDate, formatEventTime, parseAppDate } from '../../utils/dateUtils';
+import { formatEventDate, parseAppDate } from '../../utils/dateUtils';
 import {
   getMultitrackSetlistReadiness,
   isMultitrackCacheSupported,
@@ -89,12 +88,16 @@ const MultitrackLiveManagement = () => {
     });
 
     const unsubscribeEvents = onSnapshot(collection(db, 'eventos'), (snapshot) => {
+      const now = Date.now();
       const next = snapshot.docs
         .map((eventDoc) => ({ id: eventDoc.id, ...eventDoc.data() }))
         .sort((a, b) => {
-          const aDate = parseAppDate(a.fecha)?.getTime() || Number.MAX_SAFE_INTEGER;
-          const bDate = parseAppDate(b.fecha)?.getTime() || Number.MAX_SAFE_INTEGER;
-          return aDate - bDate;
+          const aTime = parseAppDate(a.fecha)?.getTime() || Number.MAX_SAFE_INTEGER;
+          const bTime = parseAppDate(b.fecha)?.getTime() || Number.MAX_SAFE_INTEGER;
+          const aUpcoming = aTime >= now;
+          const bUpcoming = bTime >= now;
+          if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+          return aUpcoming ? aTime - bTime : bTime - aTime;
         });
       setEvents(next);
       setLoadingEvents(false);
@@ -171,7 +174,7 @@ const MultitrackLiveManagement = () => {
   }, [eventCards, setlistSearch]);
 
   useEffect(() => {
-    if (loadingSongs || loadingEvents || events.length === 0) return undefined;
+    if (activeTab !== 'setlists' || loadingSongs || loadingEvents || events.length === 0) return undefined;
     let cancelled = false;
 
     const check = async () => {
@@ -207,7 +210,7 @@ const MultitrackLiveManagement = () => {
 
     check();
     return () => { cancelled = true; };
-  }, [events, songsById, loadingEvents, loadingSongs]);
+  }, [activeTab, events, songsById, loadingEvents, loadingSongs]);
 
   const handlePrepareEvent = async (card) => {
     if (!card || preparingEventId || card.eventSongs.length === 0 || !isMultitrackCacheSupported()) return;
@@ -453,7 +456,6 @@ const MultitrackLiveManagement = () => {
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-semibold text-zinc-600">
                           <span className="flex items-center gap-1.5"><CalendarDays size={12} />{formatEventDate(event.fecha)}</span>
-                          {formatEventTime(event.fecha) && <span className="flex items-center gap-1.5"><Clock3 size={12} />{formatEventTime(event.fecha)}</span>}
                           {event.lugar && <span className="truncate">{event.lugar}</span>}
                         </div>
                       </div>
