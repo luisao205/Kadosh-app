@@ -81,6 +81,83 @@ const prepareEntry = async (entry, cache) => {
   return { status: 'downloaded', entry };
 };
 
+export const getMultitrackSetlistReadiness = async (songs) => {
+  const list = Array.isArray(songs) ? songs : [];
+
+  if (!canUseCacheStorage()) {
+    return {
+      supported: false,
+      totalSongs: list.length,
+      songsWithAudio: list.filter((song) => getSongEntries(song).length > 0).length,
+      readySongs: 0,
+      partialSongs: 0,
+      pendingSongs: 0,
+      noAudioSongs: list.filter((song) => getSongEntries(song).length === 0).length,
+      totalAudio: 0,
+      cachedAudio: 0,
+      pendingAudio: 0,
+      songs: [],
+    };
+  }
+
+  const cache = await globalThis.caches.open(CACHE_NAME);
+  const songStatuses = await Promise.all(list.map(async (song, index) => {
+    const entries = getSongEntries(song);
+    const key = String(song?.setlistItemId || song?.id || `song-${index}`);
+
+    if (entries.length === 0) {
+      return {
+        key,
+        songId: song?.id || null,
+        title: song?.titulo || `Canción ${index + 1}`,
+        total: 0,
+        cached: 0,
+        pending: 0,
+        status: 'no-audio',
+      };
+    }
+
+    const matches = await Promise.all(entries.map(async (entry) => {
+      try {
+        return Boolean(await cache.match(createRequest(entry.url)));
+      } catch {
+        return false;
+      }
+    }));
+    const cached = matches.filter(Boolean).length;
+    const total = entries.length;
+    const pending = Math.max(0, total - cached);
+
+    return {
+      key,
+      songId: song?.id || null,
+      title: song?.titulo || `Canción ${index + 1}`,
+      total,
+      cached,
+      pending,
+      status: cached === total ? 'ready' : cached > 0 ? 'partial' : 'pending',
+    };
+  }));
+
+  const withAudio = songStatuses.filter((song) => song.total > 0);
+  const totalAudio = withAudio.reduce((sum, song) => sum + song.total, 0);
+  const cachedAudio = withAudio.reduce((sum, song) => sum + song.cached, 0);
+
+  return {
+    supported: true,
+    totalSongs: songStatuses.length,
+    songsWithAudio: withAudio.length,
+    readySongs: songStatuses.filter((song) => song.status === 'ready').length,
+    partialSongs: songStatuses.filter((song) => song.status === 'partial').length,
+    pendingSongs: songStatuses.filter((song) => song.status === 'pending').length,
+    noAudioSongs: songStatuses.filter((song) => song.status === 'no-audio').length,
+    totalAudio,
+    cachedAudio,
+    pendingAudio: Math.max(0, totalAudio - cachedAudio),
+    songs: songStatuses,
+  };
+};
+
 export const prepareMultitrackSetlist = async (songs, onProgress, options = {}) => {
   if (!canUseCacheStorage()) {
     throw new Error('Este dispositivo no ofrece almacenamiento de audio compatible para preparar el setlist.');
