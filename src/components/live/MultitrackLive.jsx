@@ -22,7 +22,11 @@ import {
 import { db } from '../../config/firebase';
 import { getEventSetlistItems, getEventSongIds } from '../../utils/setlistUtils';
 import MultitrackPlaybackEngine from '../../utils/multitrackPlaybackEngine';
-import { isMultitrackCacheSupported, prepareMultitrackSetlist } from '../../utils/multitrackAudioCache';
+import {
+  getMultitrackSetlistReadiness,
+  isMultitrackCacheSupported,
+  prepareMultitrackSetlist,
+} from '../../utils/multitrackAudioCache';
 
 const EMPTY_PLAYBACK = {
   playing: false,
@@ -65,6 +69,8 @@ const MultitrackLive = ({ user }) => {
   const [preparingSetlist, setPreparingSetlist] = useState(false);
   const [prepareProgress, setPrepareProgress] = useState({ completed: 0, total: 0, cached: 0, downloaded: 0, errors: 0 });
   const [prepareSummary, setPrepareSummary] = useState(null);
+  const [checkingReadiness, setCheckingReadiness] = useState(false);
+  const [readiness, setReadiness] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,6 +127,36 @@ const MultitrackLive = ({ user }) => {
   }, [currentIndex, playlist.length]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    if (playlist.length === 0) {
+      setReadiness(null);
+      setCheckingReadiness(false);
+      return undefined;
+    }
+
+    setCheckingReadiness(true);
+    getMultitrackSetlistReadiness(playlist)
+      .then((result) => {
+        if (!cancelled) setReadiness(result);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setReadiness({
+            supported: isMultitrackCacheSupported(),
+            error: error?.message || 'No se pudo revisar la preparación local.',
+            songs: [],
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingReadiness(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [playlist]);
+
+  useEffect(() => {
     if (!currentSong) {
       engineRef.current.stop();
       setPlayback(EMPTY_PLAYBACK);
@@ -140,6 +176,12 @@ const MultitrackLive = ({ user }) => {
       if (cancelled || result?.cancelled) return;
       setStemErrors(result.errors || []);
       setPlayback(engineRef.current.getState());
+
+      getMultitrackSetlistReadiness(playlist)
+        .then((nextReadiness) => {
+          if (!cancelled) setReadiness(nextReadiness);
+        })
+        .catch(() => {});
     }).catch((error) => {
       if (!cancelled) setAudioError(error?.message || 'No se pudo preparar el audio.');
     }).finally(() => {
@@ -150,7 +192,7 @@ const MultitrackLive = ({ user }) => {
       cancelled = true;
       engineRef.current.stop();
     };
-  }, [currentSong?.setlistItemId]);
+  }, [currentSong?.setlistItemId, playlist]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -170,6 +212,10 @@ const MultitrackLive = ({ user }) => {
     const values = playback.stems.map((stem) => stem.duration);
     return Math.max(...values) - Math.min(...values);
   }, [playback.stems]);
+
+  const readinessByKey = useMemo(() => new Map(
+    (readiness?.songs || []).map((song) => [String(song.key), song])
+  ), [readiness]);
 
   const togglePlay = async () => {
     if (loadingAudio || audioError || playback.stems.length === 0) return;
@@ -224,6 +270,8 @@ const MultitrackLive = ({ user }) => {
     try {
       const result = await prepareMultitrackSetlist(playlist, setPrepareProgress, { concurrency: 3 });
       setPrepareSummary(result);
+      const nextReadiness = await getMultitrackSetlistReadiness(playlist);
+      setReadiness(nextReadiness);
     } catch (error) {
       setPrepareSummary({ error: error?.message || 'No se pudo preparar el setlist.' });
     } finally {
@@ -259,6 +307,12 @@ const MultitrackLive = ({ user }) => {
 
   const cacheSupported = isMultitrackCacheSupported();
   const prepareHasErrors = Boolean(prepareSummary?.error || prepareSummary?.errors?.length);
+  const readyForLive = Boolean(
+    cacheSupported
+    && readiness?.songsWithAudio > 0
+    && readiness?.pendingAudio === 0
+    && readiness?.readySongs === readiness?.songsWithAudio
+  );
 
   return (
     <div className="min-h-screen bg-[#050608] text-zinc-100">
@@ -274,7 +328,7 @@ const MultitrackLive = ({ user }) => {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="truncate text-base font-black md:text-lg">Multitrack Live</p>
-                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 1</span>
+                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 1.5</span>
               </div>
               <p className="truncate text-[11px] font-semibold text-zinc-500">{evento?.titulo || 'Setlist'} · Operador: {user?.nombre || 'Usuario'}</p>
             </div>
@@ -285,12 +339,12 @@ const MultitrackLive = ({ user }) => {
               onClick={handlePrepareSetlist}
               disabled={!cacheSupported || preparingSetlist || playlist.length === 0}
               title={cacheSupported ? 'Descarga los audios del setlist para evitar depender de la red durante el servicio.' : 'Este dispositivo no soporta la preparación local de audios.'}
-              className={`flex items-center gap-2 rounded-2xl border px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${prepareSummary && !prepareHasErrors ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : prepareHasErrors ? 'border-amber-400/30 bg-amber-400/10 text-amber-200' : 'border-violet-400/25 bg-violet-400/10 text-violet-200 hover:bg-violet-400/15'}`}
+              className={`flex items-center gap-2 rounded-2xl border px-3 py-2 text-[10px] font-black uppercase tracking-[0.12em] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${readyForLive ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : prepareHasErrors ? 'border-amber-400/30 bg-amber-400/10 text-amber-200' : 'border-violet-400/25 bg-violet-400/10 text-violet-200 hover:bg-violet-400/15'}`}
             >
               {preparingSetlist ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
               {preparingSetlist
                 ? `Preparando ${prepareProgress.completed}/${prepareProgress.total || '...'}`
-                : prepareSummary && !prepareHasErrors
+                : readyForLive
                   ? 'Setlist preparado'
                   : 'Preparar setlist'}
             </button>
@@ -301,6 +355,49 @@ const MultitrackLive = ({ user }) => {
           </div>
         </div>
       </header>
+
+      <div className="mx-auto max-w-[1800px] px-3 pt-3 md:px-5 md:pt-4">
+        <div className={`rounded-2xl border px-4 py-3 ${readyForLive ? 'border-emerald-400/25 bg-emerald-400/[0.07]' : 'border-amber-400/20 bg-amber-400/[0.05]'}`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              {checkingReadiness ? (
+                <Loader2 size={18} className="shrink-0 animate-spin text-blue-300" />
+              ) : readyForLive ? (
+                <CheckCircle2 size={18} className="shrink-0 text-emerald-300" />
+              ) : (
+                <AlertTriangle size={18} className="shrink-0 text-amber-300" />
+              )}
+              <div className="min-w-0">
+                <p className={`text-xs font-black ${readyForLive ? 'text-emerald-100' : 'text-zinc-200'}`}>
+                  {checkingReadiness
+                    ? 'Revisando preparación Live…'
+                    : readiness?.error
+                      ? 'No se pudo comprobar la preparación local'
+                      : !cacheSupported
+                        ? 'Preparación local no disponible en este dispositivo'
+                        : readyForLive
+                          ? 'Setlist listo para Live'
+                          : 'Setlist pendiente de preparación'}
+                </p>
+                <p className="mt-1 text-[10px] font-semibold text-zinc-500">
+                  {readiness?.error
+                    ? readiness.error
+                    : readiness
+                      ? `${readiness.readySongs || 0}/${readiness.songsWithAudio || 0} canciones con audio preparadas · ${readiness.cachedAudio || 0}/${readiness.totalAudio || 0} audios locales${readiness.noAudioSongs ? ` · ${readiness.noAudioSongs} canción(es) sin audio` : ''}`
+                      : 'Kadosh comprobará qué canciones están listas para trabajar sin depender de la red.'}
+                </p>
+              </div>
+            </div>
+            {readiness && !readiness.error && (
+              <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-wide">
+                <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-emerald-300">Listas {readiness.readySongs || 0}</span>
+                {(readiness.partialSongs || 0) > 0 && <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-2 py-1 text-amber-300">Parciales {readiness.partialSongs}</span>}
+                {(readiness.pendingSongs || 0) > 0 && <span className="rounded-full border border-violet-400/20 bg-violet-400/10 px-2 py-1 text-violet-300">Pendientes {readiness.pendingSongs}</span>}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {(preparingSetlist || prepareSummary) && (
         <div className="mx-auto max-w-[1800px] px-3 pt-3 md:px-5 md:pt-4">
@@ -336,6 +433,9 @@ const MultitrackLive = ({ user }) => {
             {playlist.map((song, index) => {
               const count = getSongAudioCount(song);
               const active = index === currentIndex;
+              const songReadiness = readinessByKey.get(String(song.setlistItemId));
+              const ready = songReadiness?.status === 'ready';
+              const partial = songReadiness?.status === 'partial';
               return (
                 <button
                   key={song.setlistItemId}
@@ -349,8 +449,27 @@ const MultitrackLive = ({ user }) => {
                       <p className={`truncate text-sm font-black ${active ? 'text-white' : 'text-zinc-300'}`}>{song.titulo}</p>
                       <p className="mt-1 truncate text-[10px] font-semibold text-zinc-600">{song.artista || 'Sin artista'} · {song.bpm || '--'} BPM</p>
                       <div className="mt-2 flex items-center gap-1.5">
-                        {count > 0 ? <CheckCircle2 size={12} className="text-emerald-400" /> : <AlertTriangle size={12} className="text-amber-300" />}
-                        <span className={`text-[9px] font-black uppercase tracking-wide ${count > 0 ? 'text-emerald-400/80' : 'text-amber-300/80'}`}>{count > 0 ? `${count} audio${count === 1 ? '' : 's'}` : 'Sin audio'}</span>
+                        {count === 0 ? (
+                          <>
+                            <AlertTriangle size={12} className="text-amber-300" />
+                            <span className="text-[9px] font-black uppercase tracking-wide text-amber-300/80">Sin audio</span>
+                          </>
+                        ) : ready ? (
+                          <>
+                            <CheckCircle2 size={12} className="text-emerald-400" />
+                            <span className="text-[9px] font-black uppercase tracking-wide text-emerald-400/80">Preparada · {songReadiness.cached}/{songReadiness.total} local</span>
+                          </>
+                        ) : partial ? (
+                          <>
+                            <AlertTriangle size={12} className="text-amber-300" />
+                            <span className="text-[9px] font-black uppercase tracking-wide text-amber-300/80">Parcial · {songReadiness.cached}/{songReadiness.total} local</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle size={12} className="text-violet-300" />
+                            <span className="text-[9px] font-black uppercase tracking-wide text-violet-300/80">Pendiente · {count} audio{count === 1 ? '' : 's'}</span>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
