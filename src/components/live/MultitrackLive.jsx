@@ -85,6 +85,7 @@ const MultitrackLive = ({ user }) => {
   const [savingLiveMap, setSavingLiveMap] = useState(false);
   const [liveMapNotice, setLiveMapNotice] = useState('');
   const [navigationNotice, setNavigationNotice] = useState('');
+  const [liveTouchPanel, setLiveTouchPanel] = useState('sections');
 
   useEffect(() => {
     let cancelled = false;
@@ -1051,7 +1052,7 @@ const MultitrackLive = ({ user }) => {
                 </div>
 
                 {liveRunnerMode && (
-                  <div className="mt-3 rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.045] p-4">
+                  <div className="mt-3 hidden xl:block rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.045] p-4">
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">Secciones rápidas</p>
                       <p className="mt-1 text-[10px] font-semibold text-zinc-500">Salta o repite partes usando el Live Map guardado. Aquí no se edita la estructura.</p>
@@ -1225,6 +1226,133 @@ const MultitrackLive = ({ user }) => {
                   </div>
                 )}
 
+                {liveRunnerMode && (
+                  <div className="mt-4 xl:hidden">
+                    <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-3 shadow-xl shadow-black/20">
+                      <div className="mb-3 flex items-center justify-between gap-3 px-1">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-300">Control táctil Live</p>
+                          <p className="mt-1 text-[9px] font-semibold text-zinc-600">Vista optimizada para tablet y móvil.</p>
+                        </div>
+                        <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-500">Touch</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/8 bg-black/25 p-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setLiveTouchPanel('sections')}
+                          aria-pressed={liveTouchPanel === 'sections'}
+                          className={'flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ' + (liveTouchPanel === 'sections' ? 'bg-cyan-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/[0.05]')}
+                        >
+                          <ListMusic size={16} /> Secciones
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLiveTouchPanel('mixer')}
+                          aria-pressed={liveTouchPanel === 'mixer'}
+                          className={'flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ' + (liveTouchPanel === 'mixer' ? 'bg-blue-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/[0.05]')}
+                        >
+                          <SlidersHorizontal size={16} /> Mixer
+                        </button>
+                      </div>
+
+                      {liveTouchPanel === 'sections' ? (
+                        <div className="mt-3 rounded-2xl border border-cyan-400/15 bg-cyan-400/[0.035] p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">Secciones rápidas</p>
+                              <p className="mt-1 text-[9px] font-semibold text-zinc-600">Toca una sección para saltar. Loop permanece separado para evitar errores.</p>
+                            </div>
+                            <span className="font-mono text-[9px] font-bold text-zinc-600">{currentSections.length} secciones</span>
+                          </div>
+                          {currentSections.length > 0 ? (
+                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                              {currentSections.map((section, sectionIndex) => (
+                                <div key={section.id} className="grid grid-cols-[minmax(0,1fr)_72px] gap-2 rounded-2xl border border-white/8 bg-black/20 p-2">
+                                  <button type="button" onClick={() => goToSection(section)} className="min-h-16 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 text-left active:scale-[0.99]">
+                                    <p className="truncate text-sm font-black text-cyan-100">{section.label}</p>
+                                    <p className="mt-1 font-mono text-[9px] font-bold text-cyan-300/55">Compás {section.bar} · {formatTime(section.start)}</p>
+                                  </button>
+                                  <button type="button" onClick={() => loopSection(sectionIndex)} disabled={sectionIndex >= currentSections.length - 1} className="min-h-16 rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/10 text-[9px] font-black uppercase tracking-wide text-fuchsia-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-25">Loop</button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="mt-3 rounded-xl border border-amber-400/15 bg-amber-400/[0.05] p-3 text-[10px] font-bold text-amber-200">Esta canción no tiene secciones guardadas. Configúrala desde Administración antes del servicio.</div>
+                          )}
+                          {sectionError && <div className="mt-3 flex gap-2 rounded-xl border border-red-400/20 bg-red-400/[0.07] p-3 text-red-200"><AlertTriangle size={15} className="mt-0.5 shrink-0" /><p className="text-[10px] font-bold leading-relaxed">{sectionError}</p></div>}
+                        </div>
+                      ) : (
+                        <div className="mt-3 rounded-2xl border border-blue-400/15 bg-blue-400/[0.035] p-3">
+                          <div className="mb-3 flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-blue-300">Mixer Live</p>
+                              <p className="mt-1 text-[9px] font-semibold text-zinc-600">Controles actuales adaptados a touch. Los faders verticales llegan en 2K-B.</p>
+                            </div>
+                            <span className="text-[9px] font-bold text-zinc-600">{playback.stems.length} stems</span>
+                          </div>
+
+                          {currentSong?.livePlayback?.mixer && (
+                            <div className="mb-3 flex flex-col gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.05] p-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="text-[9px] font-black uppercase tracking-widest text-emerald-300">Mezcla guardada</p>
+                                <p className="mt-1 text-[9px] font-semibold text-zinc-600">Preset del Live Map cargado para esta canción.</p>
+                              </div>
+                              <button type="button" onClick={restoreSavedMixer} disabled={playback.stems.length === 0} className="min-h-11 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 text-[9px] font-black uppercase tracking-wide text-emerald-200 disabled:opacity-30">Restaurar mezcla</button>
+                            </div>
+                          )}
+
+                          {playback.stems.some((stem) => stem.solo) && (
+                            <div className="mb-3 flex gap-2 rounded-xl border border-amber-400/20 bg-amber-400/[0.06] p-3 text-amber-200">
+                              <AlertTriangle size={14} className="shrink-0" />
+                              <p className="text-[9px] font-bold leading-relaxed">Hay uno o más canales en Solo.</p>
+                            </div>
+                          )}
+
+                          <div className="mb-3 rounded-2xl border border-white/10 bg-black/25 p-3">
+                            <div className="flex items-center gap-3">
+                              <Volume2 size={16} className="shrink-0 text-emerald-300" />
+                              <div className="min-w-0 flex-1">
+                                <div className="mb-2 flex items-center justify-between">
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Master</span>
+                                  <span className="font-mono text-[10px] font-bold text-zinc-500">{Math.round(playback.masterVolume * 100)}%</span>
+                                </div>
+                                <input type="range" min="0" max="1" step="0.01" value={playback.masterVolume} onChange={(event) => changeMasterVolume(Number(event.target.value))} className="h-3 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-emerald-400" />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            {playback.stems.map((stem) => (
+                              <div key={stem.id} className="rounded-2xl border border-white/8 bg-black/25 p-3">
+                                <div className="flex items-center gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-xs font-black text-zinc-200">{stem.name}</p>
+                                    <p className="mt-0.5 font-mono text-[9px] font-semibold text-zinc-600">{Math.round(stem.volume * 100)}%</p>
+                                  </div>
+                                  <button type="button" onClick={() => toggleMute(stem.id)} className={'flex h-11 w-12 items-center justify-center rounded-xl text-[10px] font-black ' + (stem.muted ? 'bg-red-500 text-white' : 'border border-white/10 bg-white/5 text-zinc-400')} title="Mute">{stem.muted ? <VolumeX size={16} /> : 'M'}</button>
+                                  <button type="button" onClick={() => toggleSolo(stem.id)} className={'flex h-11 w-12 items-center justify-center rounded-xl text-[10px] font-black ' + (stem.solo ? 'bg-amber-400 text-zinc-950' : 'border border-white/10 bg-white/5 text-zinc-400')} title="Solo">S</button>
+                                </div>
+                                <div className="mt-3 flex items-center gap-2">
+                                  <Volume2 size={14} className="shrink-0 text-zinc-600" />
+                                  <input type="range" min="0" max="1" step="0.01" value={stem.volume} onChange={(event) => changeStemVolume(stem.id, Number(event.target.value))} className="h-3 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-zinc-800 accent-blue-400" />
+                                </div>
+                              </div>
+                            ))}
+
+                            {!loadingAudio && playback.stems.length === 0 && (
+                              <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center">
+                                <Music2 className="mx-auto text-zinc-700" size={28} />
+                                <p className="mt-3 text-xs font-bold text-zinc-600">Selecciona una canción con audio para cargar el mixer.</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-7">
                   <input
                     type="range"
@@ -1327,7 +1455,7 @@ const MultitrackLive = ({ user }) => {
           )}
         </section>
 
-        <aside className="order-3 rounded-3xl border border-white/10 bg-white/[0.035] p-3 xl:sticky xl:top-[82px] xl:h-[calc(100vh-102px)] xl:overflow-hidden">
+        <aside className={`order-3 rounded-3xl border border-white/10 bg-white/[0.035] p-3 xl:sticky xl:top-[82px] xl:h-[calc(100vh-102px)] xl:overflow-hidden ${liveRunnerMode ? 'hidden xl:block' : ''}`}>
           <div className="mb-3 flex items-center justify-between px-1">
             <div className="flex items-center gap-2">
               <SlidersHorizontal size={16} className="text-blue-300" />
