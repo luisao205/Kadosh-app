@@ -27,14 +27,16 @@ import {
   isMultitrackCacheSupported,
   prepareMultitrackSetlist,
 } from '../../utils/multitrackAudioCache';
-import { getMusicalPosition } from '../../utils/musicalGrid';
+import { getMusicalPosition, getNextMusicalBoundary } from '../../utils/musicalGrid';
 
 const EMPTY_PLAYBACK = {
   playing: false,
   currentTime: 0,
   duration: 0,
+  shortestStemDuration: 0,
   masterVolume: 1,
   stems: [],
+  loop: null,
 };
 
 const formatTime = (value) => {
@@ -73,6 +75,11 @@ const MultitrackLive = ({ user }) => {
   const [checkingReadiness, setCheckingReadiness] = useState(false);
   const [readiness, setReadiness] = useState(null);
   const [gridOffsets, setGridOffsets] = useState({});
+  const [loopError, setLoopError] = useState('');
+  const [sectionsBySong, setSectionsBySong] = useState({});
+  const [sectionError, setSectionError] = useState('');
+  const [editingSectionId, setEditingSectionId] = useState(null);
+  const [sectionDraft, setSectionDraft] = useState({ label: '', bar: 1 });
 
   useEffect(() => {
     let cancelled = false;
@@ -168,6 +175,7 @@ const MultitrackLive = ({ user }) => {
     let cancelled = false;
     setLoadingAudio(true);
     setAudioError('');
+    setLoopError('');
     setStemErrors([]);
     setLoadProgress({ completed: 0, total: getSongAudioCount(currentSong), cacheHits: 0 });
     setPlayback(EMPTY_PLAYBACK);
@@ -237,6 +245,10 @@ const MultitrackLive = ({ user }) => {
     gridOffsetSeconds: currentGridOffset,
   }), [playback.currentTime, currentBpm, currentBeatsPerBar, currentGridOffset]);
 
+  const currentSections = useMemo(() => (
+    Array.isArray(sectionsBySong[currentSongGridKey]) ? sectionsBySong[currentSongGridKey] : []
+  ), [sectionsBySong, currentSongGridKey]);
+
   const togglePlay = async () => {
     if (loadingAudio || audioError || playback.stems.length === 0) return;
     if (engineRef.current.getState().playing) engineRef.current.pause();
@@ -282,6 +294,9 @@ const MultitrackLive = ({ user }) => {
 
   const markGridStart = () => {
     if (!currentSongGridKey || !currentBpm || playback.stems.length === 0) return;
+    if (playback.loop) {
+      setPlayback(engineRef.current.cancelLoop());
+    }
     setGridOffsets((previous) => ({
       ...previous,
       [currentSongGridKey]: playback.currentTime,
@@ -290,10 +305,191 @@ const MultitrackLive = ({ user }) => {
 
   const resetGridStart = () => {
     if (!currentSongGridKey) return;
+    if (playback.loop) {
+      setPlayback(engineRef.current.cancelLoop());
+    }
     setGridOffsets((previous) => ({
       ...previous,
       [currentSongGridKey]: 0,
     }));
+  };
+
+  const armQuantizedLoop = (bars) => {
+    setLoopError('');
+
+    if (!currentBpm || !musicalPosition.valid || playback.stems.length === 0) {
+      setLoopError('Configura un BPM válido y carga la canción antes de crear un loop.');
+      return;
+    }
+
+    const secondsPerBar = musicalPosition.secondsPerBar;
+    let start = currentGridOffset;
+
+    if (playback.playing) {
+      start = getNextMusicalBoundary({
+        time: playback.currentTime,
+        bpm: currentBpm,
+        beatsPerBar: currentBeatsPerBar,
+        gridOffsetSeconds: currentGridOffset,
+        boundary: 'bar',
+      });
+    } else if (playback.currentTime >= currentGridOffset && !musicalPosition.beforeStart) {
+      start = currentGridOffset + ((Math.max(1, musicalPosition.bar) - 1) * secondsPerBar);
+    }
+
+    const end = start + (Math.max(1, Number(bars) || 1) * secondsPerBar);
+    const shortestDuration = Number(playback.shortestStemDuration) || Math.min(...playback.stems.map((stem) => stem.duration));
+
+    if (end > shortestDuration - 0.005) {
+      setLoopError('Ese bloque llega más allá del stem más corto. Muévete a un compás anterior o elige menos compases.');
+      return;
+    }
+
+    try {
+      const nextState = engineRef.current.setLoopRegion(start, end, { bars });
+      setPlayback(nextState);
+    } catch (error) {
+      setLoopError(error?.message || 'No se pudo crear el loop.');
+    }
+  };
+
+  const exitQuantizedLoop = () => {
+    setLoopError('');
+    try {
+      setPlayback(engineRef.current.requestLoopExit());
+    } catch (error) {
+      setLoopError(error?.message || 'No se pudo salir del loop.');
+    }
+  };
+
+  const addSectionMarker = (baseLabel) => {
+    setSectionError('');
+
+    if (!currentSongGridKey || !currentBpm || !musicalPosition.valid || musicalPosition.beforeStart || playback.stems.length === 0) {
+      setSectionError('Reproduce la canción y alinea primero el compás 1 antes de marcar secciones.');
+      return;
+    }
+
+    const secondsPerBar = musicalPosition.secondsPerBar;
+    const bar = Math.max(1, musicalPosition.bar);
+    const start = currentGridOffset + ((bar - 1) * secondsPerBar);
+    const sameBaseCount = currentSections.filter((section) => section.baseLabel === baseLabel).length;
+    const label = sameBaseCount > 0 ? baseLabel + ' ' + (sameBaseCount + 1) : baseLabel;
+    const nextMarker = {
+      id: String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8),
+      label,
+      baseLabel,
+      bar,
+      start,
+    };
+
+    setSectionsBySong((previous) => {
+      const current = Array.isArray(previous[currentSongGridKey]) ? previous[currentSongGridKey] : [];
+      const withoutSameBar = current.filter((section) => Math.abs(section.start - start) > 0.03);
+      return {
+        ...previous,
+        [currentSongGridKey]: [...withoutSameBar, nextMarker].sort((a, b) => a.start - b.start),
+      };
+    });
+  };
+
+  const removeSectionMarker = (sectionId) => {
+    setSectionError('');
+    if (!currentSongGridKey) return;
+    setSectionsBySong((previous) => ({
+      ...previous,
+      [currentSongGridKey]: (previous[currentSongGridKey] || []).filter((section) => section.id !== sectionId),
+    }));
+  };
+
+  const goToSection = async (section) => {
+    setSectionError('');
+    try {
+      await engineRef.current.seek(section.start);
+      setPlayback(engineRef.current.getState());
+    } catch (error) {
+      setSectionError(error?.message || 'No se pudo ir a esa sección.');
+    }
+  };
+
+  const loopSection = async (sectionIndex) => {
+    setSectionError('');
+    const section = currentSections[sectionIndex];
+    const nextSection = currentSections[sectionIndex + 1];
+
+    if (!section || !nextSection) {
+      setSectionError('Para repetir una sección necesitas haber marcado también la sección que viene después.');
+      return;
+    }
+
+    try {
+      await engineRef.current.seek(section.start);
+      const bars = Math.max(1, Math.round((nextSection.start - section.start) / musicalPosition.secondsPerBar));
+      const nextState = engineRef.current.setLoopRegion(section.start, nextSection.start, { bars });
+      setPlayback(nextState);
+    } catch (error) {
+      setSectionError(error?.message || 'No se pudo repetir esa sección.');
+    }
+  };
+  const beginEditSection = (section) => {
+    setSectionError('');
+    setEditingSectionId(section.id);
+    setSectionDraft({ label: section.label, bar: section.bar });
+  };
+
+  const cancelEditSection = () => {
+    setEditingSectionId(null);
+    setSectionDraft({ label: '', bar: 1 });
+  };
+
+  const adjustDraftBar = (delta) => {
+    setSectionDraft((previous) => ({
+      ...previous,
+      bar: Math.max(1, (Number(previous.bar) || 1) + delta),
+    }));
+  };
+
+  const saveSectionEdit = (sectionId) => {
+    setSectionError('');
+    const label = String(sectionDraft.label || '').trim();
+    const bar = Math.max(1, Math.round(Number(sectionDraft.bar) || 1));
+
+    if (!label) {
+      setSectionError('Escribe un nombre para la sección.');
+      return;
+    }
+
+    if (!musicalPosition.secondsPerBar) {
+      setSectionError('No se puede recalcular el compás sin un BPM válido.');
+      return;
+    }
+
+    const start = currentGridOffset + ((bar - 1) * musicalPosition.secondsPerBar);
+    const shortestDuration = Number(playback.shortestStemDuration) || Math.min(...playback.stems.map((stem) => stem.duration));
+
+    if (start >= shortestDuration - 0.01) {
+      setSectionError('Ese compás está fuera del rango seguro de los stems.');
+      return;
+    }
+
+    const collides = currentSections.some((section) => section.id !== sectionId && Math.abs(section.start - start) < 0.03);
+    if (collides) {
+      setSectionError('Ya existe otra sección en ese compás. Elige otro compás.');
+      return;
+    }
+
+    if (playback.loop) {
+      setPlayback(engineRef.current.cancelLoop());
+    }
+
+    setSectionsBySong((previous) => ({
+      ...previous,
+      [currentSongGridKey]: (previous[currentSongGridKey] || []).map((section) =>
+        section.id === sectionId ? { ...section, label, bar, start } : section
+      ).sort((a, b) => a.start - b.start),
+    }));
+
+    cancelEditSection();
   };
 
   const handlePrepareSetlist = async () => {
@@ -364,7 +560,7 @@ const MultitrackLive = ({ user }) => {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="truncate text-base font-black md:text-lg">Multitrack Live</p>
-                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 2A</span>
+                <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-amber-200">Fase 2D</span>
               </div>
               <p className="truncate text-[11px] font-semibold text-zinc-500">{evento?.titulo || 'Setlist'} · Operador: {user?.nombre || 'Usuario'}</p>
             </div>
@@ -600,6 +796,161 @@ const MultitrackLive = ({ user }) => {
                       </button>
                     </div>
                   </div>
+                </div>
+
+                <div className="mt-3 rounded-2xl border border-fuchsia-400/20 bg-fuchsia-400/[0.045] p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-300">Loop cuantizado</p>
+                        {playback.loop && (
+                          <span className={'rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ' + (playback.loop.phase === 'active' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : playback.loop.phase === 'armed' ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200' : 'border-amber-400/30 bg-amber-400/10 text-amber-200')}>
+                            {playback.loop.phase === 'active' ? 'Loop activo' : playback.loop.phase === 'armed' ? 'Armado' : 'Saliendo'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-[10px] font-semibold text-zinc-500">Mientras reproduce, el bloque se arma desde el próximo compás. Todos los stems usan el mismo rango del motor.</p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {[1, 2, 4, 8].map((bars) => (
+                        <button
+                          key={bars}
+                          type="button"
+                          onClick={() => armQuantizedLoop(bars)}
+                          disabled={!currentBpm || playback.stems.length === 0 || Boolean(playback.loop)}
+                          className="min-w-[54px] rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/10 px-3 py-2 text-[10px] font-black text-fuchsia-100 hover:bg-fuchsia-400/20 disabled:cursor-not-allowed disabled:opacity-30"
+                        >
+                          {bars} {bars === 1 ? 'compás' : 'compases'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {playback.loop && (
+                    <div className="mt-4 flex flex-col gap-3 rounded-xl border border-white/8 bg-black/25 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-xs font-black text-zinc-200">{playback.loop.bars} {playback.loop.bars === 1 ? 'compás' : 'compases'} · {formatTime(playback.loop.start)} → {formatTime(playback.loop.end)}</p>
+                        <p className="mt-1 text-[10px] font-semibold text-zinc-600">{playback.loop.phase === 'armed' ? 'Entrará al loop cuando llegue al próximo compás.' : playback.loop.phase === 'exiting' ? 'La salida está cuantizada para no cortar el bloque a la mitad.' : 'El bloque se repetirá hasta que ordenes salir.'}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={exitQuantizedLoop}
+                        disabled={playback.loop.phase === 'exiting'}
+                        className="rounded-xl border border-amber-400/25 bg-amber-400/10 px-4 py-2.5 text-[10px] font-black uppercase tracking-wide text-amber-100 hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {playback.loop.phase === 'armed' ? 'Cancelar loop' : playback.loop.phase === 'exiting' ? 'Salida programada' : 'Salir del loop'}
+                      </button>
+                    </div>
+                  )}
+
+                  {loopError && (
+                    <div className="mt-3 flex gap-2 rounded-xl border border-red-400/20 bg-red-400/[0.07] p-3 text-red-200">
+                      <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                      <p className="text-[10px] font-bold leading-relaxed">{loopError}</p>
+                    </div>
+                  )}
+
+                  <p className="mt-3 text-[9px] font-semibold text-zinc-700">Mover la línea de tiempo o pulsar Stop cancela el loop por seguridad.</p>
+                </div>
+
+                <div className="mt-3 rounded-2xl border border-violet-400/20 bg-violet-400/[0.045] p-4">
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-violet-300">Secciones Live</p>
+                      <p className="mt-1 text-[10px] font-semibold leading-relaxed text-zinc-500">Hazlo simple: cuando llegues al inicio de una parte, toca su nombre. Kadosh recordará ese punto durante esta sesión.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {['Intro', 'Verso', 'Pre-coro', 'Coro', 'Puente', 'Instrumental', 'Final'].map((label) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => addSectionMarker(label)}
+                          disabled={!currentBpm || playback.stems.length === 0 || musicalPosition.beforeStart}
+                          className="rounded-xl border border-violet-400/20 bg-violet-400/10 px-3 py-2 text-[10px] font-black text-violet-100 hover:bg-violet-400/20 disabled:cursor-not-allowed disabled:opacity-30"
+                        >
+                          + {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {currentSections.length > 0 ? (
+                    <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                      {currentSections.map((section, sectionIndex) => (
+                        <div key={section.id} className="rounded-xl border border-white/8 bg-black/25 p-3">
+                          {editingSectionId === section.id ? (
+                            <div className="space-y-3">
+                              <div>
+                                <label className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Nombre</label>
+                                <input
+                                  type="text"
+                                  value={sectionDraft.label}
+                                  onChange={(event) => setSectionDraft((previous) => ({ ...previous, label: event.target.value }))}
+                                  className="mt-1 w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-xs font-bold text-white outline-none focus:border-violet-400/40"
+                                  placeholder="Nombre de sección"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] font-black uppercase tracking-widest text-zinc-600">Compás de inicio</label>
+                                <div className="mt-1 grid grid-cols-[38px_minmax(0,1fr)_38px] gap-2">
+                                  <button type="button" onClick={() => adjustDraftBar(-1)} className="rounded-lg border border-white/10 bg-white/5 text-lg font-black text-zinc-300 hover:bg-white/10">−</button>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={sectionDraft.bar}
+                                    onChange={(event) => setSectionDraft((previous) => ({ ...previous, bar: event.target.value }))}
+                                    className="w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-center font-mono text-xs font-black text-white outline-none focus:border-cyan-400/40"
+                                  />
+                                  <button type="button" onClick={() => adjustDraftBar(1)} className="rounded-lg border border-white/10 bg-white/5 text-lg font-black text-zinc-300 hover:bg-white/10">+</button>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button type="button" onClick={cancelEditSection} className="rounded-lg border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-wide text-zinc-400 hover:bg-white/10">Cancelar</button>
+                                <button type="button" onClick={() => saveSectionEdit(section.id)} className="rounded-lg bg-emerald-400 px-2 py-2 text-[9px] font-black uppercase tracking-wide text-zinc-950 hover:bg-emerald-300">Guardar cambios</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-xs font-black text-zinc-100">{section.label}</p>
+                                  <p className="mt-1 font-mono text-[9px] font-bold text-zinc-600">Compás {section.bar} · {formatTime(section.start)}</p>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button type="button" onClick={() => beginEditSection(section)} className="rounded-lg border border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-zinc-500 hover:bg-white/5 hover:text-zinc-200">Editar</button>
+                                  <button type="button" onClick={() => removeSectionMarker(section.id)} className="rounded-lg border border-white/10 px-2 py-1 text-[10px] font-black text-zinc-600 hover:bg-white/5 hover:text-zinc-300" title="Eliminar sección">×</button>
+                                </div>
+                              </div>
+                              <div className="mt-3 grid grid-cols-2 gap-2">
+                                <button type="button" onClick={() => goToSection(section)} className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-2 py-2 text-[9px] font-black uppercase tracking-wide text-cyan-200 hover:bg-cyan-400/20">Ir</button>
+                                <button
+                                  type="button"
+                                  onClick={() => loopSection(sectionIndex)}
+                                  disabled={sectionIndex >= currentSections.length - 1}
+                                  className="rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/10 px-2 py-2 text-[9px] font-black uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-400/20 disabled:cursor-not-allowed disabled:opacity-30"
+                                >
+                                  Loop
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-xl border border-dashed border-white/10 p-4 text-center text-[10px] font-semibold text-zinc-600">
+                      Todavía no hay secciones. Reproduce la canción y pulsa “+ Intro”, “+ Verso”, “+ Coro”… justo cuando empiece cada parte.
+                    </div>
+                  )}
+
+                  {sectionError && (
+                    <div className="mt-3 flex gap-2 rounded-xl border border-red-400/20 bg-red-400/[0.07] p-3 text-red-200">
+                      <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                      <p className="text-[10px] font-bold leading-relaxed">{sectionError}</p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-7">
