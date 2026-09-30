@@ -58,7 +58,7 @@ patchFile('src/App.jsx', (input) => {
 patchFile('src/components/layout/AdminLayout.jsx', (input) => {
   let text = input;
 
-  if (!text.includes('Radio,') && !text.includes(', Radio }')) {
+  if (!text.includes('Megaphone, Radio')) {
     text = replaceOnce(
       text,
       'import { Home, Music, Calendar, Settings, Menu, X, PlayCircle, LogOut, User, BellRing, Bell, Monitor, Images, Camera, BookOpen, Megaphone } from \'lucide-react\';',
@@ -67,7 +67,7 @@ patchFile('src/components/layout/AdminLayout.jsx', (input) => {
     );
   }
 
-  if (!text.includes('canManageSongs')) {
+  if (!text.includes('canManageSongs, canManageTeam')) {
     text = replaceOnce(
       text,
       "import { canAccessMultimediaTools, canAccessPreachings, canManageAnnouncements, canManageTeam } from '../../utils/rolePermissions';",
@@ -124,7 +124,7 @@ patchFile('src/utils/multitrackPlaybackEngine.js', (input) => {
       "    const savedStems = preset?.stems && typeof preset.stems === 'object' ? preset.stems : {};",
       '    const savedValues = Object.values(savedStems);',
       '    this.stems.forEach((stem) => {',
-      '      const saved = savedStems[stem.id] || savedValues.find((item) => String(item?.name || \'\') === stem.name);',
+      "      const saved = savedStems[stem.id] || savedValues.find((item) => String(item?.name || '') === stem.name);",
       '      if (!saved) {',
       '        stem.volume = 1;',
       '        stem.muted = false;',
@@ -290,6 +290,8 @@ patchFile('src/components/live/MultitrackLive.jsx', (input) => {
     );
   }
 
+  text = text.replace('  }, [currentSong?.setlistItemId, playlist]);', '  }, [currentSong?.setlistItemId]);');
+
   const oldCurrentSignature = [
     '  const currentLiveMapSignature = useMemo(() => JSON.stringify({',
     '    bpm: currentBpm,',
@@ -415,9 +417,13 @@ patchFile('src/components/live/MultitrackLive.jsx', (input) => {
   text = text.replace('>Fase 2E</span>', '>Fase 2F</span>');
   text = text.replace('Guarda BPM, compás, alineación y secciones directamente en la canción.', 'Guarda BPM, compás, alineación, secciones y la mezcla completa directamente en la canción.');
 
-  text = text.replace('onClick={() => navigate(`/setlist/${eventoId}`)}', "onClick={() => navigate(standaloneSongMode ? '/multitrack-live' : `/setlist/${eventoId}`)}");
-  text = text.replace('Volver al setlist', "{standaloneSongMode ? 'Volver a Multitrack Live' : 'Volver al setlist'}");
+  text = text.replaceAll('onClick={() => navigate(`/setlist/${eventoId}`)}', "onClick={() => navigate(standaloneSongMode ? '/multitrack-live' : `/setlist/${eventoId}`)}");
+  text = text.replace('title="Volver al setlist"', "title={standaloneSongMode ? 'Volver a Multitrack Live' : 'Volver al setlist'}");
+  text = text.replace('            Volver al setlist', "            {standaloneSongMode ? 'Volver a Multitrack Live' : 'Volver al setlist'}");
   text = text.replace("{evento?.titulo || 'Setlist'} · Operador: {user?.nombre || 'Usuario'}", "{standaloneSongMode ? 'Editor de canción' : (evento?.titulo || 'Setlist')} · Operador: {user?.nombre || 'Usuario'}");
+  text = text.replace('                  ? \'Setlist preparado\'\n                  : \'Preparar setlist\'}', "                  ? (standaloneSongMode ? 'Canción preparada' : 'Setlist preparado')\n                  : (standaloneSongMode ? 'Preparar canción' : 'Preparar setlist')}");
+  text = text.replace("                          ? 'Setlist listo para Live'\n                          : 'Setlist pendiente de preparación'", "                          ? (standaloneSongMode ? 'Canción lista para Live' : 'Setlist listo para Live')\n                          : (standaloneSongMode ? 'Canción pendiente de preparación' : 'Setlist pendiente de preparación')");
+  text = text.replace('<h2 className="text-xs font-black uppercase tracking-[0.16em] text-zinc-300">Setlist</h2>', '<h2 className="text-xs font-black uppercase tracking-[0.16em] text-zinc-300">{standaloneSongMode ? \'Canción\' : \'Setlist\'}</h2>');
 
   if (!text.includes('Restaurar mezcla guardada')) {
     const marker = '          <div className="mb-3 rounded-2xl border border-white/10 bg-black/25 p-3">';
