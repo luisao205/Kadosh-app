@@ -23,6 +23,7 @@ export class MultitrackPlaybackEngine {
     this.duration = 0;
     this.masterVolume = 1;
     this.loadToken = 0;
+    this.loop = null;
   }
 
   async ensureContext() {
@@ -131,6 +132,18 @@ export class MultitrackPlaybackEngine {
     };
   }
 
+  getShortestStemDuration() {
+    if (this.stems.length === 0) return 0;
+    return Math.min(...this.stems.map((stem) => stem.buffer.duration));
+  }
+
+  applyLoopToSource(source) {
+    if (!this.loop || this.loop.exitRequested) return;
+    source.loopStart = this.loop.start;
+    source.loopEnd = this.loop.end;
+    source.loop = true;
+  }
+
   createSources(offset) {
     const when = this.context.currentTime + 0.035;
     const safeOffset = clamp(offset, 0, Math.max(0, this.duration - 0.01));
@@ -141,6 +154,7 @@ export class MultitrackPlaybackEngine {
       const source = this.context.createBufferSource();
       source.buffer = stem.buffer;
       source.connect(stem.gainNode);
+      this.applyLoopToSource(source);
       source.start(when, safeOffset);
       this.sources.set(stem.id, source);
     });
@@ -162,8 +176,10 @@ export class MultitrackPlaybackEngine {
   pause() {
     if (!this.playing) return;
     this.offset = this.getCurrentTime();
+    if (this.loop?.exitRequested) this.loop = null;
     this.stopSources();
     this.playing = false;
+    this.startedAt = 0;
   }
 
   stop() {
@@ -171,6 +187,7 @@ export class MultitrackPlaybackEngine {
     this.playing = false;
     this.offset = 0;
     this.startedAt = 0;
+    this.loop = null;
   }
 
   stopSources() {
@@ -189,22 +206,143 @@ export class MultitrackPlaybackEngine {
     this.sources.clear();
   }
 
+  clearLoopForSeek() {
+    this.sources.forEach((source) => {
+      source.loop = false;
+    });
+    this.loop = null;
+  }
+
   async seek(seconds) {
     const next = clamp(Number(seconds) || 0, 0, this.duration || 0);
     const wasPlaying = this.playing;
+    this.clearLoopForSeek();
     if (wasPlaying) this.stopSources();
     this.offset = next;
     this.startedAt = 0;
     if (wasPlaying) this.createSources(next);
   }
 
+  setLoopRegion(startSeconds, endSeconds, metadata = {}) {
+    if (this.stems.length === 0) throw new Error('No hay stems cargados para crear el loop.');
+
+    const start = Number(startSeconds);
+    const end = Number(endSeconds);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start + 0.02) {
+      throw new Error('El rango del loop no es válido.');
+    }
+
+    const shortestDuration = this.getShortestStemDuration();
+    if (end > shortestDuration - 0.005) {
+      throw new Error('Ese loop llega más allá del stem más corto. Elige un bloque anterior.');
+    }
+
+    const current = this.getCurrentTime();
+    if (current >= end - 0.01) {
+      throw new Error('El punto actual ya pasó el final de ese loop.');
+    }
+
+    this.loop = {
+      start,
+      end,
+      bars: Math.max(1, Math.round(Number(metadata.bars) || 1)),
+      exitRequested: false,
+      exitRequestedAtContextTime: 0,
+      exitAtContextTime: 0,
+      exitFromTime: 0,
+    };
+
+    this.sources.forEach((source) => {
+      source.loopStart = start;
+      source.loopEnd = end;
+      source.loop = true;
+    });
+
+    return this.getState();
+  }
+
+  cancelLoop() {
+    if (!this.loop) return this.getState();
+
+    const current = this.getCurrentTime();
+    this.sources.forEach((source) => {
+      source.loop = false;
+    });
+
+    if (this.playing && this.context) {
+      this.offset = current;
+      this.startedAt = this.context.currentTime;
+    }
+
+    this.loop = null;
+    return this.getState();
+  }
+
+  requestLoopExit() {
+    if (!this.loop) return this.getState();
+
+    const current = this.getCurrentTime();
+    if (!this.loop) return this.getState();
+
+    if (!this.playing || !this.context || current < this.loop.start - 0.005) {
+      return this.cancelLoop();
+    }
+
+    this.sources.forEach((source) => {
+      source.loop = false;
+    });
+
+    const anchor = Math.max(this.context.currentTime, this.startedAt || 0);
+    const remaining = Math.max(0, this.loop.end - current);
+    this.loop = {
+      ...this.loop,
+      exitRequested: true,
+      exitRequestedAtContextTime: anchor,
+      exitAtContextTime: anchor + remaining,
+      exitFromTime: current,
+    };
+
+    return this.getState();
+  }
+
+  finalizeLoopExitIfNeeded() {
+    if (!this.loop?.exitRequested || !this.playing || !this.context) return false;
+    if (this.context.currentTime < this.loop.exitAtContextTime) return false;
+
+    const loopEnd = this.loop.end;
+    const exitAt = this.loop.exitAtContextTime;
+    this.offset = loopEnd;
+    this.startedAt = exitAt;
+    this.loop = null;
+    return true;
+  }
+
   getCurrentTime() {
     if (!this.playing || !this.context) return clamp(this.offset, 0, this.duration || 0);
+
+    if (this.finalizeLoopExitIfNeeded()) {
+      const elapsedAfterExit = Math.max(0, this.context.currentTime - this.startedAt);
+      return clamp(this.offset + elapsedAfterExit, 0, this.duration || 0);
+    }
+
+    if (this.loop?.exitRequested) {
+      const elapsedSinceExitRequest = Math.max(0, this.context.currentTime - this.loop.exitRequestedAtContextTime);
+      return clamp(this.loop.exitFromTime + elapsedSinceExitRequest, 0, this.duration || 0);
+    }
+
     const elapsed = Math.max(0, this.context.currentTime - this.startedAt);
-    return clamp(this.offset + elapsed, 0, this.duration || 0);
+    const rawTime = this.offset + elapsed;
+
+    if (this.loop && rawTime >= this.loop.end) {
+      const loopLength = this.loop.end - this.loop.start;
+      return clamp(this.loop.start + ((rawTime - this.loop.start) % loopLength), 0, this.duration || 0);
+    }
+
+    return clamp(rawTime, 0, this.duration || 0);
   }
 
   isFinished() {
+    if (this.loop && !this.loop.exitRequested) return false;
     return this.playing && this.duration > 0 && this.getCurrentTime() >= this.duration - 0.03;
   }
 
@@ -253,13 +391,32 @@ export class MultitrackPlaybackEngine {
     }));
   }
 
+  getLoopState(currentTime) {
+    if (!this.loop) return null;
+    return {
+      active: true,
+      start: this.loop.start,
+      end: this.loop.end,
+      bars: this.loop.bars,
+      exitRequested: this.loop.exitRequested,
+      phase: this.loop.exitRequested
+        ? 'exiting'
+        : currentTime < this.loop.start
+          ? 'armed'
+          : 'active',
+    };
+  }
+
   getState() {
+    const currentTime = this.getCurrentTime();
     return {
       playing: this.playing,
-      currentTime: this.getCurrentTime(),
+      currentTime,
       duration: this.duration,
+      shortestStemDuration: this.getShortestStemDuration(),
       masterVolume: this.masterVolume,
       stems: this.getStemState(),
+      loop: this.getLoopState(currentTime),
     };
   }
 
