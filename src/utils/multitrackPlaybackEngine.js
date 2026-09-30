@@ -1,56 +1,38 @@
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
-const getStemId = (track, index) => String(track?.id || `stem-${index}`);
-const getStemName = (track, index) => String(track?.nombre || track?.name || `Track ${index + 1}`);
-
-const getMediaErrorMessage = (audio) => {
-  const code = audio?.error?.code;
-  if (code === 1) return 'Carga cancelada';
-  if (code === 2) return 'Error de red al cargar el audio';
-  if (code === 3) return 'No se pudo decodificar el audio';
-  if (code === 4) return 'Formato de audio no compatible';
-  return 'No se pudo cargar el audio';
+const getAudioContextClass = () => {
+  if (typeof window === 'undefined') return null;
+  return window.AudioContext || window.webkitAudioContext || null;
 };
 
-const waitForMetadata = (audio, timeoutMs = 15000) => new Promise((resolve, reject) => {
-  if (audio.readyState >= 1 && Number.isFinite(audio.duration) && audio.duration > 0) {
-    resolve();
-    return;
-  }
+const getStemId = (track, index) => String(track?.id || track?.nombre || `stem-${index}`);
 
-  let timer = null;
-  const cleanup = () => {
-    if (timer) window.clearTimeout(timer);
-    audio.removeEventListener('loadedmetadata', onLoaded);
-    audio.removeEventListener('error', onError);
-  };
-  const onLoaded = () => {
-    cleanup();
-    resolve();
-  };
-  const onError = () => {
-    cleanup();
-    reject(new Error(getMediaErrorMessage(audio)));
-  };
-
-  audio.addEventListener('loadedmetadata', onLoaded);
-  audio.addEventListener('error', onError);
-  timer = window.setTimeout(() => {
-    cleanup();
-    reject(new Error('Tiempo de espera agotado al preparar el audio'));
-  }, timeoutMs);
-});
+const getStemName = (track, index) => String(track?.nombre || track?.name || `Track ${index + 1}`);
 
 export class MultitrackPlaybackEngine {
   constructor() {
+    this.context = null;
+    this.masterGain = null;
     this.stems = [];
-    this.duration = 0;
+    this.sources = new Map();
     this.offset = 0;
+    this.startedAt = 0;
     this.playing = false;
+    this.duration = 0;
     this.masterVolume = 1;
-    this.masterStemId = null;
     this.loadToken = 0;
-    this.syncTimer = null;
+  }
+
+  async ensureContext() {
+    if (this.context) return this.context;
+    const AudioContextClass = getAudioContextClass();
+    if (!AudioContextClass) throw new Error('Este dispositivo no soporta Web Audio API.');
+
+    this.context = new AudioContextClass();
+    this.masterGain = this.context.createGain();
+    this.masterGain.gain.value = this.masterVolume;
+    this.masterGain.connect(this.context.destination);
+    return this.context;
   }
 
   getTrackCandidates(song) {
@@ -61,37 +43,25 @@ export class MultitrackPlaybackEngine {
           id: getStemId(track, index),
           name: getStemName(track, index),
           url: track.url,
+          source: track,
         }));
     }
 
     if (song?.audioUrl) {
-      return [{ id: 'main', name: 'Audio principal', url: song.audioUrl }];
+      return [{ id: 'main', name: 'Audio principal', url: song.audioUrl, source: null }];
     }
 
     return [];
   }
 
-  releaseStems() {
-    this.stopSyncTimer();
-    this.stems.forEach((stem) => {
-      const audio = stem.audio;
-      try { audio.pause(); } catch {}
-      try {
-        audio.removeAttribute('src');
-        audio.load();
-      } catch {}
-    });
-    this.stems = [];
-    this.masterStemId = null;
-  }
-
   async loadSong(song, onProgress) {
     const token = ++this.loadToken;
     this.stop();
-    this.releaseStems();
+    this.stems = [];
     this.duration = 0;
     this.offset = 0;
 
+    const context = await this.ensureContext();
     const candidates = this.getTrackCandidates(song);
     if (candidates.length === 0) {
       throw new Error('Esta canción no tiene multitracks ni audio principal.');
@@ -99,47 +69,25 @@ export class MultitrackPlaybackEngine {
 
     let completed = 0;
     const results = await Promise.all(candidates.map(async (candidate) => {
-      const audio = new Audio();
-      audio.preload = 'auto';
-      audio.src = candidate.url;
-      audio.playsInline = true;
-
       try {
-        audio.load();
-        await waitForMetadata(audio);
-        return {
-          candidate,
-          audio,
-          duration: Number.isFinite(audio.duration) ? audio.duration : 0,
-          error: null,
-        };
+        const response = await fetch(candidate.url, { mode: 'cors' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const bytes = await response.arrayBuffer();
+        const buffer = await context.decodeAudioData(bytes.slice(0));
+        return { candidate, buffer, error: null };
       } catch (error) {
-        try {
-          audio.removeAttribute('src');
-          audio.load();
-        } catch {}
-        return { candidate, audio: null, duration: 0, error };
+        return { candidate, buffer: null, error };
       } finally {
         completed += 1;
         onProgress?.({ completed, total: candidates.length });
       }
     }));
 
-    if (token !== this.loadToken) {
-      results.forEach((item) => {
-        if (!item.audio) return;
-        try { item.audio.pause(); } catch {}
-        try {
-          item.audio.removeAttribute('src');
-          item.audio.load();
-        } catch {}
-      });
-      return { cancelled: true, stems: [], errors: [] };
-    }
+    if (token !== this.loadToken) return { cancelled: true, stems: [], errors: [] };
 
-    const loaded = results.filter((item) => item.audio);
+    const loaded = results.filter((item) => item.buffer);
     const errors = results
-      .filter((item) => !item.audio)
+      .filter((item) => !item.buffer)
       .map((item) => ({
         id: item.candidate.id,
         name: item.candidate.name,
@@ -147,25 +95,26 @@ export class MultitrackPlaybackEngine {
       }));
 
     if (loaded.length === 0) {
-      throw new Error('No se pudo preparar ningún track de esta canción.');
+      throw new Error('No se pudo cargar ningún track de esta canción.');
     }
 
-    this.stems = loaded.map(({ candidate, audio, duration }) => ({
-      id: candidate.id,
-      name: candidate.name,
-      url: candidate.url,
-      audio,
-      duration,
-      volume: 1,
-      muted: false,
-      solo: false,
-    }));
+    this.stems = loaded.map(({ candidate, buffer }) => {
+      const gainNode = context.createGain();
+      gainNode.gain.value = 1;
+      gainNode.connect(this.masterGain);
+      return {
+        id: candidate.id,
+        name: candidate.name,
+        url: candidate.url,
+        buffer,
+        gainNode,
+        volume: 1,
+        muted: false,
+        solo: false,
+      };
+    });
 
-    const masterStem = this.stems.reduce((best, stem) => (
-      !best || stem.duration > best.duration ? stem : best
-    ), null);
-    this.masterStemId = masterStem?.id || this.stems[0]?.id || null;
-    this.duration = Math.max(...this.stems.map((stem) => stem.duration || 0));
+    this.duration = Math.max(...this.stems.map((stem) => stem.buffer.duration));
     this.applyMixerState();
 
     return {
@@ -176,112 +125,81 @@ export class MultitrackPlaybackEngine {
     };
   }
 
-  getMasterStem() {
-    return this.stems.find((stem) => stem.id === this.masterStemId) || this.stems[0] || null;
+  createSources(offset) {
+    const when = this.context.currentTime + 0.035;
+    const safeOffset = clamp(offset, 0, Math.max(0, this.duration - 0.01));
+
+    this.sources.clear();
+    this.stems.forEach((stem) => {
+      if (safeOffset >= stem.buffer.duration) return;
+      const source = this.context.createBufferSource();
+      source.buffer = stem.buffer;
+      source.connect(stem.gainNode);
+      source.start(when, safeOffset);
+      this.sources.set(stem.id, source);
+    });
+
+    this.startedAt = when;
+    this.offset = safeOffset;
   }
 
   async play() {
     if (this.playing || this.stems.length === 0) return;
+    await this.ensureContext();
+    if (this.context.state === 'suspended') await this.context.resume();
 
-    if (this.offset >= this.duration - 0.05) this.offset = 0;
-    const safeOffset = clamp(this.offset, 0, Math.max(0, this.duration - 0.01));
-
-    const active = this.stems.filter((stem) => safeOffset < Math.max(0, stem.duration - 0.01));
-    active.forEach((stem) => {
-      try {
-        stem.audio.pause();
-        stem.audio.currentTime = Math.min(safeOffset, Math.max(0, stem.duration - 0.01));
-      } catch {}
-    });
-
-    this.applyMixerState();
-    const results = await Promise.allSettled(active.map((stem) => stem.audio.play()));
-    const started = results.some((result) => result.status === 'fulfilled');
-    this.playing = started;
-
-    if (started) {
-      this.offset = this.getCurrentTime();
-      this.startSyncTimer();
-      window.setTimeout(() => this.correctDrift(true), 140);
-    }
+    if (this.offset >= this.duration - 0.01) this.offset = 0;
+    this.createSources(this.offset);
+    this.playing = true;
   }
 
   pause() {
     if (!this.playing) return;
     this.offset = this.getCurrentTime();
-    this.stems.forEach((stem) => {
-      try { stem.audio.pause(); } catch {}
-    });
+    this.stopSources();
     this.playing = false;
-    this.stopSyncTimer();
   }
 
   stop() {
-    this.stopSyncTimer();
-    this.stems.forEach((stem) => {
-      try {
-        stem.audio.pause();
-        if (stem.audio.readyState >= 1) stem.audio.currentTime = 0;
-      } catch {}
-    });
+    this.stopSources();
     this.playing = false;
     this.offset = 0;
+    this.startedAt = 0;
+  }
+
+  stopSources() {
+    this.sources.forEach((source) => {
+      try {
+        source.stop();
+      } catch {
+        // El source puede haber finalizado por sí mismo.
+      }
+      try {
+        source.disconnect();
+      } catch {
+        // Nada que limpiar.
+      }
+    });
+    this.sources.clear();
   }
 
   async seek(seconds) {
     const next = clamp(Number(seconds) || 0, 0, this.duration || 0);
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.stopSources();
     this.offset = next;
-    this.stems.forEach((stem) => {
-      try {
-        stem.audio.currentTime = Math.min(next, Math.max(0, stem.duration - 0.01));
-      } catch {}
-    });
-    if (this.playing) this.correctDrift(true);
+    this.startedAt = 0;
+    if (wasPlaying) this.createSources(next);
   }
 
   getCurrentTime() {
-    const master = this.getMasterStem();
-    if (this.playing && master?.audio && Number.isFinite(master.audio.currentTime)) {
-      return clamp(master.audio.currentTime, 0, this.duration || 0);
-    }
-    return clamp(this.offset, 0, this.duration || 0);
+    if (!this.playing || !this.context) return clamp(this.offset, 0, this.duration || 0);
+    const elapsed = Math.max(0, this.context.currentTime - this.startedAt);
+    return clamp(this.offset + elapsed, 0, this.duration || 0);
   }
 
   isFinished() {
-    if (!this.playing || this.duration <= 0) return false;
-    const master = this.getMasterStem();
-    return Boolean(master?.audio?.ended) || this.getCurrentTime() >= this.duration - 0.05;
-  }
-
-  startSyncTimer() {
-    this.stopSyncTimer();
-    this.syncTimer = window.setInterval(() => this.correctDrift(false), 400);
-  }
-
-  stopSyncTimer() {
-    if (!this.syncTimer) return;
-    window.clearInterval(this.syncTimer);
-    this.syncTimer = null;
-  }
-
-  correctDrift(force = false) {
-    if (!this.playing) return;
-    const master = this.getMasterStem();
-    if (!master?.audio || master.audio.paused || !Number.isFinite(master.audio.currentTime)) return;
-
-    const masterTime = master.audio.currentTime;
-    this.stems.forEach((stem) => {
-      if (stem.id === master.id || !stem.audio || stem.audio.ended) return;
-      const drift = Math.abs((stem.audio.currentTime || 0) - masterTime);
-      if ((force && drift > 0.025) || (!force && drift > 0.08)) {
-        try {
-          stem.audio.currentTime = Math.min(masterTime, Math.max(0, stem.duration - 0.01));
-        } catch {}
-      }
-      if (stem.audio.paused && masterTime < stem.duration - 0.05) {
-        stem.audio.play().catch(() => {});
-      }
-    });
+    return this.playing && this.duration > 0 && this.getCurrentTime() >= this.duration - 0.03;
   }
 
   setStemVolume(stemId, volume) {
@@ -307,15 +225,14 @@ export class MultitrackPlaybackEngine {
 
   setMasterVolume(volume) {
     this.masterVolume = clamp(Number(volume) || 0, 0, 1);
-    this.applyMixerState();
+    if (this.masterGain) this.masterGain.gain.value = this.masterVolume;
   }
 
   applyMixerState() {
     const hasSolo = this.stems.some((stem) => stem.solo);
     this.stems.forEach((stem) => {
       const audible = !stem.muted && (!hasSolo || stem.solo);
-      stem.audio.muted = !audible;
-      stem.audio.volume = clamp(stem.volume * this.masterVolume, 0, 1);
+      stem.gainNode.gain.value = audible ? stem.volume : 0;
     });
   }
 
@@ -326,7 +243,7 @@ export class MultitrackPlaybackEngine {
       volume: stem.volume,
       muted: stem.muted,
       solo: stem.solo,
-      duration: stem.duration,
+      duration: stem.buffer.duration,
     }));
   }
 
@@ -343,9 +260,28 @@ export class MultitrackPlaybackEngine {
   async dispose() {
     ++this.loadToken;
     this.stop();
-    this.releaseStems();
-    this.duration = 0;
-    this.offset = 0;
+    this.stems.forEach((stem) => {
+      try {
+        stem.gainNode.disconnect();
+      } catch {
+        // Nada que limpiar.
+      }
+    });
+    this.stems = [];
+
+    if (this.masterGain) {
+      try {
+        this.masterGain.disconnect();
+      } catch {
+        // Nada que limpiar.
+      }
+    }
+
+    if (this.context && this.context.state !== 'closed') {
+      await this.context.close().catch(() => {});
+    }
+    this.context = null;
+    this.masterGain = null;
   }
 }
 
