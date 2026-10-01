@@ -138,6 +138,39 @@ export class MultitrackPlaybackEngine {
     return Math.min(...this.stems.map((stem) => stem.buffer.duration));
   }
 
+  getWaveformPeaks(sampleCount = 180) {
+    if (this.stems.length === 0) return [];
+
+    const count = Math.round(clamp(Number(sampleCount) || 180, 48, 320));
+    const peaks = new Array(count).fill(0);
+
+    this.stems.forEach((stem) => {
+      const buffer = stem.buffer;
+      const channels = Math.max(1, Math.min(2, buffer.numberOfChannels || 1));
+
+      for (let bucket = 0; bucket < count; bucket += 1) {
+        const from = Math.floor((bucket / count) * buffer.length);
+        const to = Math.max(from + 1, Math.floor(((bucket + 1) / count) * buffer.length));
+        const step = Math.max(1, Math.floor((to - from) / 48));
+        let localPeak = 0;
+
+        for (let channel = 0; channel < channels; channel += 1) {
+          const data = buffer.getChannelData(channel);
+          for (let sample = from; sample < to; sample += step) {
+            localPeak = Math.max(localPeak, Math.abs(data[sample] || 0));
+          }
+        }
+
+        peaks[bucket] += localPeak / channels;
+      }
+    });
+
+    const stemCount = Math.max(1, this.stems.length);
+    const averaged = peaks.map((value) => value / stemCount);
+    const maxPeak = Math.max(...averaged, 0.0001);
+    return averaged.map((value) => clamp(value / maxPeak, 0, 1));
+  }
+
   clearLoopExitTimer() {
     if (this.loopExitTimer) {
       clearTimeout(this.loopExitTimer);

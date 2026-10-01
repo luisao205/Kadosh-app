@@ -71,6 +71,12 @@ const MultitrackLive = ({ user }) => {
   const [audioError, setAudioError] = useState('');
   const [stemErrors, setStemErrors] = useState([]);
   const [playback, setPlayback] = useState(EMPTY_PLAYBACK);
+  const [waveformPeaks, setWaveformPeaks] = useState([]);
+  const [timelineDragPreview, setTimelineDragPreview] = useState(null);
+  const [timelineHistoryPast, setTimelineHistoryPast] = useState([]);
+  const [timelineHistoryFuture, setTimelineHistoryFuture] = useState([]);
+  const preparationTimelineRef = useRef(null);
+  const preparationTimelineDragRef = useRef(null);
   const [preparingSetlist, setPreparingSetlist] = useState(false);
   const [prepareProgress, setPrepareProgress] = useState({ completed: 0, total: 0, cached: 0, downloaded: 0, errors: 0 });
   const [prepareSummary, setPrepareSummary] = useState(null);
@@ -202,6 +208,11 @@ const MultitrackLive = ({ user }) => {
     setStemErrors([]);
     setLoadProgress({ completed: 0, total: getSongAudioCount(currentSong), cacheHits: 0 });
     setPlayback(EMPTY_PLAYBACK);
+    setWaveformPeaks([]);
+    setTimelineDragPreview(null);
+    setTimelineHistoryPast([]);
+    setTimelineHistoryFuture([]);
+    preparationTimelineDragRef.current = null;
 
     engineRef.current.loadSong(currentSong, (progress) => {
       if (!cancelled) setLoadProgress(progress);
@@ -209,6 +220,7 @@ const MultitrackLive = ({ user }) => {
       if (cancelled || result?.cancelled) return;
       setStemErrors(result.errors || []);
       engineRef.current.applyMixerPreset(currentSong?.livePlayback?.mixer);
+      setWaveformPeaks(engineRef.current.getWaveformPeaks(180));
       setPlayback(engineRef.current.getState());
 
       getMultitrackSetlistReadiness(playlist)
@@ -327,6 +339,23 @@ const MultitrackLive = ({ user }) => {
 
   const currentSectionIndex = getSectionIndexAtTime(playback.currentTime);
   const currentLiveSection = currentSectionIndex >= 0 ? currentSections[currentSectionIndex] : null;
+  const timelineDuration = Math.max(0, Number(playback.shortestStemDuration) || Number(playback.duration) || 0);
+  const timelineBars = useMemo(() => {
+    if (!currentBpm || timelineDuration <= 0) return [];
+    const secondsPerBar = (60 / currentBpm) * currentBeatsPerBar;
+    if (!secondsPerBar || timelineDuration <= currentGridOffset) return [];
+
+    const totalBars = Math.max(1, Math.floor((timelineDuration - currentGridOffset) / secondsPerBar) + 1);
+    const stride = totalBars > 120 ? Math.ceil(totalBars / 120) : 1;
+    const bars = [];
+
+    for (let bar = 1; bar <= totalBars; bar += stride) {
+      const time = currentGridOffset + ((bar - 1) * secondsPerBar);
+      if (time < 0 || time > timelineDuration) continue;
+      bars.push({ bar, time, major: bar === 1 || (bar - 1) % 4 === 0 });
+    }
+    return bars;
+  }, [currentBpm, currentBeatsPerBar, currentGridOffset, timelineDuration]);
   const activeLoopSectionIndex = playback.loop
     ? currentSections.findIndex((section, sectionIndex) => {
       const nextSection = currentSections[sectionIndex + 1];
@@ -403,6 +432,155 @@ const MultitrackLive = ({ user }) => {
     setNavigationNotice('');
     await engineRef.current.seek(Number(event.target.value));
     setPlayback(engineRef.current.getState());
+  };
+
+  const seekPreparationTimeline = async (event) => {
+    if (loadingAudio || timelineDuration <= 0 || preparationTimelineDragRef.current) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width) return;
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    setPendingSectionAction(null);
+    setNavigationNotice('');
+    await engineRef.current.seek(ratio * timelineDuration);
+    setPlayback(engineRef.current.getState());
+  };
+
+  const getSnappedTimelineSectionPosition = (sectionId, clientX) => {
+    const rect = preparationTimelineRef.current?.getBoundingClientRect();
+    const secondsPerBar = currentBpm > 0 ? (60 / currentBpm) * currentBeatsPerBar : 0;
+    if (!rect?.width || !secondsPerBar || timelineDuration <= 0) return null;
+
+    const sectionIndex = currentSections.findIndex((section) => section.id === sectionId);
+    if (sectionIndex < 0) return null;
+
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const rawTime = ratio * timelineDuration;
+    const rawBar = Math.round((rawTime - currentGridOffset) / secondsPerBar) + 1;
+    const lastBar = Math.max(1, Math.floor((timelineDuration - currentGridOffset - 0.01) / secondsPerBar) + 1);
+    const previousSection = currentSections[sectionIndex - 1];
+    const nextSection = currentSections[sectionIndex + 1];
+    const minBar = previousSection ? Math.max(1, Number(previousSection.bar) + 1) : 1;
+    const maxBar = nextSection ? Math.min(lastBar, Math.max(1, Number(nextSection.bar) - 1)) : lastBar;
+    const safeMin = Math.min(minBar, maxBar);
+    const safeMax = Math.max(minBar, maxBar);
+    const bar = Math.min(safeMax, Math.max(safeMin, rawBar));
+    const start = currentGridOffset + ((bar - 1) * secondsPerBar);
+
+    return {
+      sectionId,
+      bar,
+      start: Math.min(Math.max(0, start), Math.max(0, timelineDuration - 0.01)),
+    };
+  };
+
+  const cloneTimelineSections = (sections) => sections.map((item) => ({ ...item }));
+
+  const restoreTimelineSections = (sections, notice) => {
+    if (!currentSongGridKey) return;
+    if (playback.loop) {
+      setPlayback(engineRef.current.cancelLoop());
+    }
+    setTimelineDragPreview(null);
+    preparationTimelineDragRef.current = null;
+    setSectionError('');
+    setSectionsBySong((previous) => ({
+      ...previous,
+      [currentSongGridKey]: cloneTimelineSections(sections).sort((a, b) => a.start - b.start),
+    }));
+    setLiveMapNotice(notice);
+  };
+
+  const undoTimelineSectionChange = () => {
+    if (timelineHistoryPast.length === 0) return;
+    const previousSnapshot = timelineHistoryPast[timelineHistoryPast.length - 1];
+    const currentSnapshot = cloneTimelineSections(currentSections);
+    setTimelineHistoryPast((previous) => previous.slice(0, -1));
+    setTimelineHistoryFuture((previous) => [currentSnapshot, ...previous].slice(0, 30));
+    restoreTimelineSections(previousSnapshot, 'Último movimiento de sección deshecho. Guarda el Live Map si quieres conservar este estado.');
+  };
+
+  const redoTimelineSectionChange = () => {
+    if (timelineHistoryFuture.length === 0) return;
+    const nextSnapshot = timelineHistoryFuture[0];
+    const currentSnapshot = cloneTimelineSections(currentSections);
+    setTimelineHistoryFuture((previous) => previous.slice(1));
+    setTimelineHistoryPast((previous) => [...previous.slice(-29), currentSnapshot]);
+    restoreTimelineSections(nextSnapshot, 'Movimiento de sección rehecho. Guarda el Live Map si quieres conservar este estado.');
+  };
+
+  const commitTimelineSectionPosition = (sectionId, position) => {
+    if (!position || !currentSongGridKey) return;
+    const section = currentSections.find((item) => item.id === sectionId);
+    if (!section) return;
+
+    const collides = currentSections.some((item) => item.id !== sectionId && Number(item.bar) === Number(position.bar));
+    if (collides) {
+      setSectionError('Ese compás ya pertenece al inicio de otra sección.');
+      return;
+    }
+
+    if (Number(section.bar) === Number(position.bar)) return;
+
+    const historySnapshot = cloneTimelineSections(currentSections);
+    setTimelineHistoryPast((previous) => [...previous.slice(-29), historySnapshot]);
+    setTimelineHistoryFuture([]);
+
+    if (playback.loop) {
+      setPlayback(engineRef.current.cancelLoop());
+    }
+
+    setSectionError('');
+    setSectionsBySong((previous) => ({
+      ...previous,
+      [currentSongGridKey]: (previous[currentSongGridKey] || []).map((item) =>
+        item.id === sectionId ? { ...item, bar: position.bar, start: position.start } : item
+      ).sort((a, b) => a.start - b.start),
+    }));
+    setLiveMapNotice(section.label + ' movida al compás ' + position.bar + '. Guarda el Live Map para conservar el cambio.');
+  };
+
+  const handleTimelineSectionPointerDown = (event, section) => {
+    if (!currentBpm || timelineDuration <= 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    preparationTimelineDragRef.current = {
+      sectionId: section.id,
+      pointerId: event.pointerId,
+      originalBar: Number(section.bar),
+      moved: false,
+    };
+    setTimelineDragPreview({ sectionId: section.id, bar: Number(section.bar), start: Number(section.start) || 0 });
+  };
+
+  const handleTimelineSectionPointerMove = (event, section) => {
+    const drag = preparationTimelineDragRef.current;
+    if (!drag || drag.sectionId !== section.id || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const position = getSnappedTimelineSectionPosition(section.id, event.clientX);
+    if (!position) return;
+    if (position.bar !== drag.originalBar) drag.moved = true;
+    setTimelineDragPreview(position);
+  };
+
+  const handleTimelineSectionPointerEnd = (event, section, cancelled = false) => {
+    const drag = preparationTimelineDragRef.current;
+    if (!drag || drag.sectionId !== section.id || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const position = cancelled ? null : getSnappedTimelineSectionPosition(section.id, event.clientX);
+    const moved = Boolean(drag.moved && position && position.bar !== drag.originalBar);
+    preparationTimelineDragRef.current = null;
+    setTimelineDragPreview(null);
+
+    if (cancelled) return;
+    if (moved) {
+      commitTimelineSectionPosition(section.id, position);
+      return;
+    }
+    void goToSection(section);
   };
 
   const changeSong = (nextIndex) => {
@@ -1474,6 +1652,117 @@ const MultitrackLive = ({ user }) => {
                       <div className="mt-3 rounded-xl border border-amber-400/15 bg-amber-400/[0.05] p-3 text-[10px] font-bold text-amber-200">Esta canción no tiene secciones guardadas. Configúrala desde Administración antes del servicio.</div>
                     )}
                     {sectionError && <div className="mt-3 flex gap-2 rounded-xl border border-red-400/20 bg-red-400/[0.07] p-3 text-red-200"><AlertTriangle size={15} className="mt-0.5 shrink-0" /><p className="text-[10px] font-bold leading-relaxed">{sectionError}</p></div>}
+                  </div>
+                )}
+
+                {standaloneSongMode && (
+                  <div className="mt-3 rounded-2xl border border-sky-400/20 bg-sky-400/[0.04] p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-sky-300">Timeline de preparación</p>
+                        <p className="mt-1 text-[10px] font-semibold leading-relaxed text-zinc-500">Waveform real de los stems cargados, grid de compases y secciones del Live Map. Toca la línea para moverte por la canción.</p>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <span className={'rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-wide ' + (waveformPeaks.length > 0 ? 'border-sky-400/25 bg-sky-400/10 text-sky-200' : 'border-white/10 bg-black/20 text-zinc-600')}>
+                          {waveformPeaks.length > 0 ? 'Waveform lista' : loadingAudio ? 'Analizando audio' : 'Sin waveform'}
+                        </span>
+                        <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 font-mono text-[9px] font-black text-zinc-500">{timelineBars.length} marcas de grid</span>
+                        <span className="rounded-full border border-violet-400/20 bg-violet-400/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-violet-200">Arrastra · snap 1 compás</span>
+                        <button
+                          type="button"
+                          onClick={undoTimelineSectionChange}
+                          disabled={timelineHistoryPast.length === 0 || Boolean(timelineDragPreview)}
+                          className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[9px] font-black uppercase tracking-wide text-zinc-300 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-25"
+                          title="Deshacer último movimiento de sección"
+                        >
+                          ↶ <span className="hidden sm:inline">Deshacer</span>{timelineHistoryPast.length > 0 ? ' ' + timelineHistoryPast.length : ''}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={redoTimelineSectionChange}
+                          disabled={timelineHistoryFuture.length === 0 || Boolean(timelineDragPreview)}
+                          className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[9px] font-black uppercase tracking-wide text-zinc-300 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-25"
+                          title="Rehacer movimiento de sección"
+                        >
+                          ↷ <span className="hidden sm:inline">Rehacer</span>{timelineHistoryFuture.length > 0 ? ' ' + timelineHistoryFuture.length : ''}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      ref={preparationTimelineRef}
+                      className="relative mt-4 h-44 w-full cursor-crosshair overflow-hidden rounded-2xl border border-white/10 bg-black/35 select-none"
+                      onClick={seekPreparationTimeline}
+                      title="Toca para mover la reproducción · arrastra una sección para cambiar su compás"
+                    >
+                      <div className="absolute inset-x-0 top-8 bottom-7 flex items-center gap-px px-1 opacity-80">
+                        {waveformPeaks.length > 0 ? waveformPeaks.map((peak, index) => (
+                          <span
+                            key={index}
+                            className="min-w-0 flex-1 rounded-full bg-sky-300/45"
+                            style={{ height: Math.max(6, Math.round(peak * 92)) + '%' }}
+                          />
+                        )) : (
+                          <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-zinc-700">
+                            {loadingAudio ? 'Generando waveform…' : 'Carga una canción con audio para visualizar la forma de onda.'}
+                          </div>
+                        )}
+                      </div>
+
+                      {timelineBars.map((tick) => {
+                        const left = timelineDuration > 0 ? (tick.time / timelineDuration) * 100 : 0;
+                        return (
+                          <div key={tick.bar} className="pointer-events-none absolute inset-y-0" style={{ left: Math.min(100, Math.max(0, left)) + '%' }}>
+                            <div className={'h-full border-l ' + (tick.major ? 'border-white/15' : 'border-white/[0.045]')} />
+                            {tick.major && <span className="absolute bottom-1 left-1 whitespace-nowrap font-mono text-[8px] font-bold text-zinc-700">C{tick.bar}</span>}
+                          </div>
+                        );
+                      })}
+
+                      {currentSections.map((section, sectionIndex) => {
+                        const preview = timelineDragPreview?.sectionId === section.id ? timelineDragPreview : null;
+                        const visibleStart = preview ? preview.start : section.start;
+                        const visibleBar = preview ? preview.bar : section.bar;
+                        const left = timelineDuration > 0 ? (visibleStart / timelineDuration) * 100 : 0;
+                        const active = currentLiveSection?.id === section.id;
+                        const dragging = Boolean(preview);
+                        return (
+                          <button
+                            key={section.id}
+                            type="button"
+                            onClick={(event) => event.stopPropagation()}
+                            onPointerDown={(event) => handleTimelineSectionPointerDown(event, section)}
+                            onPointerMove={(event) => handleTimelineSectionPointerMove(event, section)}
+                            onPointerUp={(event) => handleTimelineSectionPointerEnd(event, section)}
+                            onPointerCancel={(event) => handleTimelineSectionPointerEnd(event, section, true)}
+                            className="absolute inset-y-0 z-10 w-9 -translate-x-1/2 cursor-ew-resize touch-none focus:outline-none"
+                            style={{ left: Math.min(100, Math.max(0, left)) + '%' }}
+                            title={'Arrastra ' + section.label + ' · compás ' + visibleBar + ' · toque corto para ir'}
+                          >
+                            <span className={'absolute inset-y-0 left-1/2 w-px -translate-x-1/2 ' + (dragging ? 'bg-sky-200 shadow-[0_0_12px_rgba(186,230,253,.95)]' : active ? 'bg-emerald-300' : 'bg-violet-300/75')} />
+                            <span className={'absolute left-1/2 max-w-[118px] -translate-x-1/2 truncate rounded-md border px-1.5 py-1 text-[8px] font-black shadow-lg ' + (dragging ? 'top-2 border-sky-200/60 bg-sky-300/25 text-sky-50' : active ? 'top-2 border-emerald-300/40 bg-emerald-300/20 text-emerald-100' : sectionIndex % 2 === 0 ? 'top-2 border-violet-300/30 bg-violet-400/15 text-violet-100' : 'top-8 border-violet-300/30 bg-violet-400/15 text-violet-100')}>
+                              {section.label}{dragging ? ' · C' + visibleBar : ''}
+                            </span>
+                          </button>
+                        );
+                      })}
+
+                      {timelineDuration > 0 && (
+                        <div
+                          className="pointer-events-none absolute inset-y-0 z-20 w-0.5 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,.9)]"
+                          style={{ left: Math.min(100, Math.max(0, (playback.currentTime / timelineDuration) * 100)) + '%' }}
+                        >
+                          <span className="absolute left-1/2 top-0 h-2.5 w-2.5 -translate-x-1/2 rounded-full bg-emerald-300" />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 font-mono text-[9px] font-bold text-zinc-600">
+                      <span>0:00</span>
+                      <span>Playhead {formatTime(playback.currentTime)} · Compás {musicalPosition.beforeStart ? 'PRE' : (musicalPosition.bar || '--')}</span>
+                      <span>{formatTime(timelineDuration)}</span>
+                    </div>
+                    <p className="mt-2 text-[9px] font-semibold text-zinc-700">2K-D3: arrastra el marcador de una sección con snap a compás. Si te equivocas, usa Deshacer/Rehacer antes o después de guardar; cada restauración vuelve a dejar el Live Map como cambio pendiente.</p>
                   </div>
                 )}
 
