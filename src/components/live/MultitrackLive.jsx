@@ -87,7 +87,7 @@ const MultitrackLive = ({ user }) => {
   const [sectionsBySong, setSectionsBySong] = useState({});
   const [sectionError, setSectionError] = useState('');
   const [editingSectionId, setEditingSectionId] = useState(null);
-  const [sectionDraft, setSectionDraft] = useState({ label: '', bar: 1 });
+  const [sectionDraft, setSectionDraft] = useState({ label: '', bar: 1, endBar: '' });
   const [savingLiveMap, setSavingLiveMap] = useState(false);
   const [liveMapNotice, setLiveMapNotice] = useState('');
   const [navigationNotice, setNavigationNotice] = useState('');
@@ -291,6 +291,9 @@ const MultitrackLive = ({ user }) => {
           label: String(section?.label || section?.baseLabel || ('Sección ' + (index + 1))),
           baseLabel: String(section?.baseLabel || section?.label || 'Sección'),
           bar,
+          endBar: Number.isFinite(Number(section?.endBar)) && Number(section.endBar) > bar
+            ? Math.round(Number(section.endBar))
+            : null,
           start: Number.isFinite(Number(section?.start)) ? Number(section.start) : calculatedStart,
         };
       }).sort((a, b) => a.start - b.start)
@@ -320,21 +323,55 @@ const MultitrackLive = ({ user }) => {
     Array.isArray(sectionsBySong[currentSongGridKey]) ? sectionsBySong[currentSongGridKey] : []
   ), [sectionsBySong, currentSongGridKey]);
 
-  const getSectionIndexAtTime = (time) => {
-    const value = Number(time) || 0;
-    let activeIndex = -1;
-    for (let index = 0; index < currentSections.length; index += 1) {
-      if (value + 0.025 >= currentSections[index].start) activeIndex = index;
-      else break;
+  const getSafeSongEndBar = () => {
+    const safeDuration = Number(playback.shortestStemDuration) || Number(playback.duration) || 0;
+    const secondsPerBar = currentBpm > 0 ? (60 / currentBpm) * currentBeatsPerBar : 0;
+    if (!safeDuration || !secondsPerBar || safeDuration <= currentGridOffset) return null;
+    return Math.max(2, Math.floor((safeDuration - currentGridOffset - 0.01) / secondsPerBar) + 1);
+  };
+
+  const getSectionEndBar = (sectionIndex) => {
+    const section = currentSections[sectionIndex];
+    if (!section) return null;
+    const nextSection = currentSections[sectionIndex + 1];
+    if (nextSection) return Math.max(Number(section.bar) + 1, Math.round(Number(nextSection.bar) || (Number(section.bar) + 1)));
+
+    const explicitEndBar = Math.round(Number(section.endBar) || 0);
+    const safeEndBar = getSafeSongEndBar();
+    const minimumEndBar = Math.max(2, Math.round(Number(section.bar) || 1) + 1);
+    if (explicitEndBar >= minimumEndBar) {
+      return safeEndBar ? Math.min(explicitEndBar, safeEndBar) : explicitEndBar;
     }
-    return activeIndex;
+    return safeEndBar ? Math.max(minimumEndBar, safeEndBar) : minimumEndBar;
   };
 
   const getSectionEnd = (sectionIndex) => {
+    const section = currentSections[sectionIndex];
+    if (!section) return 0;
     const nextSection = currentSections[sectionIndex + 1];
-    if (nextSection) return nextSection.start;
+    if (nextSection) return Number(nextSection.start) || 0;
+
+    const secondsPerBar = currentBpm > 0 ? (60 / currentBpm) * currentBeatsPerBar : 0;
+    const endBar = getSectionEndBar(sectionIndex);
     const safeDuration = Number(playback.shortestStemDuration) || Number(playback.duration) || 0;
-    return safeDuration > 0 ? Math.max(currentSections[sectionIndex]?.start || 0, safeDuration - 0.12) : 0;
+    if (secondsPerBar && endBar) {
+      const calculatedEnd = currentGridOffset + ((endBar - 1) * secondsPerBar);
+      if (calculatedEnd > Number(section.start) + 0.02) {
+        return safeDuration > 0 ? Math.min(calculatedEnd, Math.max(Number(section.start), safeDuration - 0.005)) : calculatedEnd;
+      }
+    }
+    return safeDuration > Number(section.start) + 0.02 ? Math.max(Number(section.start), safeDuration - 0.12) : 0;
+  };
+
+  const getSectionIndexAtTime = (time) => {
+    const value = Number(time) || 0;
+    for (let index = 0; index < currentSections.length; index += 1) {
+      const section = currentSections[index];
+      if (value + 0.025 < Number(section.start)) break;
+      const end = getSectionEnd(index);
+      if (value + 0.025 >= Number(section.start) && (!end || value < end - 0.005)) return index;
+    }
+    return -1;
   };
 
   const currentSectionIndex = getSectionIndexAtTime(playback.currentTime);
@@ -358,10 +395,10 @@ const MultitrackLive = ({ user }) => {
   }, [currentBpm, currentBeatsPerBar, currentGridOffset, timelineDuration]);
   const activeLoopSectionIndex = playback.loop
     ? currentSections.findIndex((section, sectionIndex) => {
-      const nextSection = currentSections[sectionIndex + 1];
-      if (!nextSection) return false;
+      const sectionEnd = getSectionEnd(sectionIndex);
+      if (!sectionEnd) return false;
       return Math.abs(playback.loop.start - section.start) < 0.03
-        && Math.abs(playback.loop.end - nextSection.start) < 0.03;
+        && Math.abs(playback.loop.end - sectionEnd) < 0.03;
     })
     : -1;
   const activeLoopSection = activeLoopSectionIndex >= 0 ? currentSections[activeLoopSectionIndex] : null;
@@ -411,7 +448,25 @@ const MultitrackLive = ({ user }) => {
     });
   }, [currentSong?.livePlayback, currentSong?.bpm]);
 
-  const liveMapDirty = currentLiveMapSignature !== savedLiveMapSignature;
+  const currentLastSectionEndBar = currentSections.length > 0 ? getSectionEndBar(currentSections.length - 1) : null;
+  const savedLastSection = Array.isArray(currentSong?.livePlayback?.sections) && currentSong.livePlayback.sections.length > 0
+    ? currentSong.livePlayback.sections[currentSong.livePlayback.sections.length - 1]
+    : null;
+  const savedLastSectionEndBar = savedLastSection && Number(savedLastSection.endBar) > Number(savedLastSection.bar)
+    ? Math.round(Number(savedLastSection.endBar))
+    : null;
+  const liveMapNeedsSectionEndUpgrade = Boolean(
+    currentSong?.livePlayback
+    && currentSections.length > 0
+    && Number(currentSong.livePlayback.version || 0) < 3
+    && currentLastSectionEndBar
+  );
+  const sectionEndDirty = Boolean(
+    currentSections.length > 0
+    && currentLastSectionEndBar
+    && savedLastSectionEndBar !== currentLastSectionEndBar
+  );
+  const liveMapDirty = currentLiveMapSignature !== savedLiveMapSignature || sectionEndDirty || liveMapNeedsSectionEndUpgrade;
 
   const togglePlay = async () => {
     if (loadingAudio || audioError || playback.stems.length === 0) return;
@@ -460,7 +515,10 @@ const MultitrackLive = ({ user }) => {
     const previousSection = currentSections[sectionIndex - 1];
     const nextSection = currentSections[sectionIndex + 1];
     const minBar = previousSection ? Math.max(1, Number(previousSection.bar) + 1) : 1;
-    const maxBar = nextSection ? Math.min(lastBar, Math.max(1, Number(nextSection.bar) - 1)) : lastBar;
+    const lastSectionLimit = getSectionEndBar(sectionIndex);
+    const maxBar = nextSection
+      ? Math.min(lastBar, Math.max(1, Number(nextSection.bar) - 1))
+      : Math.min(lastBar, Math.max(1, Number(lastSectionLimit || (lastBar + 1)) - 1));
     const safeMin = Math.min(minBar, maxBar);
     const safeMax = Math.max(minBar, maxBar);
     const bar = Math.min(safeMax, Math.max(safeMin, rawBar));
@@ -715,9 +773,12 @@ const MultitrackLive = ({ user }) => {
     setSectionsBySong((previous) => {
       const current = Array.isArray(previous[currentSongGridKey]) ? previous[currentSongGridKey] : [];
       const withoutSameBar = current.filter((section) => Math.abs(section.start - start) > 0.03);
+      const nextSections = [...withoutSameBar, nextMarker].sort((a, b) => a.start - b.start);
       return {
         ...previous,
-        [currentSongGridKey]: [...withoutSameBar, nextMarker].sort((a, b) => a.start - b.start),
+        [currentSongGridKey]: nextSections.map((section, index) => (
+          index === nextSections.length - 1 ? section : { ...section, endBar: null }
+        )),
       };
     });
   };
@@ -725,10 +786,15 @@ const MultitrackLive = ({ user }) => {
   const removeSectionMarker = (sectionId) => {
     setSectionError('');
     if (!currentSongGridKey) return;
-    setSectionsBySong((previous) => ({
-      ...previous,
-      [currentSongGridKey]: (previous[currentSongGridKey] || []).filter((section) => section.id !== sectionId),
-    }));
+    setSectionsBySong((previous) => {
+      const nextSections = (previous[currentSongGridKey] || []).filter((section) => section.id !== sectionId);
+      return {
+        ...previous,
+        [currentSongGridKey]: nextSections.map((section, index) => (
+          index === nextSections.length - 1 ? section : { ...section, endBar: null }
+        )),
+      };
+    });
   };
 
   const goToSectionNow = async (section, message = '') => {
@@ -798,13 +864,13 @@ const MultitrackLive = ({ user }) => {
 
   const loopSectionNow = async (sectionIndex, message = '') => {
     const section = currentSections[sectionIndex];
-    const nextSection = currentSections[sectionIndex + 1];
-    if (!section || !nextSection) return;
+    const sectionEnd = getSectionEnd(sectionIndex);
+    if (!section || !sectionEnd || sectionEnd <= Number(section.start) + 0.02) return;
 
     try {
       await engineRef.current.seek(section.start);
-      const bars = Math.max(1, Math.round((nextSection.start - section.start) / musicalPosition.secondsPerBar));
-      const nextState = engineRef.current.setLoopRegion(section.start, nextSection.start, { bars });
+      const bars = Math.max(1, Math.round((sectionEnd - section.start) / musicalPosition.secondsPerBar));
+      const nextState = engineRef.current.setLoopRegion(section.start, sectionEnd, { bars });
       setPendingSectionAction(null);
       setPlayback(nextState);
       if (message) setNavigationNotice(message);
@@ -816,10 +882,10 @@ const MultitrackLive = ({ user }) => {
   const loopSection = async (sectionIndex) => {
     setSectionError('');
     const section = currentSections[sectionIndex];
-    const nextSection = currentSections[sectionIndex + 1];
+    const sectionEnd = getSectionEnd(sectionIndex);
 
-    if (!section || !nextSection) {
-      setSectionError('Para repetir una sección necesitas haber marcado también la sección que viene después.');
+    if (!section || !sectionEnd || sectionEnd <= Number(section.start) + 0.02) {
+      setSectionError('Esta sección no tiene un final musical válido. Revisa su límite en el Editor de Live Map.');
       return;
     }
 
@@ -841,7 +907,7 @@ const MultitrackLive = ({ user }) => {
 
     const sameActiveLoop = playback.loop
       && Math.abs(playback.loop.start - section.start) < 0.03
-      && Math.abs(playback.loop.end - nextSection.start) < 0.03;
+      && Math.abs(playback.loop.end - sectionEnd) < 0.03;
     if (sameActiveLoop) {
       setPlayback(engineRef.current.requestLoopExit());
       setNavigationNotice('Salida del loop programada al final de ' + section.label + '.');
@@ -855,11 +921,11 @@ const MultitrackLive = ({ user }) => {
     }
 
     const activeIndex = getSectionIndexAtTime(playback.currentTime);
-    const bars = Math.max(1, Math.round((nextSection.start - section.start) / musicalPosition.secondsPerBar));
+    const bars = Math.max(1, Math.round((sectionEnd - section.start) / musicalPosition.secondsPerBar));
 
     if (activeIndex === sectionIndex) {
       try {
-        const nextState = engineRef.current.setLoopRegion(section.start, nextSection.start, { bars });
+        const nextState = engineRef.current.setLoopRegion(section.start, sectionEnd, { bars });
         setPendingSectionAction(null);
         setPlayback(nextState);
         setNavigationNotice('Loop armado en ' + section.label + ': continuará hasta el final y luego repetirá desde el inicio.');
@@ -886,7 +952,7 @@ const MultitrackLive = ({ user }) => {
       sectionIndex,
       label: section.label,
       start: section.start,
-      end: nextSection.start,
+      end: sectionEnd,
       bars,
       executeAt,
     });
@@ -923,13 +989,18 @@ const MultitrackLive = ({ user }) => {
   }, [playback.currentTime, playback.playing, pendingSectionAction]);
   const beginEditSection = (section) => {
     setSectionError('');
+    const sectionIndex = currentSections.findIndex((item) => item.id === section.id);
     setEditingSectionId(section.id);
-    setSectionDraft({ label: section.label, bar: section.bar });
+    setSectionDraft({
+      label: section.label,
+      bar: section.bar,
+      endBar: sectionIndex >= 0 ? (getSectionEndBar(sectionIndex) || '') : '',
+    });
   };
 
   const cancelEditSection = () => {
     setEditingSectionId(null);
-    setSectionDraft({ label: '', bar: 1 });
+    setSectionDraft({ label: '', bar: 1, endBar: '' });
   };
 
   const adjustDraftBar = (delta) => {
@@ -939,10 +1010,22 @@ const MultitrackLive = ({ user }) => {
     }));
   };
 
+  const adjustDraftEndBar = (delta) => {
+    setSectionDraft((previous) => ({
+      ...previous,
+      endBar: Math.max((Number(previous.bar) || 1) + 1, (Number(previous.endBar) || ((Number(previous.bar) || 1) + 1)) + delta),
+    }));
+  };
+
   const saveSectionEdit = (sectionId) => {
     setSectionError('');
     const label = String(sectionDraft.label || '').trim();
     const bar = Math.max(1, Math.round(Number(sectionDraft.bar) || 1));
+    const sectionIndex = currentSections.findIndex((section) => section.id === sectionId);
+    const isLastSection = sectionIndex === currentSections.length - 1;
+    const endBar = isLastSection
+      ? Math.max(bar + 1, Math.round(Number(sectionDraft.endBar) || (bar + 1)))
+      : null;
 
     if (!label) {
       setSectionError('Escribe un nombre para la sección.');
@@ -968,6 +1051,18 @@ const MultitrackLive = ({ user }) => {
       return;
     }
 
+    if (isLastSection) {
+      const safeEndBar = getSafeSongEndBar();
+      if (endBar <= bar) {
+        setSectionError('El compás final debe estar después del inicio de la última sección.');
+        return;
+      }
+      if (safeEndBar && endBar > safeEndBar) {
+        setSectionError('El compás final supera el rango seguro del stem más corto. Máximo: C' + safeEndBar + '.');
+        return;
+      }
+    }
+
     if (playback.loop) {
       setPlayback(engineRef.current.cancelLoop());
     }
@@ -975,7 +1070,7 @@ const MultitrackLive = ({ user }) => {
     setSectionsBySong((previous) => ({
       ...previous,
       [currentSongGridKey]: (previous[currentSongGridKey] || []).map((section) =>
-        section.id === sectionId ? { ...section, label, bar, start } : section
+        section.id === sectionId ? { ...section, label, bar, start, endBar: isLastSection ? endBar : null } : section
       ).sort((a, b) => a.start - b.start),
     }));
 
@@ -999,12 +1094,18 @@ const MultitrackLive = ({ user }) => {
       return;
     }
 
-    const sections = currentSections.map((section) => ({
-      id: String(section.id),
-      label: String(section.label || '').trim(),
-      baseLabel: String(section.baseLabel || section.label || '').trim(),
-      bar: Math.max(1, Math.round(Number(section.bar) || 1)),
-    })).sort((a, b) => a.bar - b.bar);
+    const sections = currentSections.map((section, sectionIndex) => {
+      const normalized = {
+        id: String(section.id),
+        label: String(section.label || '').trim(),
+        baseLabel: String(section.baseLabel || section.label || '').trim(),
+        bar: Math.max(1, Math.round(Number(section.bar) || 1)),
+      };
+      if (sectionIndex === currentSections.length - 1) {
+        normalized.endBar = getSectionEndBar(sectionIndex);
+      }
+      return normalized;
+    }).sort((a, b) => a.bar - b.bar);
 
     if (getSongAudioCount(currentSong) > 0 && playback.stems.length === 0) {
       setLiveMapNotice('Espera a que termine de cargar el audio antes de guardar la mezcla.');
@@ -1022,7 +1123,7 @@ const MultitrackLive = ({ user }) => {
     };
 
     const livePlayback = {
-      version: 2,
+      version: 3,
       bpm: currentBpm,
       timeSignature: { beats: currentBeatsPerBar, unit: 4 },
       gridOffsetSeconds: Number(currentGridOffset.toFixed(3)),
@@ -1392,9 +1493,9 @@ const MultitrackLive = ({ user }) => {
                                 <div key={section.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_60px] gap-2 rounded-2xl border border-white/8 bg-black/20 p-2 sm:grid-cols-[minmax(0,1fr)_72px]">
                                   <button type="button" onClick={() => goToSection(section)} className={'min-h-16 rounded-xl border px-3 text-left active:scale-[0.99] ' + (pendingSectionAction?.type === 'jump' && pendingSectionAction.sectionId === section.id ? 'border-cyan-300/50 bg-cyan-300/20' : currentLiveSection?.id === section.id ? 'border-emerald-400/45 bg-emerald-400/15' : 'border-cyan-400/20 bg-cyan-400/10')}>
                                     <p className="truncate text-sm font-black text-cyan-100">{section.label}</p>
-                                    <p className="mt-1 font-mono text-[9px] font-bold text-cyan-300/55">Compás {section.bar} · {formatTime(section.start)}</p>
+                                    <p className="mt-1 font-mono text-[9px] font-bold text-cyan-300/55">C{section.bar} → C{getSectionEndBar(sectionIndex) || '--'} · {formatTime(section.start)} → {formatTime(getSectionEnd(sectionIndex))}</p>
                                   </button>
-                                  <button type="button" onClick={() => loopSection(sectionIndex)} disabled={sectionIndex >= currentSections.length - 1} className={'min-h-16 rounded-xl border text-[9px] font-black uppercase tracking-wide active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-25 ' + (pendingSectionAction?.type === 'loop' && pendingSectionAction.sectionId === section.id ? 'border-fuchsia-300/55 bg-fuchsia-300/25 text-fuchsia-50' : 'border-fuchsia-400/20 bg-fuchsia-400/10 text-fuchsia-200')}>Loop</button>
+                                  <button type="button" onClick={() => loopSection(sectionIndex)} disabled={getSectionEnd(sectionIndex) <= Number(section.start) + 0.02} className={'min-h-16 rounded-xl border text-[9px] font-black uppercase tracking-wide active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-25 ' + (pendingSectionAction?.type === 'loop' && pendingSectionAction.sectionId === section.id ? 'border-fuchsia-300/55 bg-fuchsia-300/25 text-fuchsia-50' : 'border-fuchsia-400/20 bg-fuchsia-400/10 text-fuchsia-200')}>Loop</button>
                                 </div>
                               ))}
                             </div>
@@ -1642,9 +1743,9 @@ const MultitrackLive = ({ user }) => {
                           <div key={section.id} className="grid grid-cols-[1fr_66px] gap-2 rounded-2xl border border-white/8 bg-black/20 p-2">
                             <button type="button" onClick={() => goToSection(section)} className="min-h-14 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 text-left hover:bg-cyan-400/20">
                               <p className="truncate text-sm font-black text-cyan-100">{section.label}</p>
-                              <p className="mt-1 font-mono text-[9px] font-bold text-cyan-300/55">Compás {section.bar} · {formatTime(section.start)}</p>
+                              <p className="mt-1 font-mono text-[9px] font-bold text-cyan-300/55">C{section.bar} → C{getSectionEndBar(sectionIndex) || '--'} · {formatTime(section.start)} → {formatTime(getSectionEnd(sectionIndex))}</p>
                             </button>
-                            <button type="button" onClick={() => loopSection(sectionIndex)} disabled={sectionIndex >= currentSections.length - 1} className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/10 text-[9px] font-black uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-400/20 disabled:cursor-not-allowed disabled:opacity-25">Loop</button>
+                            <button type="button" onClick={() => loopSection(sectionIndex)} disabled={getSectionEnd(sectionIndex) <= Number(section.start) + 0.02} className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/10 text-[9px] font-black uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-400/20 disabled:cursor-not-allowed disabled:opacity-25">Loop</button>
                           </div>
                         ))}
                       </div>
@@ -1747,6 +1848,15 @@ const MultitrackLive = ({ user }) => {
                         );
                       })}
 
+                      {currentSections.length > 0 && getSectionEnd(currentSections.length - 1) > 0 && (
+                        <div
+                          className="pointer-events-none absolute inset-y-0 z-[15] w-px bg-amber-300/80"
+                          style={{ left: Math.min(100, Math.max(0, (getSectionEnd(currentSections.length - 1) / timelineDuration) * 100)) + '%' }}
+                        >
+                          <span className="absolute bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-amber-300/30 bg-amber-400/15 px-1.5 py-0.5 font-mono text-[8px] font-black text-amber-100">FIN · C{getSectionEndBar(currentSections.length - 1)}</span>
+                        </div>
+                      )}
+
                       {timelineDuration > 0 && (
                         <div
                           className="pointer-events-none absolute inset-y-0 z-20 w-0.5 bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,.9)]"
@@ -1762,7 +1872,7 @@ const MultitrackLive = ({ user }) => {
                       <span>Playhead {formatTime(playback.currentTime)} · Compás {musicalPosition.beforeStart ? 'PRE' : (musicalPosition.bar || '--')}</span>
                       <span>{formatTime(timelineDuration)}</span>
                     </div>
-                    <p className="mt-2 text-[9px] font-semibold text-zinc-700">2K-D3: arrastra el marcador de una sección con snap a compás. Si te equivocas, usa Deshacer/Rehacer antes o después de guardar; cada restauración vuelve a dejar el Live Map como cambio pendiente.</p>
+                    <p className="mt-2 text-[9px] font-semibold text-zinc-700">2L: cada bloque muestra inicio → final. Las secciones intermedias terminan donde empieza la siguiente; la última usa un compás final real y seguro. La marca FIN define su límite de Loop.</p>
                   </div>
                 )}
 
@@ -1796,7 +1906,7 @@ const MultitrackLive = ({ user }) => {
                           {currentSong?.livePlayback && !liveMapDirty ? 'Guardado' : currentSong?.livePlayback ? 'Cambios sin guardar' : 'Sin guardar'}
                         </span>
                       </div>
-                      <p className="mt-1 text-[10px] font-semibold text-zinc-500">Guarda BPM, compás, alineación, secciones y la mezcla completa directamente en la canción.</p>
+                      <p className="mt-1 text-[10px] font-semibold text-zinc-500">Guarda BPM, compás, alineación, secciones con límite final y la mezcla completa directamente en la canción. Live Map v3.</p>
                       {liveMapNotice && <p className="mt-1 text-[10px] font-bold text-zinc-300">{liveMapNotice}</p>}
                     </div>
                     <button
@@ -1841,6 +1951,27 @@ const MultitrackLive = ({ user }) => {
                                   <button type="button" onClick={() => adjustDraftBar(1)} className="rounded-lg border border-white/10 bg-white/5 text-lg font-black text-zinc-300 hover:bg-white/10">+</button>
                                 </div>
                               </div>
+                              {currentSections.findIndex((item) => item.id === section.id) === currentSections.length - 1 && (
+                                <div>
+                                  <div className="flex items-center justify-between gap-2">
+                                    <label className="text-[9px] font-black uppercase tracking-widest text-amber-500">Compás final</label>
+                                    <span className="text-[8px] font-bold text-zinc-600">límite exclusivo · último bloque</span>
+                                  </div>
+                                  <div className="mt-1 grid grid-cols-[38px_minmax(0,1fr)_38px] gap-2">
+                                    <button type="button" onClick={() => adjustDraftEndBar(-1)} className="rounded-lg border border-amber-400/15 bg-amber-400/5 text-lg font-black text-amber-200 hover:bg-amber-400/10">−</button>
+                                    <input
+                                      type="number"
+                                      min={Math.max(2, Number(sectionDraft.bar) + 1)}
+                                      step="1"
+                                      value={sectionDraft.endBar}
+                                      onChange={(event) => setSectionDraft((previous) => ({ ...previous, endBar: event.target.value }))}
+                                      className="w-full rounded-lg border border-amber-400/20 bg-black/35 px-3 py-2 text-center font-mono text-xs font-black text-amber-100 outline-none focus:border-amber-300/50"
+                                    />
+                                    <button type="button" onClick={() => adjustDraftEndBar(1)} className="rounded-lg border border-amber-400/15 bg-amber-400/5 text-lg font-black text-amber-200 hover:bg-amber-400/10">+</button>
+                                  </div>
+                                  <p className="mt-1 text-[8px] font-semibold text-zinc-700">Define dónde termina musicalmente la última sección para permitir Loop y saltos seguros.</p>
+                                </div>
+                              )}
                               <div className="grid grid-cols-2 gap-2">
                                 <button type="button" onClick={cancelEditSection} className="rounded-lg border border-white/10 bg-white/5 px-2 py-2 text-[9px] font-black uppercase tracking-wide text-zinc-400 hover:bg-white/10">Cancelar</button>
                                 <button type="button" onClick={() => saveSectionEdit(section.id)} className="rounded-lg bg-emerald-400 px-2 py-2 text-[9px] font-black uppercase tracking-wide text-zinc-950 hover:bg-emerald-300">Guardar cambios</button>
@@ -1851,7 +1982,7 @@ const MultitrackLive = ({ user }) => {
                               <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0">
                                   <p className="truncate text-xs font-black text-zinc-100">{section.label}</p>
-                                  <p className="mt-1 font-mono text-[9px] font-bold text-zinc-600">Compás {section.bar} · {formatTime(section.start)}</p>
+                                  <p className="mt-1 font-mono text-[9px] font-bold text-zinc-600">C{section.bar} → C{getSectionEndBar(sectionIndex) || '--'} · {formatTime(section.start)} → {formatTime(getSectionEnd(sectionIndex))}</p>
                                 </div>
                                 <div className="flex items-center gap-1">
                                   <button type="button" onClick={() => beginEditSection(section)} className="rounded-lg border border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-zinc-500 hover:bg-white/5 hover:text-zinc-200">Editar</button>
@@ -1863,7 +1994,7 @@ const MultitrackLive = ({ user }) => {
                                 <button
                                   type="button"
                                   onClick={() => loopSection(sectionIndex)}
-                                  disabled={sectionIndex >= currentSections.length - 1}
+                                  disabled={getSectionEnd(sectionIndex) <= Number(section.start) + 0.02}
                                   className="rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/10 px-2 py-2 text-[9px] font-black uppercase tracking-wide text-fuchsia-200 hover:bg-fuchsia-400/20 disabled:cursor-not-allowed disabled:opacity-30"
                                 >
                                   Loop
