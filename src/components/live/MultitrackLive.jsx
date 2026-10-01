@@ -86,6 +86,10 @@ const MultitrackLive = ({ user }) => {
   const [liveMapNotice, setLiveMapNotice] = useState('');
   const [navigationNotice, setNavigationNotice] = useState('');
   const [liveTouchPanel, setLiveTouchPanel] = useState('sections');
+  const [pendingSectionAction, setPendingSectionAction] = useState(null);
+  const sectionTapRef = useRef({ id: '', at: 0 });
+  const loopTapRef = useRef({ id: '', at: 0 });
+  const pendingActionRunningRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -303,6 +307,35 @@ const MultitrackLive = ({ user }) => {
   const currentSections = useMemo(() => (
     Array.isArray(sectionsBySong[currentSongGridKey]) ? sectionsBySong[currentSongGridKey] : []
   ), [sectionsBySong, currentSongGridKey]);
+
+  const getSectionIndexAtTime = (time) => {
+    const value = Number(time) || 0;
+    let activeIndex = -1;
+    for (let index = 0; index < currentSections.length; index += 1) {
+      if (value + 0.025 >= currentSections[index].start) activeIndex = index;
+      else break;
+    }
+    return activeIndex;
+  };
+
+  const getSectionEnd = (sectionIndex) => {
+    const nextSection = currentSections[sectionIndex + 1];
+    if (nextSection) return nextSection.start;
+    const safeDuration = Number(playback.shortestStemDuration) || Number(playback.duration) || 0;
+    return safeDuration > 0 ? Math.max(currentSections[sectionIndex]?.start || 0, safeDuration - 0.12) : 0;
+  };
+
+  const currentSectionIndex = getSectionIndexAtTime(playback.currentTime);
+  const currentLiveSection = currentSectionIndex >= 0 ? currentSections[currentSectionIndex] : null;
+  const activeLoopSectionIndex = playback.loop
+    ? currentSections.findIndex((section, sectionIndex) => {
+      const nextSection = currentSections[sectionIndex + 1];
+      if (!nextSection) return false;
+      return Math.abs(playback.loop.start - section.start) < 0.03
+        && Math.abs(playback.loop.end - nextSection.start) < 0.03;
+    })
+    : -1;
+  const activeLoopSection = activeLoopSectionIndex >= 0 ? currentSections[activeLoopSectionIndex] : null;
   const currentLiveMapSignature = useMemo(() => JSON.stringify({
     bpm: currentBpm,
     beatsPerBar: currentBeatsPerBar,
@@ -359,12 +392,15 @@ const MultitrackLive = ({ user }) => {
   };
 
   const stopPlayback = () => {
+    setPendingSectionAction(null);
     engineRef.current.stop();
     setPlayback(engineRef.current.getState());
     setNavigationNotice('');
   };
 
   const seekPlayback = async (event) => {
+    setPendingSectionAction(null);
+    setNavigationNotice('');
     await engineRef.current.seek(Number(event.target.value));
     setPlayback(engineRef.current.getState());
   };
@@ -375,6 +411,7 @@ const MultitrackLive = ({ user }) => {
       setNavigationNotice('La canción sigue reproduciéndose. Pulsa Stop o Pausa antes de cambiar de tema.');
       return;
     }
+    setPendingSectionAction(null);
     setNavigationNotice('');
     engineRef.current.stop();
     setCurrentIndex(nextIndex);
@@ -516,13 +553,85 @@ const MultitrackLive = ({ user }) => {
     }));
   };
 
-  const goToSection = async (section) => {
+  const goToSectionNow = async (section, message = '') => {
     setSectionError('');
+    setPendingSectionAction(null);
     try {
       await engineRef.current.seek(section.start);
       setPlayback(engineRef.current.getState());
+      if (message) setNavigationNotice(message);
     } catch (error) {
       setSectionError(error?.message || 'No se pudo ir a esa sección.');
+    }
+  };
+
+  const goToSection = async (section) => {
+    setSectionError('');
+    if (!section) return;
+
+    const now = Date.now();
+    const previousTap = sectionTapRef.current;
+    const doubleTap = liveRunnerMode
+      && playback.playing
+      && previousTap.id === section.id
+      && now - previousTap.at <= 430;
+    sectionTapRef.current = { id: section.id, at: now };
+
+    if (!liveRunnerMode || !playback.playing || doubleTap) {
+      await goToSectionNow(
+        section,
+        doubleTap ? ('Salto inmediato → ' + section.label) : ''
+      );
+      return;
+    }
+
+    if (pendingSectionAction?.type === 'jump' && pendingSectionAction.sectionId === section.id) {
+      setPendingSectionAction(null);
+      setNavigationNotice('Salto programado cancelado.');
+      return;
+    }
+
+    const activeIndex = getSectionIndexAtTime(playback.currentTime);
+    if (activeIndex < 0) {
+      await goToSectionNow(section, 'Salto inmediato → ' + section.label);
+      return;
+    }
+
+    let executeAt = getSectionEnd(activeIndex);
+    if (playback.loop) {
+      executeAt = playback.loop.end;
+      setPlayback(engineRef.current.requestLoopExit());
+    }
+
+    if (!executeAt || executeAt <= playback.currentTime + 0.02) {
+      await goToSectionNow(section, 'Salto inmediato → ' + section.label);
+      return;
+    }
+
+    setPendingSectionAction({
+      type: 'jump',
+      sectionId: section.id,
+      label: section.label,
+      start: section.start,
+      executeAt,
+    });
+    setNavigationNotice('Programado → ' + section.label + '. Esperará al final de ' + (currentSections[activeIndex]?.label || 'la sección actual') + '. Doble toque para ir ahora.');
+  };
+
+  const loopSectionNow = async (sectionIndex, message = '') => {
+    const section = currentSections[sectionIndex];
+    const nextSection = currentSections[sectionIndex + 1];
+    if (!section || !nextSection) return;
+
+    try {
+      await engineRef.current.seek(section.start);
+      const bars = Math.max(1, Math.round((nextSection.start - section.start) / musicalPosition.secondsPerBar));
+      const nextState = engineRef.current.setLoopRegion(section.start, nextSection.start, { bars });
+      setPendingSectionAction(null);
+      setPlayback(nextState);
+      if (message) setNavigationNotice(message);
+    } catch (error) {
+      setSectionError(error?.message || 'No se pudo repetir esa sección.');
     }
   };
 
@@ -536,15 +645,104 @@ const MultitrackLive = ({ user }) => {
       return;
     }
 
-    try {
-      await engineRef.current.seek(section.start);
-      const bars = Math.max(1, Math.round((nextSection.start - section.start) / musicalPosition.secondsPerBar));
-      const nextState = engineRef.current.setLoopRegion(section.start, nextSection.start, { bars });
-      setPlayback(nextState);
-    } catch (error) {
-      setSectionError(error?.message || 'No se pudo repetir esa sección.');
+    const now = Date.now();
+    const previousTap = loopTapRef.current;
+    const doubleTap = liveRunnerMode
+      && playback.playing
+      && previousTap.id === section.id
+      && now - previousTap.at <= 430;
+    loopTapRef.current = { id: section.id, at: now };
+
+    if (!liveRunnerMode || !playback.playing || doubleTap) {
+      await loopSectionNow(
+        sectionIndex,
+        doubleTap ? ('Loop inmediato → ' + section.label) : ''
+      );
+      return;
     }
+
+    const sameActiveLoop = playback.loop
+      && Math.abs(playback.loop.start - section.start) < 0.03
+      && Math.abs(playback.loop.end - nextSection.start) < 0.03;
+    if (sameActiveLoop) {
+      setPlayback(engineRef.current.requestLoopExit());
+      setNavigationNotice('Salida del loop programada al final de ' + section.label + '.');
+      return;
+    }
+
+    if (pendingSectionAction?.type === 'loop' && pendingSectionAction.sectionId === section.id) {
+      setPendingSectionAction(null);
+      setNavigationNotice('Loop programado cancelado.');
+      return;
+    }
+
+    const activeIndex = getSectionIndexAtTime(playback.currentTime);
+    const bars = Math.max(1, Math.round((nextSection.start - section.start) / musicalPosition.secondsPerBar));
+
+    if (activeIndex === sectionIndex) {
+      try {
+        const nextState = engineRef.current.setLoopRegion(section.start, nextSection.start, { bars });
+        setPendingSectionAction(null);
+        setPlayback(nextState);
+        setNavigationNotice('Loop armado en ' + section.label + ': continuará hasta el final y luego repetirá desde el inicio.');
+      } catch (error) {
+        setSectionError(error?.message || 'No se pudo repetir esa sección.');
+      }
+      return;
+    }
+
+    if (activeIndex < 0) {
+      await loopSectionNow(sectionIndex, 'Loop inmediato → ' + section.label);
+      return;
+    }
+
+    let executeAt = getSectionEnd(activeIndex);
+    if (playback.loop) {
+      executeAt = playback.loop.end;
+      setPlayback(engineRef.current.requestLoopExit());
+    }
+
+    setPendingSectionAction({
+      type: 'loop',
+      sectionId: section.id,
+      sectionIndex,
+      label: section.label,
+      start: section.start,
+      end: nextSection.start,
+      bars,
+      executeAt,
+    });
+    setNavigationNotice('Loop programado → ' + section.label + '. Esperará al final de ' + (currentSections[activeIndex]?.label || 'la sección actual') + '. Doble toque para ir ahora.');
   };
+
+  useEffect(() => {
+    const action = pendingSectionAction;
+    if (!action || !playback.playing || pendingActionRunningRef.current) return;
+    if (playback.currentTime < action.executeAt - 0.02) return;
+
+    pendingActionRunningRef.current = true;
+    setPendingSectionAction(null);
+
+    const execute = async () => {
+      try {
+        await engineRef.current.seek(action.start);
+        if (action.type === 'loop') {
+          const nextState = engineRef.current.setLoopRegion(action.start, action.end, { bars: action.bars });
+          setPlayback(nextState);
+          setNavigationNotice('Loop activo → ' + action.label);
+        } else {
+          setPlayback(engineRef.current.getState());
+          setNavigationNotice('Ahora → ' + action.label);
+        }
+      } catch (error) {
+        setSectionError(error?.message || 'No se pudo ejecutar la navegación programada.');
+      } finally {
+        pendingActionRunningRef.current = false;
+      }
+    };
+
+    execute();
+  }, [playback.currentTime, playback.playing, pendingSectionAction]);
   const beginEditSection = (section) => {
     setSectionError('');
     setEditingSectionId(section.id);
@@ -729,9 +927,9 @@ const MultitrackLive = ({ user }) => {
   );
 
   return (
-    <div className="min-h-screen bg-[#050608] text-zinc-100">
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#050608]/95 px-3 py-3 backdrop-blur md:px-5">
-        <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#050608] text-zinc-100">
+      <header className="sticky top-0 z-30 w-full max-w-full overflow-x-hidden border-b border-white/10 bg-[#050608]/95 px-3 py-2.5 backdrop-blur md:px-5 md:py-3">
+        <div className="mx-auto flex w-full min-w-0 max-w-[1800px] flex-wrap items-center justify-between gap-2 sm:gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <button type="button" onClick={() => navigate(standaloneSongMode ? '/multitrack-live' : `/setlist/${eventoId}`)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white" title={standaloneSongMode ? 'Volver a Multitrack Live' : 'Volver al setlist'}>
               <ArrowLeft size={18} />
@@ -772,7 +970,7 @@ const MultitrackLive = ({ user }) => {
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1800px] px-3 pt-3 md:px-5 md:pt-4">
+      <div className="mx-auto w-full min-w-0 max-w-[1800px] px-3 pt-3 md:px-5 md:pt-4">
         <div className={`rounded-2xl border px-4 py-3 ${readyForLive ? 'border-emerald-400/25 bg-emerald-400/[0.07]' : 'border-amber-400/20 bg-amber-400/[0.05]'}`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
@@ -816,7 +1014,7 @@ const MultitrackLive = ({ user }) => {
       </div>
 
       {(preparingSetlist || prepareSummary) && (
-        <div className="mx-auto max-w-[1800px] px-3 pt-3 md:px-5 md:pt-4">
+        <div className="mx-auto w-full min-w-0 max-w-[1800px] px-3 pt-3 md:px-5 md:pt-4">
           <div className={`rounded-2xl border px-4 py-3 ${prepareHasErrors ? 'border-amber-400/20 bg-amber-400/[0.06]' : 'border-emerald-400/20 bg-emerald-400/[0.06]'}`}>
             {preparingSetlist ? (
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -835,8 +1033,8 @@ const MultitrackLive = ({ user }) => {
         </div>
       )}
 
-      <main className="mx-auto grid max-w-[1800px] gap-3 p-3 md:gap-4 md:p-5 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-        <aside className="order-2 rounded-3xl border border-white/10 bg-white/[0.035] p-3 xl:order-1 xl:sticky xl:top-[82px] xl:h-[calc(100vh-102px)] xl:overflow-hidden">
+      <main className="mx-auto grid w-full min-w-0 max-w-[1800px] overflow-x-hidden gap-3 p-3 md:gap-4 md:p-5 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+        <aside className="order-2 w-full min-w-0 max-w-full overflow-hidden rounded-3xl border border-white/10 bg-white/[0.035] p-3 xl:order-1 xl:sticky xl:top-[82px] xl:h-[calc(100vh-102px)]">
           <div className="mb-3 flex items-center justify-between px-1">
             <div className="flex items-center gap-2">
               <ListMusic size={16} className="text-violet-300" />
@@ -845,7 +1043,7 @@ const MultitrackLive = ({ user }) => {
             <span className="text-[10px] font-bold text-zinc-600">{playlist.length} canciones</span>
           </div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1 xl:h-[calc(100%-32px)] xl:flex-col xl:overflow-y-auto xl:overflow-x-hidden xl:pr-1">
+          <div className="grid w-full min-w-0 grid-cols-1 gap-2 pb-1 sm:grid-cols-2 lg:grid-cols-3 xl:h-[calc(100%-32px)] xl:grid-cols-1 xl:overflow-y-auto xl:overflow-x-hidden xl:pr-1">
             {playlist.map((song, index) => {
               const count = getSongAudioCount(song);
               const active = index === currentIndex;
@@ -858,7 +1056,7 @@ const MultitrackLive = ({ user }) => {
                   key={song.setlistItemId}
                   type="button"
                   onClick={() => changeSong(index)}
-                  className={`min-w-[230px] rounded-2xl border p-3 text-left transition-all xl:min-w-0 ${active ? 'border-emerald-400/40 bg-emerald-400/10 shadow-[0_0_25px_rgba(16,185,129,.08)]' : next ? 'border-cyan-400/25 bg-cyan-400/[0.055] hover:border-cyan-300/40' : 'border-white/8 bg-black/20 hover:border-white/20 hover:bg-white/[0.04]'}`}
+                  className={`w-full min-w-0 max-w-full rounded-2xl border p-3 text-left transition-all ${active ? 'border-emerald-400/40 bg-emerald-400/10 shadow-[0_0_25px_rgba(16,185,129,.08)]' : next ? 'border-cyan-400/25 bg-cyan-400/[0.055] hover:border-cyan-300/40' : 'border-white/8 bg-black/20 hover:border-white/20 hover:bg-white/[0.04]'}`}
                 >
                   <div className="flex items-start gap-3">
                     <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[10px] font-black ${active ? 'bg-emerald-400 text-zinc-950' : 'bg-white/8 text-zinc-500'}`}>{index + 1}</span>
@@ -900,8 +1098,8 @@ const MultitrackLive = ({ user }) => {
           </div>
         </aside>
 
-        <section className="order-1 min-w-0 space-y-3 xl:order-2">
-          <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-zinc-900 to-black p-4 shadow-2xl shadow-black/30 md:p-6">
+        <section className="order-1 w-full min-w-0 max-w-full space-y-3 overflow-x-hidden xl:order-2">
+          <div className="min-w-0 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-zinc-900 to-black p-4 shadow-2xl shadow-black/30 md:p-6">
             {currentSong ? (
               <>
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -925,6 +1123,209 @@ const MultitrackLive = ({ user }) => {
                     <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/[0.045] p-3">
                       <p className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-300">Siguiente</p>
                       <p className="mt-1 truncate text-sm font-black text-zinc-200">{playlist[currentIndex + 1]?.titulo || 'Fin del setlist'}</p>
+                    </div>
+                  </div>
+                )}
+
+                {liveRunnerMode && (
+                  <div className="mt-4 min-w-0 max-w-full xl:hidden">
+                    <div className="min-w-0 max-w-full overflow-hidden rounded-3xl border border-white/10 bg-white/[0.035] p-3 shadow-xl shadow-black/20">
+                      <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2 px-1">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-300">Control táctil Live</p>
+                          <p className="mt-1 text-[9px] font-semibold text-zinc-600">Vista optimizada para tablet y móvil.</p>
+                        </div>
+                        <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-500">Touch</span>
+                      </div>
+
+                                            <div className="mb-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.055] p-2.5 sm:p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[9px] font-black uppercase tracking-[0.16em] text-emerald-300">Operación táctil</p>
+                            <p className="mt-0.5 hidden text-[9px] font-semibold text-zinc-600 sm:block">Transporte principal siempre a mano durante Live.</p>
+                          </div>
+                          <span className="shrink-0 font-mono text-[10px] font-black tabular-nums text-zinc-300 sm:text-xs">{formatTime(playback.currentTime)} / {formatTime(playback.duration)}</span>
+                        </div>
+
+                        <input
+                          type="range"
+                          min="0"
+                          max={playback.duration || 1}
+                          step="0.01"
+                          value={Math.min(playback.currentTime, playback.duration || 0)}
+                          onChange={seekPlayback}
+                          disabled={loadingAudio || playback.duration <= 0}
+                          aria-label="Posición de reproducción Live"
+                          className="mt-2.5 h-2 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-emerald-400 disabled:cursor-not-allowed disabled:opacity-40 sm:h-2.5"
+                        />
+
+                        <div className="mt-2.5 grid min-w-0 grid-cols-[42px_42px_minmax(0,1fr)_42px] items-center gap-1.5 sm:grid-cols-[56px_56px_minmax(120px,1fr)_56px] sm:gap-2.5">
+                          <button type="button" onClick={() => changeSong(currentIndex - 1)} disabled={currentIndex === 0} className="flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-300 active:scale-[0.98] disabled:opacity-25 sm:h-13 sm:rounded-2xl" title="Canción anterior"><SkipBack size={18} /></button>
+                          <button type="button" onClick={stopPlayback} disabled={loadingAudio || playback.stems.length === 0} className="flex h-10 items-center justify-center rounded-xl border border-red-400/20 bg-red-400/10 text-red-200 active:scale-[0.98] disabled:opacity-25 sm:h-13 sm:rounded-2xl" title="Stop"><Square size={16} fill="currentColor" /></button>
+                          <button type="button" onClick={togglePlay} disabled={loadingAudio || Boolean(audioError) || playback.stems.length === 0} className="flex h-11 min-w-0 items-center justify-center gap-1.5 overflow-hidden rounded-xl bg-emerald-400 px-2 text-[10px] font-black uppercase tracking-[0.06em] text-zinc-950 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500 sm:h-14 sm:gap-2 sm:rounded-2xl sm:px-4 sm:text-xs sm:tracking-[0.1em]">
+                            {loadingAudio ? <Loader2 size={19} className="animate-spin" /> : playback.playing ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}
+                            <span className="hidden min-w-0 truncate sm:inline">{loadingAudio ? 'Cargando' : playback.playing ? 'Pausa' : 'Play'}</span>
+                          </button>
+                          <button type="button" onClick={() => changeSong(currentIndex + 1)} disabled={currentIndex >= playlist.length - 1} className="flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-300 active:scale-[0.98] disabled:opacity-25 sm:h-13 sm:rounded-2xl" title="Canción siguiente"><SkipForward size={18} /></button>
+                        </div>
+                      </div>
+
+                      <div className="grid w-full min-w-0 gap-1.5 rounded-2xl border border-white/8 bg-black/25 p-1.5 sm:gap-2" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
+                        <button
+                          type="button"
+                          onClick={() => setLiveTouchPanel('sections')}
+                          aria-pressed={liveTouchPanel === 'sections'}
+                          className={'flex min-h-12 w-full min-w-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-xl px-2 text-[9px] font-black uppercase tracking-[0.08em] transition-colors sm:gap-2 sm:px-3 sm:text-[10px] sm:tracking-[0.12em] ' + (liveTouchPanel === 'sections' ? 'bg-cyan-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/[0.05]')}
+                        >
+                          <ListMusic size={16} /> Secciones
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLiveTouchPanel('mixer')}
+                          aria-pressed={liveTouchPanel === 'mixer'}
+                          className={'flex min-h-12 w-full min-w-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-xl px-2 text-[9px] font-black uppercase tracking-[0.08em] transition-colors sm:gap-2 sm:px-3 sm:text-[10px] sm:tracking-[0.12em] ' + (liveTouchPanel === 'mixer' ? 'bg-blue-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/[0.05]')}
+                        >
+                          <SlidersHorizontal size={16} /> Mixer
+                        </button>
+                      </div>
+
+                      {liveTouchPanel === 'sections' ? (
+                        <div className="mt-3 min-w-0 overflow-hidden rounded-2xl border border-cyan-400/15 bg-cyan-400/[0.035] p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">Secciones rápidas</p>
+                              <p className="mt-1 text-[9px] font-semibold text-zinc-600">Toca una sección para saltar. Loop permanece separado para evitar errores.</p>
+                            </div>
+                            <span className="font-mono text-[9px] font-bold text-zinc-600">{currentSections.length} secciones</span>
+                          </div>
+                          <div className={'mt-3 flex min-w-0 items-center justify-between gap-2 rounded-xl border px-3 py-2 text-[9px] font-black ' + (playback.loop ? (playback.loop.phase === 'exiting' ? 'border-amber-400/30 bg-amber-400/10 text-amber-100' : 'border-fuchsia-400/30 bg-fuchsia-400/10 text-fuchsia-100') : 'border-white/10 bg-black/20 text-zinc-500')}>
+                            <span className="min-w-0 truncate">Estado del loop · {playback.loop ? (playback.loop.phase === 'exiting' ? 'SALIENDO' : 'ACTIVO') : 'DESACTIVADO'}{activeLoopSection ? ' · ' + activeLoopSection.label : ''}</span>
+                            <span className="shrink-0 font-mono text-[8px] text-zinc-600">{playback.loop ? (playback.loop.phase === 'exiting' ? 'fin de vuelta' : formatTime(playback.loop.start) + ' → ' + formatTime(playback.loop.end)) : 'OFF'}</span>
+                          </div>
+                          {pendingSectionAction && (
+                            <div className={'mt-3 flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-[9px] font-black ' + (pendingSectionAction.type === 'loop' ? 'border-fuchsia-400/25 bg-fuchsia-400/10 text-fuchsia-100' : 'border-cyan-400/25 bg-cyan-400/10 text-cyan-100')}>
+                              <span className="min-w-0 truncate">Acción programada · {pendingSectionAction.type === 'loop' ? 'LOOP' : 'IR'} → {pendingSectionAction.label}</span>
+                              <span className="shrink-0 font-mono text-zinc-500">al final</span>
+                            </div>
+                          )}
+                          {currentSections.length > 0 ? (
+                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                              {currentSections.map((section, sectionIndex) => (
+                                <div key={section.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_60px] gap-2 rounded-2xl border border-white/8 bg-black/20 p-2 sm:grid-cols-[minmax(0,1fr)_72px]">
+                                  <button type="button" onClick={() => goToSection(section)} className={'min-h-16 rounded-xl border px-3 text-left active:scale-[0.99] ' + (pendingSectionAction?.type === 'jump' && pendingSectionAction.sectionId === section.id ? 'border-cyan-300/50 bg-cyan-300/20' : currentLiveSection?.id === section.id ? 'border-emerald-400/45 bg-emerald-400/15' : 'border-cyan-400/20 bg-cyan-400/10')}>
+                                    <p className="truncate text-sm font-black text-cyan-100">{section.label}</p>
+                                    <p className="mt-1 font-mono text-[9px] font-bold text-cyan-300/55">Compás {section.bar} · {formatTime(section.start)}</p>
+                                  </button>
+                                  <button type="button" onClick={() => loopSection(sectionIndex)} disabled={sectionIndex >= currentSections.length - 1} className={'min-h-16 rounded-xl border text-[9px] font-black uppercase tracking-wide active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-25 ' + (pendingSectionAction?.type === 'loop' && pendingSectionAction.sectionId === section.id ? 'border-fuchsia-300/55 bg-fuchsia-300/25 text-fuchsia-50' : 'border-fuchsia-400/20 bg-fuchsia-400/10 text-fuchsia-200')}>Loop</button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="mt-3 rounded-xl border border-amber-400/15 bg-amber-400/[0.05] p-3 text-[10px] font-bold text-amber-200">Esta canción no tiene secciones guardadas. Configúrala desde Administración antes del servicio.</div>
+                          )}
+                          {sectionError && <div className="mt-3 flex gap-2 rounded-xl border border-red-400/20 bg-red-400/[0.07] p-3 text-red-200"><AlertTriangle size={15} className="mt-0.5 shrink-0" /><p className="text-[10px] font-bold leading-relaxed">{sectionError}</p></div>}
+                        </div>
+                      ) : (
+                        <div className="mt-3 min-w-0 max-w-full overflow-hidden rounded-2xl border border-blue-400/15 bg-blue-400/[0.035] p-3">
+                          <div className="mb-3 flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-blue-300">Mixer Live</p>
+                              <p className="mt-1 text-[9px] font-semibold text-zinc-600">Faders verticales optimizados para touch. Desliza horizontalmente para ver todos los canales.</p>
+                            </div>
+                            <span className="text-[9px] font-bold text-zinc-600">{playback.stems.length} stems</span>
+                          </div>
+
+                          {currentSong?.livePlayback?.mixer && (
+                            <div className="mb-3 flex flex-col gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.05] p-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="text-[9px] font-black uppercase tracking-widest text-emerald-300">Mezcla guardada</p>
+                                <p className="mt-1 text-[9px] font-semibold text-zinc-600">Preset del Live Map cargado para esta canción.</p>
+                              </div>
+                              <button type="button" onClick={restoreSavedMixer} disabled={playback.stems.length === 0} className="min-h-11 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 text-[9px] font-black uppercase tracking-wide text-emerald-200 disabled:opacity-30">Restaurar mezcla</button>
+                            </div>
+                          )}
+
+                          {playback.stems.some((stem) => stem.solo) && (
+                            <div className="mb-3 flex gap-2 rounded-xl border border-amber-400/20 bg-amber-400/[0.06] p-3 text-amber-200">
+                              <AlertTriangle size={14} className="shrink-0" />
+                              <p className="text-[9px] font-bold leading-relaxed">Hay uno o más canales en Solo.</p>
+                            </div>
+                          )}
+
+                          {playback.stems.length > 0 ? (
+                            <div className="w-full max-w-full overflow-x-auto overflow-y-hidden pb-2 overscroll-x-contain" style={{ touchAction: 'pan-x pan-y' }}>
+                              <div className="flex w-max min-w-full gap-2">
+                                <div className="flex w-24 shrink-0 flex-col items-center rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.055] p-2 sm:w-28 sm:p-2.5">
+                                  <div className="flex min-h-10 w-full items-center justify-center gap-1.5 border-b border-white/8 pb-2">
+                                    <Volume2 size={14} className="text-emerald-300" />
+                                    <p className="truncate text-[9px] font-black uppercase tracking-widest text-emerald-200">Master</p>
+                                  </div>
+                                  <p className="mt-2 font-mono text-[10px] font-black text-emerald-300">{Math.round(playback.masterVolume * 100)}%</p>
+                                  <div className="my-2 flex h-48 items-center justify-center rounded-xl border border-white/8 bg-black/25 px-3">
+                                    <input
+                                      type="range"
+                                      min="0"
+                                      max="1"
+                                      step="0.01"
+                                      value={playback.masterVolume}
+                                      onChange={(event) => changeMasterVolume(Number(event.target.value))}
+                                      aria-label="Volumen master"
+                                      style={{ writingMode: 'vertical-lr', direction: 'rtl', touchAction: 'none' }}
+                                      className="h-40 w-10 cursor-pointer accent-emerald-400"
+                                    />
+                                  </div>
+                                  <div className="flex h-11 w-full items-center justify-center rounded-xl border border-emerald-400/15 bg-emerald-400/[0.06] text-[8px] font-black uppercase tracking-widest text-emerald-300">Salida</div>
+                                </div>
+
+                                {playback.stems.map((stem) => (
+                                  <div key={stem.id} className={'flex w-24 shrink-0 flex-col items-center rounded-2xl border p-2 sm:w-28 sm:p-2.5 ' + (stem.solo ? 'border-amber-400/35 bg-amber-400/[0.055]' : stem.muted ? 'border-red-400/25 bg-red-400/[0.045]' : 'border-white/8 bg-black/25')}>
+                                    <div className="flex min-h-10 w-full items-center border-b border-white/8 pb-2">
+                                      <p className="w-full truncate text-center text-[10px] font-black text-zinc-200" title={stem.name}>{stem.name}</p>
+                                    </div>
+                                    <p className="mt-2 font-mono text-[10px] font-black text-blue-300">{Math.round(stem.volume * 100)}%</p>
+                                    <div className="my-2 flex h-48 items-center justify-center rounded-xl border border-white/8 bg-black/25 px-3">
+                                      <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.01"
+                                        value={stem.volume}
+                                        onChange={(event) => changeStemVolume(stem.id, Number(event.target.value))}
+                                        aria-label={'Volumen ' + stem.name}
+                                        style={{ writingMode: 'vertical-lr', direction: 'rtl', touchAction: 'none' }}
+                                        className="h-40 w-10 cursor-pointer accent-blue-400"
+                                      />
+                                    </div>
+                                    <div className="grid w-full grid-cols-2 gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleMute(stem.id)}
+                                        aria-pressed={stem.muted}
+                                        className={'flex h-11 items-center justify-center rounded-xl text-[9px] font-black ' + (stem.muted ? 'bg-red-500 text-white' : 'border border-white/10 bg-white/5 text-zinc-400')}
+                                        title="Mute"
+                                      >
+                                        {stem.muted ? <VolumeX size={15} /> : 'M'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleSolo(stem.id)}
+                                        aria-pressed={stem.solo}
+                                        className={'flex h-11 items-center justify-center rounded-xl text-[9px] font-black ' + (stem.solo ? 'bg-amber-400 text-zinc-950' : 'border border-white/10 bg-white/5 text-zinc-400')}
+                                        title="Solo"
+                                      >S</button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : !loadingAudio ? (
+                            <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center">
+                              <Music2 className="mx-auto text-zinc-700" size={28} />
+                              <p className="mt-3 text-xs font-bold text-zinc-600">Selecciona una canción con audio para cargar el mixer.</p>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1200,7 +1601,7 @@ const MultitrackLive = ({ user }) => {
                 )}
 
                 {liveRunnerMode && (
-                  <div className="mt-5 rounded-3xl border border-emerald-400/20 bg-emerald-400/[0.055] p-4">
+                  <div className="mt-5 hidden rounded-3xl border border-emerald-400/20 bg-emerald-400/[0.055] p-4 xl:block">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-300">Operación Live</p>
@@ -1214,10 +1615,10 @@ const MultitrackLive = ({ user }) => {
                         {navigationNotice}
                       </div>
                     )}
-                    <div className="mt-4 grid grid-cols-[60px_60px_minmax(120px,1fr)_60px] items-center gap-3">
+                    <div className="mt-4 grid min-w-0 grid-cols-[52px_52px_minmax(0,1fr)_52px] items-center gap-2 sm:grid-cols-[60px_60px_minmax(120px,1fr)_60px] sm:gap-3">
                       <button type="button" onClick={() => changeSong(currentIndex - 1)} disabled={currentIndex === 0} className="flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 disabled:opacity-25" title="Canción anterior"><SkipBack size={22} /></button>
                       <button type="button" onClick={stopPlayback} disabled={loadingAudio || playback.stems.length === 0} className="flex h-14 items-center justify-center rounded-2xl border border-red-400/20 bg-red-400/10 text-red-200 hover:bg-red-400/20 disabled:opacity-25" title="Stop"><Square size={20} fill="currentColor" /></button>
-                      <button type="button" onClick={togglePlay} disabled={loadingAudio || Boolean(audioError) || playback.stems.length === 0} className="flex h-16 items-center justify-center gap-3 rounded-2xl bg-emerald-400 px-5 text-sm font-black uppercase tracking-[0.12em] text-zinc-950 hover:bg-emerald-300 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500">
+                      <button type="button" onClick={togglePlay} disabled={loadingAudio || Boolean(audioError) || playback.stems.length === 0} className="flex h-16 min-w-0 items-center justify-center gap-2 overflow-hidden rounded-2xl bg-emerald-400 px-2 text-xs font-black uppercase tracking-[0.08em] text-zinc-950 hover:bg-emerald-300 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500 sm:gap-3 sm:px-5 sm:text-sm sm:tracking-[0.12em]">
                         {loadingAudio ? <Loader2 size={24} className="animate-spin" /> : playback.playing ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}
                         {loadingAudio ? 'Cargando' : playback.playing ? 'Pausa' : 'Play'}
                       </button>
@@ -1226,132 +1627,7 @@ const MultitrackLive = ({ user }) => {
                   </div>
                 )}
 
-                {liveRunnerMode && (
-                  <div className="mt-4 xl:hidden">
-                    <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-3 shadow-xl shadow-black/20">
-                      <div className="mb-3 flex items-center justify-between gap-3 px-1">
-                        <div>
-                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-300">Control táctil Live</p>
-                          <p className="mt-1 text-[9px] font-semibold text-zinc-600">Vista optimizada para tablet y móvil.</p>
-                        </div>
-                        <span className="rounded-full border border-white/10 bg-black/25 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-zinc-500">Touch</span>
-                      </div>
 
-                      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/8 bg-black/25 p-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setLiveTouchPanel('sections')}
-                          aria-pressed={liveTouchPanel === 'sections'}
-                          className={'flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ' + (liveTouchPanel === 'sections' ? 'bg-cyan-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/[0.05]')}
-                        >
-                          <ListMusic size={16} /> Secciones
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setLiveTouchPanel('mixer')}
-                          aria-pressed={liveTouchPanel === 'mixer'}
-                          className={'flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 text-[10px] font-black uppercase tracking-[0.12em] transition-colors ' + (liveTouchPanel === 'mixer' ? 'bg-blue-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/[0.05]')}
-                        >
-                          <SlidersHorizontal size={16} /> Mixer
-                        </button>
-                      </div>
-
-                      {liveTouchPanel === 'sections' ? (
-                        <div className="mt-3 rounded-2xl border border-cyan-400/15 bg-cyan-400/[0.035] p-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <div>
-                              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-300">Secciones rápidas</p>
-                              <p className="mt-1 text-[9px] font-semibold text-zinc-600">Toca una sección para saltar. Loop permanece separado para evitar errores.</p>
-                            </div>
-                            <span className="font-mono text-[9px] font-bold text-zinc-600">{currentSections.length} secciones</span>
-                          </div>
-                          {currentSections.length > 0 ? (
-                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                              {currentSections.map((section, sectionIndex) => (
-                                <div key={section.id} className="grid grid-cols-[minmax(0,1fr)_72px] gap-2 rounded-2xl border border-white/8 bg-black/20 p-2">
-                                  <button type="button" onClick={() => goToSection(section)} className="min-h-16 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-3 text-left active:scale-[0.99]">
-                                    <p className="truncate text-sm font-black text-cyan-100">{section.label}</p>
-                                    <p className="mt-1 font-mono text-[9px] font-bold text-cyan-300/55">Compás {section.bar} · {formatTime(section.start)}</p>
-                                  </button>
-                                  <button type="button" onClick={() => loopSection(sectionIndex)} disabled={sectionIndex >= currentSections.length - 1} className="min-h-16 rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/10 text-[9px] font-black uppercase tracking-wide text-fuchsia-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-25">Loop</button>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="mt-3 rounded-xl border border-amber-400/15 bg-amber-400/[0.05] p-3 text-[10px] font-bold text-amber-200">Esta canción no tiene secciones guardadas. Configúrala desde Administración antes del servicio.</div>
-                          )}
-                          {sectionError && <div className="mt-3 flex gap-2 rounded-xl border border-red-400/20 bg-red-400/[0.07] p-3 text-red-200"><AlertTriangle size={15} className="mt-0.5 shrink-0" /><p className="text-[10px] font-bold leading-relaxed">{sectionError}</p></div>}
-                        </div>
-                      ) : (
-                        <div className="mt-3 rounded-2xl border border-blue-400/15 bg-blue-400/[0.035] p-3">
-                          <div className="mb-3 flex items-center justify-between gap-2">
-                            <div>
-                              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-blue-300">Mixer Live</p>
-                              <p className="mt-1 text-[9px] font-semibold text-zinc-600">Controles actuales adaptados a touch. Los faders verticales llegan en 2K-B.</p>
-                            </div>
-                            <span className="text-[9px] font-bold text-zinc-600">{playback.stems.length} stems</span>
-                          </div>
-
-                          {currentSong?.livePlayback?.mixer && (
-                            <div className="mb-3 flex flex-col gap-2 rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.05] p-3 sm:flex-row sm:items-center sm:justify-between">
-                              <div>
-                                <p className="text-[9px] font-black uppercase tracking-widest text-emerald-300">Mezcla guardada</p>
-                                <p className="mt-1 text-[9px] font-semibold text-zinc-600">Preset del Live Map cargado para esta canción.</p>
-                              </div>
-                              <button type="button" onClick={restoreSavedMixer} disabled={playback.stems.length === 0} className="min-h-11 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 text-[9px] font-black uppercase tracking-wide text-emerald-200 disabled:opacity-30">Restaurar mezcla</button>
-                            </div>
-                          )}
-
-                          {playback.stems.some((stem) => stem.solo) && (
-                            <div className="mb-3 flex gap-2 rounded-xl border border-amber-400/20 bg-amber-400/[0.06] p-3 text-amber-200">
-                              <AlertTriangle size={14} className="shrink-0" />
-                              <p className="text-[9px] font-bold leading-relaxed">Hay uno o más canales en Solo.</p>
-                            </div>
-                          )}
-
-                          <div className="mb-3 rounded-2xl border border-white/10 bg-black/25 p-3">
-                            <div className="flex items-center gap-3">
-                              <Volume2 size={16} className="shrink-0 text-emerald-300" />
-                              <div className="min-w-0 flex-1">
-                                <div className="mb-2 flex items-center justify-between">
-                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Master</span>
-                                  <span className="font-mono text-[10px] font-bold text-zinc-500">{Math.round(playback.masterVolume * 100)}%</span>
-                                </div>
-                                <input type="range" min="0" max="1" step="0.01" value={playback.masterVolume} onChange={(event) => changeMasterVolume(Number(event.target.value))} className="h-3 w-full cursor-pointer appearance-none rounded-full bg-zinc-800 accent-emerald-400" />
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="space-y-2">
-                            {playback.stems.map((stem) => (
-                              <div key={stem.id} className="rounded-2xl border border-white/8 bg-black/25 p-3">
-                                <div className="flex items-center gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <p className="truncate text-xs font-black text-zinc-200">{stem.name}</p>
-                                    <p className="mt-0.5 font-mono text-[9px] font-semibold text-zinc-600">{Math.round(stem.volume * 100)}%</p>
-                                  </div>
-                                  <button type="button" onClick={() => toggleMute(stem.id)} className={'flex h-11 w-12 items-center justify-center rounded-xl text-[10px] font-black ' + (stem.muted ? 'bg-red-500 text-white' : 'border border-white/10 bg-white/5 text-zinc-400')} title="Mute">{stem.muted ? <VolumeX size={16} /> : 'M'}</button>
-                                  <button type="button" onClick={() => toggleSolo(stem.id)} className={'flex h-11 w-12 items-center justify-center rounded-xl text-[10px] font-black ' + (stem.solo ? 'bg-amber-400 text-zinc-950' : 'border border-white/10 bg-white/5 text-zinc-400')} title="Solo">S</button>
-                                </div>
-                                <div className="mt-3 flex items-center gap-2">
-                                  <Volume2 size={14} className="shrink-0 text-zinc-600" />
-                                  <input type="range" min="0" max="1" step="0.01" value={stem.volume} onChange={(event) => changeStemVolume(stem.id, Number(event.target.value))} className="h-3 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-zinc-800 accent-blue-400" />
-                                </div>
-                              </div>
-                            ))}
-
-                            {!loadingAudio && playback.stems.length === 0 && (
-                              <div className="rounded-2xl border border-dashed border-white/10 p-6 text-center">
-                                <Music2 className="mx-auto text-zinc-700" size={28} />
-                                <p className="mt-3 text-xs font-bold text-zinc-600">Selecciona una canción con audio para cargar el mixer.</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
 
                 <div className="mt-7">
                   <input
