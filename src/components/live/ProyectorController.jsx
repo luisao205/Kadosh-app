@@ -2,7 +2,8 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc, deleteDoc, deleteField, runTransaction, serverTimestamp } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../../config/firebase';
 import { getSectionKey, parsearCancion } from '../../utils/songParser';
 import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon, Search, SearchCode, Settings2, Clock, ShieldCheck, MessageSquare, Music, BookOpen } from 'lucide-react';
 import { calcularOffsetSemitonos, traducirAcorde } from '../../utils/musicCore';
@@ -33,6 +34,40 @@ import { createQuickMessage, isMatchingQuickMessageProjection } from '../../util
 import { clearQuickMessageProjection as requestQuickMessageClear, projectQuickMessage as requestQuickMessageProjection, updateQuickMessageHistory as requestQuickMessageHistoryUpdate } from '../../utils/quickMessageFunctions';
 import QuickMessagePanel from './QuickMessagePanel';
 
+
+const extractCanvaUrlCandidate = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const iframeMatch = raw.match(/<iframe[^>]*\bsrc=(['"])(.*?)\1/i);
+  return String(iframeMatch?.[2] || raw).replace(/&amp;/g, '&').trim();
+};
+
+const normalizeCanvaEmbedUrl = (value) => {
+  const candidate = extractCanvaUrlCandidate(value);
+  if (!candidate) return '';
+  try {
+    const url = new URL(candidate);
+    const host = url.hostname.toLowerCase();
+    const isCanvaHost = host === 'canva.com' || host.endsWith('.canva.com');
+    if (!isCanvaHost || !url.pathname.includes('/design/') || !url.pathname.includes('/view')) return '';
+    url.hash = '';
+    url.search = '?embed';
+    return url.toString();
+  } catch {
+    return '';
+  }
+};
+
+const isCanvaShortLink = (value) => {
+  const candidate = extractCanvaUrlCandidate(value);
+  try {
+    return new URL(candidate).hostname.toLowerCase() === 'canva.link';
+  } catch {
+    return false;
+  }
+};
+
+const resolveCanvaEmbedLink = httpsCallable(functions, 'resolveCanvaEmbedLink');
 
 const ProyectorController = ({ user }) => {
   const { notify } = useFeedback();
@@ -126,6 +161,16 @@ const ProyectorController = ({ user }) => {
   const [preachingBiblePreviewIndex, setPreachingBiblePreviewIndex] = useState(0);
   const [handlingPreacherRequestId, setHandlingPreacherRequestId] = useState('');
   const [projectionSourceMode, setProjectionSourceMode] = useState('songs');
+  const [canvaDraft, setCanvaDraft] = useState({ title: 'Presentación Canva', url: '' });
+  const [canvaPreviewUrl, setCanvaPreviewUrl] = useState('');
+  const [canvaUrlError, setCanvaUrlError] = useState('');
+  const [canvaLibrary, setCanvaLibrary] = useState([]);
+  const [selectedCanvaId, setSelectedCanvaId] = useState('');
+  const [canvaTargets, setCanvaTargets] = useState({ projector: true, singers: false, musicians: false });
+  const [isSavingCanva, setIsSavingCanva] = useState(false);
+  const [canvaPage, setCanvaPage] = useState(1);
+  const [canvaPageCount, setCanvaPageCount] = useState(0);
+  const [canvaPageWindowStart, setCanvaPageWindowStart] = useState(1);
   const [showScreensMenu, setShowScreensMenu] = useState(false);
   const [screensMenuPosition, setScreensMenuPosition] = useState(null);
   const screensMenuButtonRef = useRef(null);
@@ -147,12 +192,33 @@ const ProyectorController = ({ user }) => {
   const canReadPastorRequests = canHandlePastorRequests || isAdmin(user);
   const canManageBibleOutline = isOwner(user) || isAdmin(user) || isMultimedia(user);
   const canQuickProject = hasPermission(user, 'bible.quickProjection');
+  const canViewCanva = hasPermission(user, 'canva.view');
+  const canCreateCanva = hasPermission(user, 'canva.create');
+  const canEditCanva = hasPermission(user, 'canva.edit');
+  const canDeleteCanva = hasPermission(user, 'canva.delete');
+  const canProjectCanva = hasPermission(user, 'canva.project');
+  const canAccessCanva = canViewCanva || canCreateCanva || canEditCanva || canDeleteCanva || canProjectCanva;
   const controllerScreens = [
     { id: 'projector', label: 'Proyector General', detail: 'Pantalla de congregacion', Icon: Monitor, path: `/proyector/${eventoId}` },
     { id: 'singers', label: 'Retorno Cantantes', detail: 'Letras e indicaciones', Icon: Type, path: `/retorno/${eventoId}` },
     { id: 'musicians', label: 'Retorno Musicos', detail: 'Acordes y preparacion', Icon: Music, path: `/retorno-musicos/${eventoId}` },
     { id: 'preacher', label: 'Canal Predicador', detail: 'Pantalla privada', Icon: ShieldCheck, path: `/predicador/${eventoId}` }
   ];
+
+  useEffect(() => {
+    if (!canAccessCanva) {
+      setCanvaLibrary([]);
+      return undefined;
+    }
+
+    const libraryQuery = query(collection(db, 'canvaPresentations'), orderBy('updatedAt', 'desc'));
+    const unsubscribe = onSnapshot(libraryQuery, (snapshot) => {
+      setCanvaLibrary(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
+    }, (error) => {
+      console.error('Error leyendo biblioteca Canva:', error);
+    });
+    return () => unsubscribe();
+  }, [canAccessCanva]);
 
   const openControllerScreen = (path) => {
     setShowScreensMenu(false);
@@ -194,6 +260,400 @@ const ProyectorController = ({ user }) => {
   useEffect(() => {
     setShowScreensMenu(false);
   }, [eventoId, projectionSourceMode]);
+
+  const resolveCanvaDraft = async () => {
+    const candidate = extractCanvaUrlCandidate(canvaDraft.url);
+    const directEmbedUrl = normalizeCanvaEmbedUrl(candidate);
+    if (directEmbedUrl) return { inputUrl: candidate, sourceUrl: candidate, embedUrl: directEmbedUrl };
+    if (!isCanvaShortLink(candidate)) return null;
+
+    const response = await resolveCanvaEmbedLink({ url: candidate });
+    const sourceUrl = String(response?.data?.sourceUrl || '').trim();
+    const embedUrl = String(response?.data?.embedUrl || '').trim();
+    if (!sourceUrl || !embedUrl || !normalizeCanvaEmbedUrl(embedUrl)) return null;
+    return { inputUrl: candidate, sourceUrl, embedUrl };
+  };
+
+  const prepareCanvaPreview = async () => {
+    try {
+      const resolved = await resolveCanvaDraft();
+      if (!resolved) {
+        setCanvaPreviewUrl('');
+        setCanvaUrlError('Pega un enlace canva.link, un enlace /design/.../view o el código de inserción de Canva.');
+        return '';
+      }
+      setCanvaUrlError('');
+      setCanvaPreviewUrl(resolved.embedUrl);
+      return resolved.embedUrl;
+    } catch (error) {
+      console.error('Error resolviendo enlace Canva:', error);
+      setCanvaPreviewUrl('');
+      setCanvaUrlError('No se pudo resolver este enlace de Canva.');
+      return '';
+    }
+  };
+
+  const hasSelectedCanvaTarget = () => Object.values(canvaTargets).some(Boolean);
+
+  const toggleCanvaTarget = (targetId) => {
+    setCanvaTargets((current) => ({ ...current, [targetId]: !current[targetId] }));
+  };
+
+  const newCanvaPresentation = () => {
+    setSelectedCanvaId('');
+    setCanvaDraft({ title: 'Presentación Canva', url: '' });
+    setCanvaPreviewUrl('');
+    setCanvaUrlError('');
+    setCanvaTargets({ projector: true, singers: false, musicians: false });
+    setCanvaPage(1);
+    setCanvaPageCount(0);
+    setCanvaPageWindowStart(1);
+  };
+
+  const selectCanvaPresentation = (item) => {
+    setSelectedCanvaId(item.id);
+    setCanvaDraft({
+      title: item.title || 'Presentación Canva',
+      url: item.inputUrl || item.sourceUrl || '',
+    });
+    setCanvaPreviewUrl(item.embedUrl || '');
+    setCanvaUrlError('');
+    setCanvaPage(1);
+    setCanvaPageCount(Number(item.pageCount) >= 1 ? Math.max(1, Math.min(500, Math.floor(Number(item.pageCount)))) : 0);
+    setCanvaPageWindowStart(1);
+    setCanvaTargets({
+      projector: item.defaultTargets?.projector === true,
+      singers: item.defaultTargets?.singers === true,
+      musicians: item.defaultTargets?.musicians === true,
+    });
+  };
+
+  const saveCanvaPresentation = async () => {
+    const canSaveCanva = selectedCanvaId ? canEditCanva : canCreateCanva;
+    if (!canSaveCanva || isSavingCanva) {
+      notify(selectedCanvaId ? 'No tienes permiso para editar presentaciones Canva.' : 'No tienes permiso para crear presentaciones Canva desde enlaces.', { type: 'error' });
+      return;
+    }
+    if (!hasSelectedCanvaTarget()) {
+      setCanvaUrlError('Selecciona al menos una pantalla como destino predeterminado.');
+      return;
+    }
+
+    const safeConfiguredPageCount = Math.floor(Number(canvaPageCount) || 0);
+    if (safeConfiguredPageCount < 1 || safeConfiguredPageCount > 500) {
+      setCanvaUrlError('Indica la cantidad real de páginas de Canva (1 a 500) antes de guardar.');
+      return;
+    }
+
+    setIsSavingCanva(true);
+    try {
+      const resolved = await resolveCanvaDraft();
+      if (!resolved) {
+        setCanvaUrlError('No se pudo validar el enlace de Canva para guardarlo.');
+        return;
+      }
+
+      const now = Date.now();
+      const existing = canvaLibrary.find((item) => item.id === selectedCanvaId);
+      const ref = selectedCanvaId
+        ? doc(db, 'canvaPresentations', selectedCanvaId)
+        : doc(collection(db, 'canvaPresentations'));
+      const payload = {
+        title: String(canvaDraft.title || '').trim() || 'Presentación Canva',
+        inputUrl: resolved.inputUrl || extractCanvaUrlCandidate(canvaDraft.url),
+        sourceUrl: resolved.sourceUrl,
+        embedUrl: resolved.embedUrl,
+        pageCount: Math.max(1, Math.min(500, Math.floor(Number(canvaPageCount) || 1))),
+        defaultTargets: {
+          projector: canvaTargets.projector === true,
+          singers: canvaTargets.singers === true,
+          musicians: canvaTargets.musicians === true,
+        },
+        createdAt: existing?.createdAt || now,
+        createdBy: existing?.createdBy || user?.uid || '',
+        updatedAt: now,
+        updatedBy: user?.uid || '',
+      };
+      await setDoc(ref, payload, { merge: true });
+      setSelectedCanvaId(ref.id);
+      setCanvaPreviewUrl(resolved.embedUrl);
+      setCanvaUrlError('');
+      notify('Presentación Canva guardada con sus destinos.', { type: 'success' });
+    } catch (error) {
+      console.error('Error guardando Canva:', error);
+      notify('No se pudo guardar la presentación Canva.', { type: 'error' });
+    } finally {
+      setIsSavingCanva(false);
+    }
+  };
+
+  const deleteCanvaPresentation = async (item) => {
+    if (!item?.id || !canDeleteCanva) {
+      notify('No tienes permiso para eliminar presentaciones Canva.', { type: 'error' });
+      return;
+    }
+    if (!window.confirm('¿Eliminar "' + (item.title || 'Presentación Canva') + '" de la biblioteca?')) return;
+    try {
+      await deleteDoc(doc(db, 'canvaPresentations', item.id));
+      if (selectedCanvaId === item.id) newCanvaPresentation();
+      notify('Presentación Canva eliminada de la biblioteca.', { type: 'success' });
+    } catch (error) {
+      console.error('Error eliminando Canva:', error);
+      notify('No se pudo eliminar la presentación Canva.', { type: 'error' });
+    }
+  };
+
+  const stripCanvaPageHash = (value) => {
+    try {
+      const url = new URL(String(value || ''));
+      url.hash = '';
+      return url.toString();
+    } catch {
+      return String(value || '').split('#')[0];
+    }
+  };
+
+  const withCanvaPage = (value, page) => {
+    const safePage = Math.max(1, Math.floor(Number(page) || 1));
+    try {
+      const url = new URL(String(value || ''));
+      url.hash = String(safePage);
+      return url.toString();
+    } catch {
+      const base = String(value || '').split('#')[0];
+      return base ? base + '#' + safePage : '';
+    }
+  };
+
+  const normalizeCanvaTargets = (targets) => ({
+    projector: targets?.projector === true,
+    singers: targets?.singers === true,
+    musicians: targets?.musicians === true,
+  });
+
+  const hasTargets = (targets) => Object.values(normalizeCanvaTargets(targets)).some(Boolean);
+
+  const clearLegacyCanvaProjection = async () => {
+    const currentState = evento?.projectorState;
+    if (currentState?.contentType !== 'canva') return;
+    await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
+      projectorState: currentState.previousProjectorState || null,
+    }));
+  };
+
+  const applyCanvaTargets = async ({ resolved, title, presentationId = '', targets, page = 1 }) => {
+    const safeTargets = normalizeCanvaTargets(targets);
+    if (!hasTargets(safeTargets)) throw new Error('Selecciona al menos un destino.');
+
+    // Compatibilidad: retirar el Canva global de la primera implementación para que
+    // no siga cubriendo el Proyector cuando ahora usamos salidas independientes.
+    await clearLegacyCanvaProjection();
+
+    const eventRef = doc(db, 'eventos', eventoId);
+    const now = Date.now();
+    const outputState = {
+      active: true,
+      presentationId: presentationId || '',
+      title,
+      sourceUrl: resolved.sourceUrl,
+      embedUrl: withCanvaPage(resolved.embedUrl, page),
+      updatedAt: now,
+      updatedBy: user?.nombre || user?.email || 'Multimedia',
+    };
+
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(eventRef);
+      if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+      const data = snapshot.data();
+      const nextOutputs = { ...(data.canvaOutputs || {}) };
+
+      ['projector', 'singers', 'musicians'].forEach((targetId) => {
+        if (safeTargets[targetId]) {
+          nextOutputs[targetId] = outputState;
+          return;
+        }
+
+        // Al cambiar destinos de ESTA misma presentación, retirarla de las pantallas
+        // que dejaron de estar seleccionadas, sin tocar otros Canva activos.
+        const existing = nextOutputs[targetId];
+        const samePresentation = presentationId
+          ? existing?.presentationId === presentationId
+          : existing?.sourceUrl === resolved.sourceUrl;
+        if (samePresentation) delete nextOutputs[targetId];
+      });
+
+      transaction.update(eventRef, { canvaOutputs: nextOutputs });
+    });
+  };
+
+  const projectCanva = async () => {
+    if (!canProjectCanva) {
+      notify('No tienes permiso para proyectar Canva.', { type: 'error' });
+      return;
+    }
+    if (!hasSelectedCanvaTarget()) {
+      setCanvaUrlError('Selecciona al menos un destino antes de proyectar.');
+      return;
+    }
+
+    let resolved;
+    try {
+      resolved = await resolveCanvaDraft();
+    } catch (error) {
+      console.error('Error resolviendo enlace Canva:', error);
+      setCanvaUrlError('No se pudo resolver este enlace de Canva.');
+      notify('No se pudo resolver el enlace de Canva.', { type: 'error' });
+      return;
+    }
+    if (!resolved) {
+      setCanvaUrlError('Pega un enlace canva.link, un enlace /design/.../view o el código de inserción de Canva.');
+      return;
+    }
+
+    try {
+      await applyCanvaTargets({
+        resolved,
+        title: String(canvaDraft.title || '').trim() || 'Presentación Canva',
+        presentationId: selectedCanvaId || '',
+        targets: canvaTargets,
+        page: canvaPage,
+      });
+      setCanvaPreviewUrl(withCanvaPage(resolved.embedUrl, canvaPage));
+      setCanvaUrlError('');
+      notify('Canva enviado a las pantallas seleccionadas.', { type: 'success' });
+    } catch (error) {
+      console.error('Error proyectando Canva por destinos:', error);
+      notify('No se pudo enviar Canva a las pantallas seleccionadas.', { type: 'error' });
+    }
+  };
+
+  const projectSavedCanva = async (item) => {
+    if (!item?.id || !canProjectCanva) return;
+    const targets = normalizeCanvaTargets(item.defaultTargets);
+    if (!hasTargets(targets)) {
+      notify('Esta presentación no tiene destinos guardados.', { type: 'error' });
+      return;
+    }
+
+    const resolved = {
+      inputUrl: item.inputUrl || item.sourceUrl || '',
+      sourceUrl: item.sourceUrl || item.inputUrl || '',
+      embedUrl: item.embedUrl || '',
+    };
+    if (!resolved.sourceUrl || !normalizeCanvaEmbedUrl(resolved.embedUrl)) {
+      notify('El enlace guardado de esta presentación ya no es válido.', { type: 'error' });
+      selectCanvaPresentation(item);
+      return;
+    }
+
+    setSelectedCanvaId(item.id);
+    setCanvaDraft({ title: item.title || 'Presentación Canva', url: item.inputUrl || item.sourceUrl || '' });
+    setCanvaPreviewUrl(withCanvaPage(item.embedUrl || '', 1));
+    setCanvaTargets(targets);
+    setCanvaPage(1);
+    setCanvaPageCount(Number(item.pageCount) >= 1 ? Math.max(1, Math.min(500, Math.floor(Number(item.pageCount)))) : 0);
+    setCanvaPageWindowStart(1);
+    setCanvaUrlError('');
+
+    try {
+      await applyCanvaTargets({
+        resolved,
+        title: item.title || 'Presentación Canva',
+        presentationId: item.id,
+        targets,
+        page: 1,
+      });
+      notify('"' + (item.title || 'Canva') + '" proyectado en sus destinos guardados.', { type: 'success' });
+    } catch (error) {
+      console.error('Error proyectando Canva guardado:', error);
+      notify('No se pudo proyectar la presentación guardada.', { type: 'error' });
+    }
+  };
+
+
+  const changeCanvaPage = async (requestedPage) => {
+    const safePageCount = Math.max(1, Math.min(500, Math.floor(Number(canvaPageCount) || 1)));
+    const nextPage = Math.max(1, Math.min(safePageCount, Math.floor(Number(requestedPage) || 1)));
+    const currentPreviewBase = stripCanvaPageHash(canvaPreviewUrl);
+    setCanvaPage(nextPage);
+    setCanvaPageWindowStart((Math.floor((nextPage - 1) / 10) * 10) + 1);
+    if (currentPreviewBase) setCanvaPreviewUrl(withCanvaPage(currentPreviewBase, nextPage));
+
+    const eventRef = doc(db, 'eventos', eventoId);
+    try {
+      let changedOutputs = 0;
+      await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+        const data = snapshot.data();
+        const nextOutputs = { ...(data.canvaOutputs || {}) };
+        const now = Date.now();
+
+        ['projector', 'singers', 'musicians'].forEach((targetId) => {
+          const existing = nextOutputs[targetId];
+          if (!existing?.active || !existing?.embedUrl) return;
+
+          const samePresentation = selectedCanvaId
+            ? existing.presentationId === selectedCanvaId
+            : Boolean(currentPreviewBase) && stripCanvaPageHash(existing.embedUrl) === currentPreviewBase;
+          if (!samePresentation) return;
+
+          nextOutputs[targetId] = {
+            ...existing,
+            embedUrl: withCanvaPage(existing.embedUrl, nextPage),
+            updatedAt: now,
+            updatedBy: user?.nombre || user?.email || 'Multimedia',
+          };
+          changedOutputs += 1;
+        });
+
+        if (changedOutputs > 0) transaction.update(eventRef, { canvaOutputs: nextOutputs });
+      });
+
+      if (changedOutputs > 0) {
+        notify('Canva sincronizado en página ' + nextPage + '.', { type: 'success' });
+      }
+    } catch (error) {
+      console.error('Error sincronizando página Canva:', error);
+      notify('No se pudo sincronizar la página de Canva.', { type: 'error' });
+    }
+  };
+
+  const canvaHasConfiguredPageCount = Number(canvaPageCount) >= 1;
+  const canvaSafePageCount = canvaHasConfiguredPageCount
+    ? Math.max(1, Math.min(500, Math.floor(Number(canvaPageCount))))
+    : 1;
+  const canvaMaxWindowStart = (Math.floor((canvaSafePageCount - 1) / 10) * 10) + 1;
+  const canvaSafeWindowStart = Math.max(1, Math.min(canvaPageWindowStart, canvaMaxWindowStart));
+  const canvaPageBlockEnd = Math.min(canvaSafeWindowStart + 9, canvaSafePageCount);
+  const canvaVisiblePages = Array.from(
+    { length: canvaPageBlockEnd - canvaSafeWindowStart + 1 },
+    (_, index) => canvaSafeWindowStart + index
+  );
+
+  const stopCanvaProjection = async () => {
+    const safeTargets = normalizeCanvaTargets(canvaTargets);
+    if (!hasTargets(safeTargets)) return;
+
+    try {
+      await clearLegacyCanvaProjection();
+      const eventRef = doc(db, 'eventos', eventoId);
+      await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+        const data = snapshot.data();
+        const nextOutputs = { ...(data.canvaOutputs || {}) };
+        ['projector', 'singers', 'musicians'].forEach((targetId) => {
+          if (safeTargets[targetId]) delete nextOutputs[targetId];
+        });
+        transaction.update(eventRef, { canvaOutputs: nextOutputs });
+      });
+      notify('Canva retirado de los destinos seleccionados.', { type: 'success' });
+    } catch (error) {
+      console.error('Error retirando Canva por destinos:', error);
+      notify('No se pudo retirar Canva de las pantallas seleccionadas.', { type: 'error' });
+    }
+  };
 
   const publicPreachingBlocks = useMemo(() => {
     const blocks = Array.isArray(activePreaching?.blocks) ? activePreaching.blocks : [];
@@ -428,35 +888,79 @@ const ProyectorController = ({ user }) => {
     
     fetchEvent();
 
-    // 1. Escuchar la Bóveda Multimedia Global
+    // 1. Escuchar la Bóveda Multimedia Global.
+    // Recuperación no destructiva: conserva lo nuevo, deriva carpetas desde los medios
+    // y completa desde eventos/global solo cuando la bóveda actual está incompleta.
+    const normalizeVaultData = (data = {}) => {
+      const library = Array.isArray(data.multimediaLib)
+        ? data.multimediaLib.filter((item) => item && typeof item === 'object')
+        : [];
+      const explicitFolders = Array.isArray(data.multimediaFolders)
+        ? data.multimediaFolders
+            .filter((folder) => typeof folder === 'string')
+            .map((folder) => folder.trim())
+            .filter(Boolean)
+        : [];
+      const foldersFromMedia = library
+        .map((item) => (typeof item?.folder === 'string' ? item.folder.trim() : ''))
+        .filter(Boolean);
+      return {
+        library,
+        folders: [...new Set([...explicitFolders, ...foldersFromMedia])],
+      };
+    };
+
+    const mergeVaultLibraries = (primary = [], legacy = []) => {
+      const result = [];
+      const seen = new Set();
+      [...primary, ...legacy].forEach((item) => {
+        if (!item || typeof item !== 'object') return;
+        const identity = String(item.url || item.publicId || item.id || '').trim();
+        if (identity && seen.has(identity)) return;
+        if (identity) seen.add(identity);
+        result.push(item);
+      });
+      return result;
+    };
+
     const unsubLib = onSnapshot(doc(db, 'sistema', 'multimedia'), (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setMultimediaLib(data.multimediaLib || []);
-        setMultimediaFolders(data.multimediaFolders || []);
-        
-        // MIGRACION REFORZADA: Si el doc existe pero las carpetas no, intentamos traerlas de 'global'
-        if (!data.multimediaFolders || data.multimediaFolders.length === 0) {
-          getDoc(doc(db, 'eventos', 'global')).then(oldSnap => {
-            if (oldSnap.exists() && oldSnap.data().multimediaFolders) {
-              setDoc(doc(db, 'sistema', 'multimedia'), {
-                multimediaFolders: oldSnap.data().multimediaFolders || []
-              }, { merge: true });
-            }
-          });
-        }
-      } 
-      else {
-        // MIGRACION: Si el nuevo documento no existe, intentamos recuperar del antiguo 'global'
-        getDoc(doc(db, 'eventos', 'global')).then(oldSnap => {
-          if (oldSnap.exists() && oldSnap.data().multimediaLib) {
-            setDoc(doc(db, 'sistema', 'multimedia'), {
-              multimediaLib: oldSnap.data().multimediaLib || [],
-              multimediaFolders: oldSnap.data().multimediaFolders || []
-            }, { merge: true });
-          }
-        });
-      }
+      const current = normalizeVaultData(snap.exists() ? snap.data() : {});
+      setMultimediaLib(current.library);
+      setMultimediaFolders(current.folders);
+
+      const needsLegacyRecovery = !snap.exists()
+        || current.library.length === 0
+        || current.folders.length === 0;
+      if (!needsLegacyRecovery) return;
+
+      getDoc(doc(db, 'eventos', 'global')).then(async (oldSnap) => {
+        if (!oldSnap.exists()) return;
+        const legacy = normalizeVaultData(oldSnap.data());
+        const mergedLibrary = mergeVaultLibraries(current.library, legacy.library);
+        const mergedFolders = [...new Set([
+          ...current.folders,
+          ...legacy.folders,
+          ...mergedLibrary
+            .map((item) => (typeof item?.folder === 'string' ? item.folder.trim() : ''))
+            .filter(Boolean),
+        ])];
+
+        setMultimediaLib(mergedLibrary);
+        setMultimediaFolders(mergedFolders);
+
+        const libraryChanged = mergedLibrary.length !== current.library.length;
+        const foldersChanged = mergedFolders.length !== current.folders.length
+          || mergedFolders.some((folder, index) => folder !== current.folders[index]);
+        if (!libraryChanged && !foldersChanged) return;
+
+        await setDoc(doc(db, 'sistema', 'multimedia'), {
+          multimediaLib: mergedLibrary,
+          multimediaFolders: mergedFolders,
+        }, { merge: true });
+        console.info('[Bóveda] recuperación legacy aplicada sin eliminar contenido actual.');
+      }).catch((error) => {
+        console.error('Error recuperando Bóveda Multimedia legacy:', error);
+      });
     });
 
     // 2. Escuchar la Matriz de Salidas siempre desde 'global'
@@ -823,6 +1327,7 @@ const ProyectorController = ({ user }) => {
         previousProjectorState: evento?.projectorState || null
       });
       await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
+        canvaOutputs: {},
         announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
@@ -892,6 +1397,7 @@ const ProyectorController = ({ user }) => {
         previousProjectorState: evento?.projectorState || null
       });
       await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
+        canvaOutputs: {},
         announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
@@ -934,6 +1440,7 @@ const ProyectorController = ({ user }) => {
         if (!eventSnapshot.exists()) throw new Error('El evento ya no esta disponible.');
         const previousProjectionFields = capturePreviousProjectionFields(eventSnapshot.data());
         transaction.update(eventRef, {
+        canvaOutputs: {},
         announcementState: buildInactiveAnnouncementState(),
         projectorState: buildCanonicalBibleProjectorState({
           type: 'preaching',
@@ -1303,6 +1810,7 @@ const ProyectorController = ({ user }) => {
     }
 
     const updates = {
+      canvaOutputs: {},
       announcementState: buildInactiveAnnouncementState(),
       proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
       projectorState: {
@@ -1443,6 +1951,7 @@ const ProyectorController = ({ user }) => {
     });
     updates.proyectorFondo = null;
     updates.proyectorFondoMedia = null;
+    updates.canvaOutputs = {};
     try { await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), updates)); }
     catch (e) { console.error(e); }
   };
@@ -2388,11 +2897,12 @@ const ProyectorController = ({ user }) => {
             <p className="truncate text-xs font-black text-white sm:text-sm">{screenNow.label}</p>
             {screenNow.actor && <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-600">Controlado por: {screenNow.actor}</p>}
           </div>
-          <div className="grid grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-black/30 p-1">
+          <div className="grid grid-cols-2 gap-1 rounded-2xl border border-white/10 bg-black/30 p-1 sm:grid-cols-5">
             {[
               ['songs', 'Canciones', Music],
               ['preaching', 'Predica', ShieldCheck],
               ['bible', 'Biblia', BookOpen],
+              ...(canAccessCanva ? [['canva', 'Canva', Tv]] : []),
               ['media', 'Multimedia', Film]
             ].map(([mode, label, Icon]) => (
               <button
@@ -2505,13 +3015,208 @@ const ProyectorController = ({ user }) => {
         <div className="min-h-0 min-w-0 flex-1 bg-zinc-950/35 flex flex-col border-r border-white/10">
           <div className="p-4 border-b border-white/10 bg-zinc-950/65 flex justify-between items-center backdrop-blur-sm">
             <h2 className="font-bold text-sm flex items-center gap-2">
-              {projectionSourceMode === 'media' ? <Film size={16} className="text-indigo-400"/> : projectionSourceMode === 'songs' ? <Type size={16} className="text-amber-500"/> : <BookOpen size={16} className="text-blue-400"/>}
-              {projectionSourceMode === 'media' ? 'Multimedia' : projectionSourceMode === 'preaching' ? 'Predica' : projectionSourceMode === 'bible' ? 'Biblia' : 'Diapositivas'}
+              {projectionSourceMode === 'media' ? <Film size={16} className="text-indigo-400"/> : projectionSourceMode === 'canva' ? <Tv size={16} className="text-cyan-400"/> : projectionSourceMode === 'songs' ? <Type size={16} className="text-amber-500"/> : <BookOpen size={16} className="text-blue-400"/>}
+              {projectionSourceMode === 'media' ? 'Multimedia' : projectionSourceMode === 'canva' ? 'Canva' : projectionSourceMode === 'preaching' ? 'Predica' : projectionSourceMode === 'bible' ? 'Biblia' : 'Diapositivas'}
               {projectionSourceMode === 'songs' && activeSong && <span className="text-zinc-500">- {activeSong.titulo}</span>}
             </h2>
           </div>
           <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
             
+            {projectionSourceMode === 'canva' && (
+              <div className="min-h-0 flex-1 overflow-y-auto border-b border-white/10 bg-zinc-950/45 p-3 sm:p-4 [&::-webkit-scrollbar]:hidden">
+                <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+                  <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.07] p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-500/10 text-cyan-200"><Tv size={19} /></div>
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300">Canva · Biblioteca y destinos</p>
+                        <h3 className="mt-1 text-sm font-black text-white">Guarda cada presentación y decide dónde se muestra</h3>
+                        <p className="mt-1 text-[10px] font-bold leading-relaxed text-zinc-500">Los destinos quedan guardados por presentación. Proyector, Cantantes y Músicos pueden conservar contenidos distintos al mismo tiempo.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)]">
+                    <div className="grid gap-3 rounded-2xl border border-white/10 bg-black/25 p-3 sm:p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{selectedCanvaId ? 'Editando presentación guardada' : 'Nueva presentación'}</p>
+                        {canCreateCanva && <button type="button" onClick={newCanvaPresentation} className="min-h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-[9px] font-black uppercase text-zinc-300 hover:bg-white/10"><Plus size={13} className="mr-1 inline" />Nueva</button>}
+                      </div>
+
+                      <label className="grid gap-1.5">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Nombre</span>
+                        <input type="text" value={canvaDraft.title} onChange={(event) => setCanvaDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Ej. Jesús" className="min-h-11 w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-cyan-400/40" />
+                      </label>
+
+                      <label className="grid gap-1.5">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Enlace o código de inserción de Canva</span>
+                        <input type="url" value={canvaDraft.url} onChange={(event) => { setCanvaDraft((current) => ({ ...current, url: event.target.value })); setCanvaUrlError(''); }} placeholder="https://canva.link/... o enlace /view" className="min-h-11 w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-cyan-400/40" />
+                      </label>
+
+                      <label className="grid gap-1.5">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Cantidad de páginas</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="500"
+                          value={canvaPageCount || ''}
+                          placeholder="Ej. 56"
+                          onChange={(event) => {
+                            const rawCount = event.target.value;
+                            if (rawCount === '') {
+                              setCanvaPageCount(0);
+                              setCanvaPageWindowStart(1);
+                              setCanvaUrlError('');
+                              return;
+                            }
+                            const nextCount = Math.max(1, Math.min(500, Math.floor(Number(rawCount) || 1)));
+                            setCanvaPageCount(nextCount);
+                            if (canvaPage > nextCount) setCanvaPage(nextCount);
+                            setCanvaPageWindowStart((current) => Math.min(current, (Math.floor((nextCount - 1) / 10) * 10) + 1));
+                            setCanvaUrlError('');
+                          }}
+                          className="min-h-11 w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-cyan-400/40"
+                        />
+                        <span className="text-[9px] font-bold leading-relaxed text-zinc-600">Kadosh usa este total para mostrar solo páginas válidas y agruparlas de 10 en 10.</span>
+                      </label>
+
+                      <div className="rounded-2xl border border-white/10 bg-zinc-950/60 p-3">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Destinos predeterminados</p>
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          {[
+                            ['projector', 'Proyector', Monitor],
+                            ['singers', 'Cantantes', Type],
+                            ['musicians', 'Músicos', Music],
+                          ].map(([targetId, label, Icon]) => {
+                            const active = canvaTargets[targetId] === true;
+                            return (
+                              <button key={targetId} type="button" onClick={() => toggleCanvaTarget(targetId)} className={'min-h-12 rounded-xl border px-3 text-[10px] font-black uppercase transition-colors ' + (active ? 'border-cyan-300/50 bg-cyan-400 text-zinc-950' : 'border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10')}>
+                                <Icon size={15} className="mr-2 inline" />{active ? '✓ ' : ''}{label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {canvaUrlError && <p className="rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-[10px] font-bold text-red-200">{canvaUrlError}</p>}
+
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <button type="button" onClick={prepareCanvaPreview} className="min-h-12 rounded-xl border border-cyan-400/25 bg-cyan-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-cyan-100 hover:bg-cyan-500/20"><Eye size={14} className="mr-2 inline" />Vista previa</button>
+                        {(selectedCanvaId ? canEditCanva : canCreateCanva) && <button type="button" onClick={saveCanvaPresentation} disabled={isSavingCanva} className="min-h-12 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-50">{isSavingCanva ? <Loader2 size={14} className="mr-2 inline animate-spin" /> : <Star size={14} className="mr-2 inline" />}{selectedCanvaId ? 'Guardar cambios' : 'Guardar presentación'}</button>}
+                        {canProjectCanva && <button type="button" onClick={projectCanva} className="min-h-12 rounded-xl bg-cyan-400 px-3 text-[10px] font-black uppercase tracking-wide text-zinc-950 hover:bg-cyan-300"><Monitor size={14} className="mr-2 inline" />Proyectar en seleccionadas</button>}
+                        <button type="button" onClick={stopCanvaProjection} className="min-h-12 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-amber-100 hover:bg-amber-500/20"><PowerOff size={14} className="mr-2 inline" />Retirar de seleccionadas</button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-black/25 p-3 sm:p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-cyan-300">Mis presentaciones Canva</p>
+                          <p className="mt-1 text-[10px] font-bold text-zinc-500">{canvaLibrary.length} guardada(s)</p>
+                          <p className="mt-1 text-[9px] font-bold text-zinc-600">En vivo: {['projector', 'singers', 'musicians'].filter((id) => evento?.canvaOutputs?.[id]?.active).map((id) => id === 'projector' ? 'Proyector' : id === 'singers' ? 'Cantantes' : 'Músicos').join(' · ') || 'ninguna salida'}</p>
+                        </div>
+                      </div>
+                      <div className="grid max-h-[360px] gap-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden">
+                        {canvaLibrary.length ? canvaLibrary.map((item) => {
+                          const selected = item.id === selectedCanvaId;
+                          const targetSummary = [
+                            item.defaultTargets?.projector ? 'Proyector' : '',
+                            item.defaultTargets?.singers ? 'Cantantes' : '',
+                            item.defaultTargets?.musicians ? 'Músicos' : '',
+                          ].filter(Boolean).join(' · ') || 'Sin destinos';
+                          return (
+                            <div key={item.id} className={'rounded-xl border p-3 ' + (selected ? 'border-cyan-300/40 bg-cyan-500/10' : 'border-white/10 bg-zinc-950/65')}>
+                              <button type="button" onClick={() => selectCanvaPresentation(item)} className="w-full text-left">
+                                <p className="truncate text-xs font-black text-white">{item.title || 'Presentación Canva'}</p>
+                                <p className="mt-1 text-[9px] font-bold uppercase tracking-wide text-cyan-200">{targetSummary}</p>
+                                <p className="mt-1 text-[9px] font-bold text-zinc-500">{Number(item.pageCount) >= 1 ? (Math.floor(Number(item.pageCount)) + ' página(s)') : 'Total de páginas sin configurar'}</p>
+                                <p className="mt-1 truncate text-[9px] text-zinc-600">{item.inputUrl || item.sourceUrl}</p>
+                              </button>
+                              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                <button type="button" onClick={() => selectCanvaPresentation(item)} className="min-h-10 rounded-lg border border-white/10 bg-white/5 px-2 text-[9px] font-black uppercase text-zinc-300 hover:bg-white/10">{canEditCanva ? <Edit2 size={12} className="mr-1 inline" /> : <Eye size={12} className="mr-1 inline" />}{canEditCanva ? 'Editar' : 'Abrir'}</button>
+                                <button type="button" onClick={() => projectSavedCanva(item)} className="min-h-10 rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-2 text-[9px] font-black uppercase text-cyan-100 hover:bg-cyan-500/20"><Monitor size={12} className="mr-1 inline" />Proyectar</button>
+                                {canDeleteCanva && <button type="button" onClick={() => deleteCanvaPresentation(item)} className="min-h-10 rounded-lg border border-red-400/20 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200 hover:bg-red-500/20"><Trash2 size={12} className="mr-1 inline" />Eliminar</button>}
+                              </div>
+                            </div>
+                          );
+                        }) : (
+                          <div className="rounded-xl border border-dashed border-white/10 p-5 text-center text-[10px] font-bold text-zinc-600">Todavía no hay presentaciones Canva guardadas.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {canvaPreviewUrl && (
+                    <div className="overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl shadow-black/30">
+                      <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-zinc-950 px-3 py-2">
+                        <p className="truncate text-[10px] font-black uppercase tracking-wide text-zinc-400">Vista previa · {canvaDraft.title || 'Canva'}</p>
+                        <span className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2 py-1 text-[8px] font-black uppercase text-cyan-200">Embed</span>
+                      </div>
+                      <div className="border-b border-white/10 bg-zinc-950/90 p-2 sm:p-3">
+                        {canvaHasConfiguredPageCount ? (
+                          <>
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-[9px] font-black uppercase tracking-[0.16em] text-cyan-300">Páginas {canvaSafeWindowStart}-{canvaPageBlockEnd} de {canvaSafePageCount}</p>
+                                <p className="mt-0.5 text-[9px] font-bold text-zinc-600">Actual: {canvaPage}</p>
+                              </div>
+                              <div className="flex gap-2">
+                                <button type="button" onClick={() => changeCanvaPage(canvaPage - 1)} disabled={canvaPage <= 1} className="min-h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-[9px] font-black uppercase text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30">← Anterior</button>
+                                <button type="button" onClick={() => changeCanvaPage(canvaPage + 1)} disabled={canvaPage >= canvaSafePageCount} className="min-h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-[9px] font-black uppercase text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30">Siguiente →</button>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-5 gap-2 sm:grid-cols-10">
+                              {canvaVisiblePages.map((pageNumber) => (
+                                <button
+                                  key={pageNumber}
+                                  type="button"
+                                  onClick={() => changeCanvaPage(pageNumber)}
+                                  className={'min-h-11 rounded-xl border text-xs font-black transition-colors ' + (canvaPage === pageNumber ? 'border-cyan-200 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-500/10' : 'border-white/10 bg-white/5 text-zinc-200 hover:border-cyan-400/30 hover:bg-cyan-500/10')}
+                                >
+                                  {pageNumber}
+                                </button>
+                              ))}
+                            </div>
+
+                            {(canvaSafeWindowStart > 1 || canvaPageBlockEnd < canvaSafePageCount) && (
+                              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                <button
+                                  type="button"
+                                  disabled={canvaSafeWindowStart <= 1}
+                                  onClick={() => setCanvaPageWindowStart(Math.max(1, canvaSafeWindowStart - 10))}
+                                  className="min-h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-[9px] font-black uppercase text-zinc-300 disabled:cursor-not-allowed disabled:opacity-25"
+                                >
+                                  ← {Math.max(1, canvaSafeWindowStart - 10)}-{canvaSafeWindowStart - 1}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={canvaPageBlockEnd >= canvaSafePageCount}
+                                  onClick={() => setCanvaPageWindowStart(canvaSafeWindowStart + 10)}
+                                  className="min-h-10 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-3 text-[9px] font-black uppercase text-cyan-100 disabled:cursor-not-allowed disabled:opacity-25"
+                                >
+                                  {canvaPageBlockEnd + 1}-{Math.min(canvaPageBlockEnd + 10, canvaSafePageCount)} →
+                                </button>
+                              </div>
+                            )}
+                            <p className="mt-2 text-center text-[9px] font-bold text-zinc-600">Los números de Kadosh sincronizan todas las salidas que muestran esta presentación.</p>
+                          </>
+                        ) : (
+                          <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-center">
+                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">Total de páginas sin configurar</p>
+                            <p className="mt-1 text-[9px] font-bold leading-relaxed text-amber-100/70">Indica arriba cuántas páginas tiene esta presentación y pulsa Guardar cambios. Después aparecerán los botones 1–10, 11–20, etc.</p>
+                          </div>
+                        )}
+                      </div>
+                      <div className="aspect-video w-full bg-black">
+                        <iframe key={canvaPreviewUrl} src={canvaPreviewUrl} title="Vista previa Canva" className="h-full w-full border-0" allow="fullscreen" allowFullScreen loading="lazy" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* 📺 NUEVO: PANEL DE MULTIMEDIA RÁPIDA (Bóveda) */}
             {projectionSourceMode === 'media' && (
             <div className="min-h-0 flex-1 overflow-y-auto bg-zinc-950/45 border-b border-white/10 p-4 [&::-webkit-scrollbar]:hidden">
@@ -2879,7 +3584,9 @@ const ProyectorController = ({ user }) => {
             </div>
             <div className="min-h-0 flex-1 p-5 flex flex-col">
               <div className="flex-1 bg-black rounded-3xl border border-white/10 shadow-[inset_0_0_60px_rgba(255,255,255,0.03),0_18px_45px_rgba(0,0,0,0.28)] flex items-center justify-center p-6 text-center overflow-hidden relative">
-                {projectionSourceMode === 'media' && previewMedia ? (
+                {projectionSourceMode === 'canva' && canvaPreviewUrl ? (
+                  <iframe src={canvaPreviewUrl} title="Pre-proyección Canva" className="absolute inset-0 h-full w-full border-0 bg-black" allow="fullscreen" allowFullScreen loading="lazy" />
+                ) : projectionSourceMode === 'media' && previewMedia ? (
                   <>
                     {previewMedia.type === 'video' ? (
                       <video src={previewMedia.url} controls muted playsInline className="absolute inset-0 z-0 w-full h-full object-contain bg-zinc-900" />
@@ -3036,6 +3743,13 @@ const ProyectorController = ({ user }) => {
                 )}
                 {isBlackout ? (
                    <p className="relative z-10 text-red-900/50 font-black uppercase tracking-widest">Pantalla en Negro</p>
+                ) : (evento?.canvaOutputs?.projector?.active || evento?.projectorState?.contentType === 'canva') ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black p-4 text-center">
+                    <Tv size={28} className="text-cyan-300" />
+                    <p className="text-[10px] font-black uppercase tracking-widest text-cyan-200">Canva en vivo</p>
+                    <p className="max-w-[220px] truncate text-xs font-bold text-white">{evento?.canvaOutputs?.projector?.title || evento?.projectorState?.title || 'Presentación Canva'}</p>
+                    <button type="button" onClick={stopCanvaProjection} className="rounded-xl border border-amber-400/25 bg-amber-500/10 px-4 py-2 text-[9px] font-black uppercase tracking-wide text-amber-100">Detener Canva</button>
+                  </div>
                 ) : evento?.projectorState?.contentType === 'bible' ? (
                   <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3 text-center">
                     <p className="text-[10px] font-black uppercase tracking-widest text-amber-200">{evento.projectorState.reference}</p>

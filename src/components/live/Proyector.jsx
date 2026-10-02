@@ -13,6 +13,7 @@ import { resolveActiveBibleProjectorState, resolveActiveBibleSlide } from '../..
 import { resolveActivePreachingProjectorState, resolvePreachingProjectionContent } from '../../utils/preachingProjectionState';
 import { PreachingPresentation } from './InternalScreenPreaching';
 import QuickMessagePresentation from './QuickMessagePresentation';
+import InternalScreenCanva from './InternalScreenCanva';
 import { resolveActiveQuickMessageProjectorState } from '../../utils/quickMessageProjectionState';
 
 const Proyector = ({ eventoIdOverride, user }) => {
@@ -30,6 +31,7 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const [countdown, setCountdown] = useState(null); // { endTimestamp, active }
   const [projectorState, setProjectorState] = useState(null);
   const [announcementState, setAnnouncementState] = useState(null);
+  const [canvaOutput, setCanvaOutput] = useState(null);
   const [showControls, setShowControls] = useState(false);
   const controlsTimerRef = useRef(null);
   const videoRef = useRef(null);
@@ -61,6 +63,7 @@ const Proyector = ({ eventoIdOverride, user }) => {
         setCountdown(data.proyectorCountdown || null);
         setProjectorState(data.projectorState || null);
         setAnnouncementState(data.announcementState || null);
+        setCanvaOutput(data.canvaOutputs?.projector || null);
       }
     });
     return () => unsub();
@@ -244,6 +247,7 @@ const Proyector = ({ eventoIdOverride, user }) => {
 
   // Permitir renderizar si hay video principal, aunque no haya letras
   if (apagar) return <div className="fixed inset-0 bg-black animate-in fade-in duration-700"></div>;
+  if (canvaOutput?.active && canvaOutput?.embedUrl) return <InternalScreenCanva state={canvaOutput} label="Canva en proyector" />;
   if (projectorState?.type === 'announcement' && announcementState?.presentationActive) {
     return <AnnouncementPresentation user={user} state={announcementState} />;
   }
@@ -258,10 +262,11 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const activeBibleSlide = resolveActiveBibleSlide(activeBibleState);
   const activeQuickMessageState = resolveActiveQuickMessageProjectorState({ projectorState, proyectorApagado: apagar });
   const isQuickMessageContent = Boolean(activeQuickMessageState);
+  const activeCanvaEmbedUrl = projectorState?.contentType === 'canva' ? String(projectorState?.canva?.embedUrl || '') : '';
   const bibleHeading = activeBibleSlide?.heading || null;
   const hasProjectedTextContent = isBibleContent || isPreachingContent || isQuickMessageContent;
 
-  if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !hasProjectedTextContent) {
+  if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !hasProjectedTextContent && !activeCanvaEmbedUrl) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="text-zinc-900 font-black text-8xl tracking-tighter select-none opacity-20 text-center px-4">
@@ -316,6 +321,18 @@ const Proyector = ({ eventoIdOverride, user }) => {
         disabled={modoTransmision || apagar}
         suspended={Boolean(media?.url && media.mode === 'foreground')}
       />
+
+      {activeCanvaEmbedUrl && (
+        <div className="absolute inset-0 z-[70] bg-black">
+          <iframe
+            src={activeCanvaEmbedUrl}
+            title={projectorState?.title || 'Presentación Canva'}
+            className="h-full w-full border-0 bg-black"
+            allow="fullscreen"
+            allowFullScreen
+          />
+        </div>
+      )}
 
       {/* Capa de Video Principal (Foreground) - Tapa todo lo dem?s */}
       {media?.url && media.mode === 'foreground' && (

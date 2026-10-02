@@ -12,6 +12,7 @@ import InternalScreenBible from './InternalScreenBible';
 import InternalScreenBlackout from './InternalScreenBlackout';
 import InternalScreenPreaching from './InternalScreenPreaching';
 import QuickMessagePresentation from './QuickMessagePresentation';
+import InternalScreenCanva from './InternalScreenCanva';
 
 const readLocal = (key, fallback) => {
   if (typeof window === 'undefined') return fallback;
@@ -262,6 +263,7 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
       <InternalScreenBible eventData={evento} />
       <InternalScreenPreaching eventData={evento} />
       <InternalScreenBlackout active={evento?.proyectorApagado === true} />
+      <InternalScreenCanva state={evento?.canvaOutputs?.singers} label="Canva en retorno de cantantes" />
 
       <div className="relative z-10 flex h-full min-h-0 flex-col">
         <header className="shrink-0 border-b border-white/10 bg-zinc-950/82 backdrop-blur-md">

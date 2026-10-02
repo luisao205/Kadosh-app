@@ -188,10 +188,13 @@ service cloud.firestore {
       let state = request.resource.data.projectorState;
       return (resource.data.projectorState is map && resource.data.projectorState.contentType == 'bible'
           && isExactBibleRestore() && hasPermission('bible.project'))
+        || (resource.data.projectorState is map && resource.data.projectorState.contentType == 'canva'
+          && isExactCanvaRestore() && hasPermission('canva.project'))
         || (state is map && (
           (state.type == 'preaching' && state.contentType == 'bible' && hasPermission('bible.project'))
           || (state.type == 'preaching' && (!('contentType' in state) || state.contentType == 'preaching') && hasPermission('sermons.project'))
           || (state.type in ['media', 'lyrics'] && state.contentType in ['media', 'lyrics'] && hasPermission('multimedia.project'))
+          || (state.type == 'canva' && state.contentType == 'canva' && hasPermission('canva.project'))
           || (state.type == 'announcement' && state.contentType == 'announcement' && hasPermission('announcements.project'))
           || (state.type in ['blackout', 'resume', 'logo', 'clearLogo', 'clearPreaching', 'timer'] && hasPermission('multimedia.controlOutputs'))
         ));
@@ -200,7 +203,7 @@ service cloud.firestore {
     function bibleProjectionFields() {
       return ['projectorState', 'proyectorSlide', 'proyectorMedia', 'proyectorLogo', 'proyectorApagado',
         'proyectorFondo', 'proyectorFondoMedia', 'proyectorSongId', 'proyectorSlideIndex',
-        'proyectorNextSlide', 'proyectorNextSong', 'proyectorOffset', 'liveState', 'currentSongId', 'announcementState'];
+        'proyectorNextSlide', 'proyectorNextSong', 'proyectorOffset', 'liveState', 'currentSongId', 'canvaOutputs', 'announcementState'];
     }
 
     function biblePreviousProjectionIsTrusted() {
@@ -272,6 +275,54 @@ service cloud.firestore {
         && request.resource.data.proyectorMedia == null;
     }
 
+    function canvaProjectionFields() {
+      return ['projectorState', 'proyectorApagado', 'proyectorLogo'];
+    }
+
+    function canvaPreviousProjectorStateIsTrusted() {
+      let state = request.resource.data.projectorState;
+      let previous = state.previousProjectorState;
+      return (resource.data.projectorState is map
+          && resource.data.projectorState.type == 'canva'
+          && resource.data.projectorState.contentType == 'canva'
+          && previous == resource.data.projectorState.previousProjectorState)
+        || (resource.data.projectorState is map
+          && resource.data.projectorState.type != 'canva'
+          && previous == resource.data.projectorState);
+    }
+
+    function validCanvaProjectorState() {
+      let state = request.resource.data.projectorState;
+      return projectorStateIs('canva', 'canva')
+        && state.keys().hasOnly([
+          'type', 'contentType', 'title', 'canva', 'previousProjectorState',
+          'sourceActor', 'actorUid', 'actorName', 'updatedAt',
+          'projectionVersion', 'projectionActionId'
+        ])
+        && state.title is string
+        && state.canva is map
+        && state.canva.keys().hasOnly(['sourceUrl', 'embedUrl'])
+        && state.canva.sourceUrl is string
+        && state.canva.embedUrl is string
+        && state.sourceActor == 'multimedia'
+        && state.actorName is string
+        && state.updatedAt is int
+        && state.projectionVersion is int
+        && state.projectionActionId is string
+        && request.resource.data.proyectorApagado == false
+        && request.resource.data.proyectorLogo == false
+        && onlyEventKeys(canvaProjectionFields())
+        && canvaPreviousProjectorStateIsTrusted();
+    }
+
+    function isExactCanvaRestore() {
+      return resource.data.projectorState is map
+        && resource.data.projectorState.type == 'canva'
+        && resource.data.projectorState.contentType == 'canva'
+        && request.resource.data.projectorState == resource.data.projectorState.previousProjectorState
+        && onlyEventKeys(['projectorState']);
+    }
+
     function validMediaProjectorState() {
       return projectorStateIs('media', 'media')
         && request.resource.data.projectorState.media is map
@@ -288,10 +339,13 @@ service cloud.firestore {
       let state = request.resource.data.projectorState;
       return (resource.data.projectorState is map && resource.data.projectorState.contentType == 'bible'
           && isExactBibleRestore() && onlyEventKeys(bibleProjectionFields()))
+        || (resource.data.projectorState is map && resource.data.projectorState.contentType == 'canva'
+          && isExactCanvaRestore())
         || (state is map && (
           (state.type == 'preaching' && state.contentType == 'bible' && validBibleProjectorState())
           || (state.type == 'preaching' && (!('contentType' in state) || state.contentType == 'preaching') && validSermonProjectorState())
           || (state.type == 'media' && state.contentType == 'media' && validMediaProjectorState())
+          || (state.type == 'canva' && state.contentType == 'canva' && validCanvaProjectorState())
           || (state.type == 'lyrics' && state.contentType == 'lyrics' && validLyricsProjectorState())
           || (state.type == 'announcement' && state.contentType == 'announcement')
           || (state.type == 'blackout' && state.contentType == 'none' && blackoutPreviousProjectionIsTrusted())
@@ -495,6 +549,7 @@ service cloud.firestore {
         'proyectorAlerta',
         'proyectorTicker',
         'outputs',
+        'canvaOutputs',
         'announcementState'
       ];
     }
@@ -577,9 +632,40 @@ service cloud.firestore {
         && hasValidProjectionStateForPermission()
         && onlyEventKeys(projectorEventFields())
         && (
+          !changedEventKeys().hasAny(['canvaOutputs'])
+          || (request.resource.data.canvaOutputs is map && request.resource.data.canvaOutputs.keys().size() == 0)
+        )
+        && (
           !changedEventKeys().hasAny(['announcementState'])
           || validInactiveAnnouncementState()
         );
+    }
+
+    function validCanvaOutputState(state) {
+      return state is map
+        && state.keys().hasOnly(['active', 'presentationId', 'title', 'sourceUrl', 'embedUrl', 'updatedAt', 'updatedBy'])
+        && state.active == true
+        && state.presentationId is string
+        && state.title is string
+        && state.sourceUrl is string
+        && state.embedUrl is string
+        && state.updatedAt is int
+        && state.updatedBy is string;
+    }
+
+    function validCanvaOutputsMap() {
+      let outputs = request.resource.data.canvaOutputs;
+      return outputs is map
+        && outputs.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && (!('projector' in outputs) || validCanvaOutputState(outputs.projector))
+        && (!('singers' in outputs) || validCanvaOutputState(outputs.singers))
+        && (!('musicians' in outputs) || validCanvaOutputState(outputs.musicians));
+    }
+
+    function canUpdateEventCanvaOutputs() {
+      return hasPermission('canva.project')
+        && onlyEventKeys(['canvaOutputs'])
+        && validCanvaOutputsMap();
     }
 
     function canUpdateEventBibleOutline() {
@@ -687,6 +773,7 @@ service cloud.firestore {
         : (canUpdateEventAsAdmin()
           || canUpdateEventSetlist()
           || canUpdateEventBibleOutline()
+          || canUpdateEventCanvaOutputs()
           || canUpdateEventAsParticipant()
           || canUpdateEventAsMedia());
     }
@@ -787,6 +874,43 @@ service cloud.firestore {
         allow read: if isOwnerOnly();
         allow write: if false;
       }
+    }
+
+    function validCanvaPresentationDocument() {
+      return request.resource.data.keys().hasOnly([
+          'title', 'inputUrl', 'sourceUrl', 'embedUrl', 'pageCount', 'defaultTargets',
+          'createdAt', 'createdBy', 'updatedAt', 'updatedBy'
+        ])
+        && request.resource.data.title is string
+        && request.resource.data.title != ''
+        && request.resource.data.inputUrl is string
+        && request.resource.data.sourceUrl is string
+        && request.resource.data.embedUrl is string
+        && request.resource.data.pageCount is int
+        && request.resource.data.pageCount >= 1
+        && request.resource.data.pageCount <= 500
+        && request.resource.data.defaultTargets is map
+        && request.resource.data.defaultTargets.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && request.resource.data.defaultTargets.projector is bool
+        && request.resource.data.defaultTargets.singers is bool
+        && request.resource.data.defaultTargets.musicians is bool
+        && request.resource.data.createdAt is int
+        && request.resource.data.createdBy is string
+        && request.resource.data.updatedAt is int
+        && request.resource.data.updatedBy is string;
+    }
+
+    match /canvaPresentations/{presentationId} {
+      allow read: if signedIn() && (
+        hasPermission('canva.view')
+        || hasPermission('canva.create')
+        || hasPermission('canva.edit')
+        || hasPermission('canva.delete')
+        || hasPermission('canva.project')
+      );
+      allow create: if hasPermission('canva.create') && validCanvaPresentationDocument();
+      allow update: if hasPermission('canva.edit') && validCanvaPresentationDocument();
+      allow delete: if hasPermission('canva.delete');
     }
 
     match /mediaLibrary/{mediaId} {

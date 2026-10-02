@@ -7,6 +7,7 @@ const PERMISSION_CATALOG = new Set([
   'rehearsal.access', 'rehearsal.control', 'bible.view', 'bible.project', 'bible.quickProjection',
   'sermons.view', 'sermons.create', 'sermons.edit', 'sermons.createPoint', 'sermons.createBiblePassage', 'sermons.delete', 'sermons.project',
   'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.delete', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
+  'canva.view', 'canva.create', 'canva.edit', 'canva.delete', 'canva.project',
   'announcements.view', 'announcements.create', 'announcements.edit', 'announcements.delete', 'announcements.project',
   'team.view', 'team.edit', 'team.manageRoles', 'team.managePermissions',
   'devotionals.view', 'devotionals.manage', 'devotionals.confirm', 'profile.editOwn'

@@ -13,6 +13,7 @@ import InternalScreenBible from './InternalScreenBible';
 import InternalScreenBlackout from './InternalScreenBlackout';
 import InternalScreenPreaching from './InternalScreenPreaching';
 import QuickMessagePresentation from './QuickMessagePresentation';
+import InternalScreenCanva from './InternalScreenCanva';
 
 const getSongIdsFromEvent = (evento) => {
   const setlistItems = evento?.setlist || (evento?.canciones || []).map(id => ({ type: 'song', value: id, idLocal: id }));
@@ -349,6 +350,7 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
       <InternalScreenBible eventData={evento} />
       <InternalScreenPreaching eventData={evento} />
       <InternalScreenBlackout active={evento?.proyectorApagado === true} />
+      <InternalScreenCanva state={evento?.canvaOutputs?.musicians} label="Canva en retorno de músicos" />
 
       <header className="relative z-10 shrink-0 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-sm">
         <div className={`mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-3 sm:px-5 lg:px-8 ${isMobileLandscape ? 'gap-2 px-2 py-px' : 'py-2 lg:py-4'}`}>
