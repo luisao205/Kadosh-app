@@ -93,11 +93,13 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
       setNextSong(data.proyectorNextSong || null);
       setAlerta(data.proyectorAlerta || null);
       setShowLogo(data.proyectorLogo || false);
+      const routedMediaEnabled = Boolean(data.mediaOutputs && typeof data.mediaOutputs === 'object');
+      const routedMedia = data.mediaOutputs?.singers;
       const isProjectedMedia = !data.proyectorApagado && (
         data.projectorState?.type === 'media'
         || ['media', 'preaching-media'].includes(nextLiveState.activeContentType)
       );
-      setMedia(isProjectedMedia ? (data.proyectorMedia || null) : null);
+      setMedia(routedMediaEnabled ? (routedMedia?.active ? routedMedia : null) : (isProjectedMedia ? (data.proyectorMedia || null) : null));
       setOffset(data.proyectorOffset || 0);
       if (data.preferencias?.formatoAcordes) setFormato(data.preferencias.formatoAcordes);
       if (data.preferencias?.notacion) setNotacion(data.preferencias.notacion);

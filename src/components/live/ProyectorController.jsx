@@ -167,6 +167,7 @@ const ProyectorController = ({ user }) => {
   const [canvaLibrary, setCanvaLibrary] = useState([]);
   const [selectedCanvaId, setSelectedCanvaId] = useState('');
   const [canvaTargets, setCanvaTargets] = useState({ projector: true, singers: false, musicians: false });
+  const [mediaTargets, setMediaTargets] = useState({ projector: true, singers: false, musicians: false });
   const [isSavingCanva, setIsSavingCanva] = useState(false);
   const [canvaPage, setCanvaPage] = useState(1);
   const [canvaPageCount, setCanvaPageCount] = useState(0);
@@ -197,6 +198,7 @@ const ProyectorController = ({ user }) => {
   const canEditCanva = hasPermission(user, 'canva.edit');
   const canDeleteCanva = hasPermission(user, 'canva.delete');
   const canProjectCanva = hasPermission(user, 'canva.project');
+  const canProjectMedia = hasPermission(user, 'multimedia.project');
   const canAccessCanva = canViewCanva || canCreateCanva || canEditCanva || canDeleteCanva || canProjectCanva;
   const controllerScreens = [
     { id: 'projector', label: 'Proyector General', detail: 'Pantalla de congregacion', Icon: Monitor, path: `/proyector/${eventoId}` },
@@ -433,6 +435,60 @@ const ProyectorController = ({ user }) => {
 
   const hasTargets = (targets) => Object.values(normalizeCanvaTargets(targets)).some(Boolean);
 
+  const normalizeMediaTargets = (targets) => ({
+    projector: targets?.projector === true,
+    singers: targets?.singers === true,
+    musicians: targets?.musicians === true,
+  });
+
+  const hasMediaTargets = (targets) => Object.values(normalizeMediaTargets(targets)).some(Boolean);
+
+  const getMediaRouteKey = (media = {}) => String(
+    media?.mediaKey || media?.mediaId || media?.id || media?.url || ''
+  ).trim();
+
+  const buildRoutedMediaState = (media = {}) => {
+    const url = String(media?.url || '').trim();
+    if (!url) return null;
+    return {
+      active: true,
+      mediaKey: getMediaRouteKey(media) || url,
+      mediaId: String(media?.mediaId || media?.id || ''),
+      name: String(media?.name || media?.title || 'Multimedia'),
+      url,
+      type: String(media?.type || (isVideoMediaUrl(url) ? 'video' : 'image')),
+      mode: 'foreground',
+      playing: media?.playing !== false,
+      volume: Number.isFinite(Number(media?.volume)) ? Math.max(0, Math.min(1, Number(media.volume))) : 1,
+      loop: media?.loop !== false,
+      updatedAt: Date.now(),
+      updatedBy: user?.nombre || user?.email || 'Multimedia',
+    };
+  };
+
+  const getLatestRoutedMedia = (mediaOutputs) => {
+    if (!mediaOutputs || typeof mediaOutputs !== 'object') return null;
+    return ['projector', 'singers', 'musicians']
+      .map((targetId) => mediaOutputs[targetId])
+      .filter((state) => state?.active && state?.url)
+      .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))[0] || null;
+  };
+
+  const selectVaultMedia = (media) => {
+    if (!media?.url) return;
+    const nextPreview = {
+      ...media,
+      url: media.url,
+      type: media.type || (isVideoMediaUrl(media.url) ? 'video' : 'image'),
+      mode: 'foreground',
+      name: media.name || media.title || 'Multimedia',
+    };
+    setPreviewMedia(nextPreview);
+    if (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+      setLargePreview(nextPreview);
+    }
+  };
+
   const clearLegacyCanvaProjection = async () => {
     const currentState = evento?.projectorState;
     if (currentState?.contentType !== 'canva') return;
@@ -466,10 +522,12 @@ const ProyectorController = ({ user }) => {
       if (!snapshot.exists()) throw new Error('El evento ya no existe.');
       const data = snapshot.data();
       const nextOutputs = { ...(data.canvaOutputs || {}) };
+      const nextMediaOutputs = { ...(data.mediaOutputs || {}) };
 
       ['projector', 'singers', 'musicians'].forEach((targetId) => {
         if (safeTargets[targetId]) {
           nextOutputs[targetId] = outputState;
+          delete nextMediaOutputs[targetId];
           return;
         }
 
@@ -482,7 +540,7 @@ const ProyectorController = ({ user }) => {
         if (samePresentation) delete nextOutputs[targetId];
       });
 
-      transaction.update(eventRef, { canvaOutputs: nextOutputs });
+      transaction.update(eventRef, { canvaOutputs: nextOutputs, mediaOutputs: nextMediaOutputs });
     });
   };
 
@@ -655,6 +713,27 @@ const ProyectorController = ({ user }) => {
     }
   };
 
+
+  const stopAllCanvaProjection = async () => {
+    if (!canProjectCanva) {
+      notify('No tienes permiso para retirar Canva.', { type: 'error' });
+      return;
+    }
+    try {
+      await clearLegacyCanvaProjection();
+      await runTransaction(db, async (transaction) => {
+        const eventRef = doc(db, 'eventos', eventoId);
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+        transaction.update(eventRef, { canvaOutputs: {} });
+      });
+      notify('Canva retirado de todas las pantallas.', { type: 'success' });
+    } catch (error) {
+      console.error('Error retirando Canva de todas las pantallas:', error);
+      notify('No se pudo retirar Canva de todas las pantallas.', { type: 'error' });
+    }
+  };
+
   const publicPreachingBlocks = useMemo(() => {
     const blocks = Array.isArray(activePreaching?.blocks) ? activePreaching.blocks : [];
     return blocks
@@ -720,6 +799,10 @@ const ProyectorController = ({ user }) => {
 
   const screenNow = useMemo(() => {
     const state = evento?.projectorState;
+    const routedProjectorMedia = evento?.mediaOutputs?.projector?.active ? evento.mediaOutputs.projector : null;
+    if (routedProjectorMedia?.url) {
+      return { label: `Multimedia · ${routedProjectorMedia.name || 'Recurso'}`, actor: routedProjectorMedia.updatedBy || 'Multimedia' };
+    }
     if (state?.type === 'preaching') {
       return {
         label: state.contentType === 'verse' || state.preachingType === 'verse'
@@ -745,13 +828,14 @@ const ProyectorController = ({ user }) => {
     if (state?.type === 'blackout' || isBlackout) return { label: 'Blackout', actor: state?.actorName || state?.updatedBy || 'Multimedia' };
     if (state?.type === 'logo' || isLogoActive) return { label: 'Logo', actor: state?.actorName || state?.updatedBy || 'Multimedia' };
     return { label: 'Sin contenido activo', actor: '' };
-  }, [evento?.projectorState, isBlackout, isLogoActive, liveSlide, mediaActive]);
+  }, [evento?.projectorState, evento?.mediaOutputs?.projector, isBlackout, isLogoActive, liveSlide, mediaActive]);
 
   // 🔄 LIMPIADOR DE MEMORIA: Reiniciar estados cuando cambia el evento
   useEffect(() => {
     setActiveSongId(null);
     setPreviewSlide(null);
     setPreviewMedia(null);
+    setMediaTargets({ projector: true, singers: false, musicians: false });
     setBiblePreview(null);
     setBiblePreviewOutlineItemId(null);
     setIsBibleOutlinePickerOpen(false);
@@ -981,7 +1065,8 @@ const ProyectorController = ({ user }) => {
         setTransicionActiva(data.proyectorTransicion || 'fade');
         setModoTransmision(data.proyectorModoTransmision ?? false);
         setIsLogoActive(data.proyectorLogo ?? false);
-        setMediaActive(data.proyectorMedia || null);
+        const hasRoutedMedia = data.mediaOutputs && typeof data.mediaOutputs === 'object';
+        setMediaActive(hasRoutedMedia ? getLatestRoutedMedia(data.mediaOutputs) : (data.proyectorMedia || null));
       }
     });
 
@@ -1328,6 +1413,7 @@ const ProyectorController = ({ user }) => {
       });
       await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
         canvaOutputs: {},
+        mediaOutputs: {},
         announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
@@ -1398,6 +1484,7 @@ const ProyectorController = ({ user }) => {
       });
       await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
         canvaOutputs: {},
+        mediaOutputs: {},
         announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
@@ -1441,6 +1528,7 @@ const ProyectorController = ({ user }) => {
         const previousProjectionFields = capturePreviousProjectionFields(eventSnapshot.data());
         transaction.update(eventRef, {
         canvaOutputs: {},
+        mediaOutputs: {},
         announcementState: buildInactiveAnnouncementState(),
         projectorState: buildCanonicalBibleProjectorState({
           type: 'preaching',
@@ -1811,6 +1899,7 @@ const ProyectorController = ({ user }) => {
 
     const updates = {
       canvaOutputs: {},
+      mediaOutputs: {},
       announcementState: buildInactiveAnnouncementState(),
       proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
       projectorState: {
@@ -1941,19 +2030,47 @@ const ProyectorController = ({ user }) => {
   const cancionesAgregadasTemporales = getSetlistSongItems().filter(isTemporarySetlistItem);
 
   const projectMedia = async (mediaObj) => {
-    if (!mediaObj) return;
-    rememberUndoSnapshot();
-    const updates = buildProjectorMediaPayload({
-      media: mediaObj,
-      title: mediaObj.name || mediaObj.title || 'Media',
-      timer: evento?.proyectorCountdown || null,
-      liveState: buildInactiveSongLiveState('media', mediaObj.name || mediaObj.title || 'Multimedia')
-    });
-    updates.proyectorFondo = null;
-    updates.proyectorFondoMedia = null;
-    updates.canvaOutputs = {};
-    try { await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), updates)); }
-    catch (e) { console.error(e); }
+    if (!mediaObj?.url) return;
+    const safeTargets = normalizeMediaTargets(mediaTargets);
+    if (!hasMediaTargets(safeTargets)) {
+      notify('Selecciona al menos un destino para Multimedia.', { type: 'error' });
+      return;
+    }
+
+    const outputState = buildRoutedMediaState(mediaObj);
+    if (!outputState) return;
+    const eventRef = doc(db, 'eventos', eventoId);
+
+    try {
+      await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+        const data = snapshot.data();
+        const nextMediaOutputs = { ...(data.mediaOutputs || {}) };
+        const nextCanvaOutputs = { ...(data.canvaOutputs || {}) };
+
+        ['projector', 'singers', 'musicians'].forEach((targetId) => {
+          if (safeTargets[targetId]) {
+            nextMediaOutputs[targetId] = outputState;
+            delete nextCanvaOutputs[targetId];
+            return;
+          }
+
+          const existing = nextMediaOutputs[targetId];
+          if (existing?.mediaKey === outputState.mediaKey) delete nextMediaOutputs[targetId];
+        });
+
+        transaction.update(eventRef, {
+          mediaOutputs: nextMediaOutputs,
+          canvaOutputs: nextCanvaOutputs,
+        });
+      }));
+      setMediaActive(outputState);
+      notify('Multimedia enviada a las pantallas seleccionadas.', { type: 'success' });
+    } catch (error) {
+      console.error('Error proyectando Multimedia por destinos:', error);
+      notify('No se pudo proyectar Multimedia en los destinos seleccionados.', { type: 'error' });
+    }
   };
 
   const projectSectionMedia = (resource) => {
@@ -2065,29 +2182,84 @@ const ProyectorController = ({ user }) => {
     catch (e) { console.error(e); }
   };
 
-  const handleMediaControl = async (updates) => { // Esta función ya estaba bien
+  const updateRoutedMedia = async (mutate) => {
+    const activeKey = getMediaRouteKey(mediaActive);
+    const routedOutputs = evento?.mediaOutputs;
+    if (!activeKey || !routedOutputs || typeof routedOutputs !== 'object') return false;
+
+    let nextActive = null;
+    let changed = 0;
+    const eventRef = doc(db, 'eventos', eventoId);
+    await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(eventRef);
+      if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+      const nextOutputs = { ...(snapshot.data().mediaOutputs || {}) };
+      const now = Date.now();
+
+      ['projector', 'singers', 'musicians'].forEach((targetId) => {
+        const existing = nextOutputs[targetId];
+        if (!existing?.active || getMediaRouteKey(existing) !== activeKey) return;
+        const mutated = mutate(existing, now);
+        if (mutated == null) delete nextOutputs[targetId];
+        else {
+          nextOutputs[targetId] = mutated;
+          if (!nextActive) nextActive = mutated;
+        }
+        changed += 1;
+      });
+
+      if (changed > 0) transaction.update(eventRef, { mediaOutputs: nextOutputs });
+    }));
+
+    if (changed > 0) setMediaActive(nextActive);
+    return changed > 0;
+  };
+
+  const handleMediaControl = async (updates) => {
+    if (!mediaActive) return;
     try {
-      const newMedia = { ...mediaActive, ...updates };
-      await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: newMedia }, { merge: true });
+      const routed = await updateRoutedMedia((existing, now) => ({
+        ...existing,
+        ...updates,
+        updatedAt: now,
+        updatedBy: user?.nombre || user?.email || 'Multimedia',
+      }));
+      if (!routed) {
+        const newMedia = { ...mediaActive, ...updates };
+        await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: newMedia }, { merge: true });
+      }
     } catch (e) { console.error(e); }
   };
 
-  const handleSeekCommand = async (type) => { // Esta función ya estaba bien
+  const handleSeekCommand = async (type) => {
     if (!mediaActive) return;
     try {
-      await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: { ...mediaActive, seekRequest: { type, time: Date.now() } } }, { merge: true });
+      const seekRequest = { type, time: Date.now() };
+      const routed = await updateRoutedMedia((existing, now) => ({
+        ...existing,
+        seekRequest,
+        updatedAt: now,
+        updatedBy: user?.nombre || user?.email || 'Multimedia',
+      }));
+      if (!routed) {
+        await setDoc(doc(db, 'eventos', eventoId), { proyectorMedia: { ...mediaActive, seekRequest } }, { merge: true });
+      }
     } catch (e) { console.error(e); }
   };
 
   const detenerMedia = async () => {
-    rememberUndoSnapshot();
     try {
-      const updates = buildStoppedProjectorMediaPayload({
-        eventData: evento,
-        liveState: buildInactiveSongLiveState('none', 'Sin contenido activo')
-      });
-      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), updates));
-      setPreviewMedia(null); // Limpiar también la vista previa local al detener
+      const routed = await updateRoutedMedia(() => null);
+      if (!routed) {
+        rememberUndoSnapshot();
+        const updates = buildStoppedProjectorMediaPayload({
+          eventData: evento,
+          liveState: buildInactiveSongLiveState('none', 'Sin contenido activo')
+        });
+        await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), updates));
+      }
+      setPreviewMedia(null);
+      notify('Multimedia retirada.', { type: 'success' });
     } catch (error) {
       console.error('Error deteniendo multimedia:', error);
       notify('No se pudo detener la multimedia.', { type: 'error' });
@@ -2555,6 +2727,133 @@ const ProyectorController = ({ user }) => {
     await setDoc(doc(db, 'eventos', eventoId), { proyectorTicker: null }, { merge: true });
   };
 
+
+
+  const stopSelectedMediaOutputs = async () => {
+    if (!canProjectMedia) {
+      notify('No tienes permiso para retirar Multimedia.', { type: 'error' });
+      return;
+    }
+    const safeTargets = normalizeMediaTargets(mediaTargets);
+    if (!hasMediaTargets(safeTargets)) {
+      notify('Selecciona al menos un destino.', { type: 'error' });
+      return;
+    }
+    try {
+      await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
+        const eventRef = doc(db, 'eventos', eventoId);
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+        const nextOutputs = { ...(snapshot.data().mediaOutputs || {}) };
+        ['projector', 'singers', 'musicians'].forEach((targetId) => {
+          if (safeTargets[targetId]) delete nextOutputs[targetId];
+        });
+        transaction.update(eventRef, { mediaOutputs: nextOutputs });
+      }));
+      notify('Multimedia retirada de los destinos seleccionados.', { type: 'success' });
+    } catch (error) {
+      console.error('Error retirando Multimedia por destinos:', error);
+      notify('No se pudo retirar Multimedia de los destinos seleccionados.', { type: 'error' });
+    }
+  };
+
+  const stopAllMediaOutputs = async () => {
+    if (!canProjectMedia) {
+      notify('No tienes permiso para retirar Multimedia.', { type: 'error' });
+      return;
+    }
+    try {
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), { mediaOutputs: {} }));
+      setMediaActive(null);
+      notify('Multimedia detenida en todas las pantallas.', { type: 'success' });
+    } catch (error) {
+      console.error('Error deteniendo Multimedia en todas las pantallas:', error);
+      notify('No se pudo detener Multimedia en todas las pantallas.', { type: 'error' });
+    }
+  };
+
+  const renderCanvaTargetSelectorCompact = () => {
+    const safeTargets = normalizeCanvaTargets(canvaTargets);
+    const options = [
+      ['projector', 'Proyector', Monitor],
+      ['singers', 'Cantantes', Type],
+      ['musicians', 'Músicos', Music],
+    ];
+    return (
+      <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.06] p-3">
+        <p className="mb-2 text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200">Destinos Canva</p>
+        <div className="grid grid-cols-3 gap-2">
+          {options.map(([targetId, label, Icon]) => (
+            <button
+              key={targetId}
+              type="button"
+              onClick={() => toggleCanvaTarget(targetId)}
+              className={'min-h-12 rounded-xl border px-2 text-[9px] font-black uppercase ' + (safeTargets[targetId] ? 'border-cyan-200/50 bg-cyan-400 text-zinc-950' : 'border-white/10 bg-zinc-900 text-zinc-400')}
+            >
+              <Icon size={13} className="mx-auto mb-1" />{label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMediaStopActions = () => (
+    <div className="grid grid-cols-2 gap-2">
+      <button
+        type="button"
+        onClick={stopSelectedMediaOutputs}
+        disabled={!canProjectMedia || !hasMediaTargets(mediaTargets)}
+        className="min-h-10 rounded-xl border border-amber-400/25 bg-amber-500/10 px-2 text-[9px] font-black uppercase text-amber-100 disabled:opacity-35"
+      >
+        Retirar seleccionadas
+      </button>
+      <button
+        type="button"
+        onClick={stopAllMediaOutputs}
+        disabled={!canProjectMedia}
+        className="min-h-10 rounded-xl border border-red-400/25 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200 disabled:opacity-35"
+      >
+        Detener en todas
+      </button>
+    </div>
+  );
+
+  const renderMediaTargetSelector = ({ compact = false } = {}) => {
+    const safeTargets = normalizeMediaTargets(mediaTargets);
+    const options = [
+      ['projector', 'Proyector', Monitor],
+      ['singers', 'Cantantes', Type],
+      ['musicians', 'Músicos', Music],
+    ];
+    return (
+      <div className={compact ? 'rounded-2xl border border-white/10 bg-black/30 p-2.5' : 'rounded-2xl border border-violet-400/20 bg-violet-500/8 p-3'}>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-[9px] font-black uppercase tracking-[0.18em] text-violet-200">Destinos Multimedia</p>
+          <span className="text-[9px] font-bold text-zinc-500">Selecciona dónde se muestra</span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {options.map(([targetId, label, Icon]) => {
+            const active = safeTargets[targetId];
+            return (
+              <button
+                key={targetId}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setMediaTargets((current) => ({ ...current, [targetId]: !current[targetId] }))}
+                className={'min-h-11 rounded-xl border px-2 py-2 text-[9px] font-black uppercase transition-all ' + (active
+                  ? 'border-cyan-200 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-500/10'
+                  : 'border-white/10 bg-white/5 text-zinc-300 hover:border-violet-400/30 hover:bg-violet-500/10')}
+              >
+                <span className="flex items-center justify-center gap-1.5"><Icon size={13} /> {label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   // Filtrar archivos para el buscador
   const filteredMedia = multimediaLib.filter(m => {
     const matchFolder = (m.folder || 'root') === (currentFolder || 'root');
@@ -2582,6 +2881,9 @@ const ProyectorController = ({ user }) => {
     }
   }
 
+  const projectorPreviewMedia = evento?.mediaOutputs && typeof evento.mediaOutputs === 'object'
+    ? (evento.mediaOutputs?.projector?.active ? evento.mediaOutputs.projector : null)
+    : mediaActive;
   const previewSectionMedia = Array.isArray(previewSlide?.media) ? previewSlide.media.find(resource => resource?.url) : null;
   const previewBackground = previewSectionMedia?.url || fondoActivo;
   const projectedBibleOutlineItemId = evento?.projectorState?.contentType === 'bible'
@@ -3105,6 +3407,7 @@ const ProyectorController = ({ user }) => {
                         {(selectedCanvaId ? canEditCanva : canCreateCanva) && <button type="button" onClick={saveCanvaPresentation} disabled={isSavingCanva} className="min-h-12 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-50">{isSavingCanva ? <Loader2 size={14} className="mr-2 inline animate-spin" /> : <Star size={14} className="mr-2 inline" />}{selectedCanvaId ? 'Guardar cambios' : 'Guardar presentación'}</button>}
                         {canProjectCanva && <button type="button" onClick={projectCanva} className="min-h-12 rounded-xl bg-cyan-400 px-3 text-[10px] font-black uppercase tracking-wide text-zinc-950 hover:bg-cyan-300"><Monitor size={14} className="mr-2 inline" />Proyectar en seleccionadas</button>}
                         <button type="button" onClick={stopCanvaProjection} className="min-h-12 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-amber-100 hover:bg-amber-500/20"><PowerOff size={14} className="mr-2 inline" />Retirar de seleccionadas</button>
+                        {canProjectCanva && <button type="button" onClick={stopAllCanvaProjection} className="min-h-12 rounded-xl border border-red-400/25 bg-red-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-red-200 hover:bg-red-500/20"><X size={14} className="mr-2 inline" />Detener Canva en todas</button>}
                       </div>
                     </div>
 
@@ -3292,7 +3595,7 @@ const ProyectorController = ({ user }) => {
                 {filteredMedia.map((m, i) => (
                   <div key={i} className="group relative shrink-0">
                     <button 
-                      onClick={() => setPreviewMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })}
+                      onClick={() => selectVaultMedia(m)}
                       className={`w-24 h-16 rounded-2xl overflow-hidden border transition-all bg-black relative ${previewMedia?.url === m.url ? 'border-indigo-500 ring-2 ring-indigo-500/30' : 'border-white/10 hover:border-indigo-400'}`}
                     >
                       {m.type === 'video' ? (
@@ -3307,7 +3610,7 @@ const ProyectorController = ({ user }) => {
                     {/* Botón de Lupa para Previsualización Grande */}
                     <button 
                       onClick={(e) => { e.stopPropagation(); setLargePreview(m); }}
-                      className="absolute bottom-1 left-1 p-1 bg-zinc-900/80 text-zinc-300 rounded-md opacity-0 group-hover:opacity-100 transition-all border border-white/10"
+                      className="absolute bottom-1 left-1 hidden lg:block p-1 bg-zinc-900/80 text-zinc-300 rounded-md opacity-0 group-hover:opacity-100 transition-all border border-white/10"
                       title="Vista Previa Grande"
                     >
                       <Eye size={10} />
@@ -3681,13 +3984,17 @@ const ProyectorController = ({ user }) => {
                 </button>
               )}
               {projectionSourceMode === 'media' && (
-                <button
-                  onClick={() => projectMedia(previewMedia)}
-                  disabled={!previewMedia}
-                  className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
-                >
-                  <Monitor size={18} /> Proyectar Contenido
-                </button>
+                <div className="mt-4 space-y-3">
+                  {renderMediaTargetSelector()}
+                  <button
+                    onClick={() => projectMedia(previewMedia)}
+                    disabled={!previewMedia || !hasMediaTargets(mediaTargets)}
+                    className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
+                  >
+                    <Monitor size={18} /> Proyectar en seleccionadas
+                  </button>
+                  {renderMediaStopActions()}
+                </div>
               )}
               {projectionSourceMode === 'bible' && (
                 <>
@@ -3756,7 +4063,7 @@ const ProyectorController = ({ user }) => {
                     <AutoFitText text={evento.projectorState.content || ''} minFontSize={10} maxFontSize={24} safeMaxWidth="92%" safeMaxHeight="72%" variant="preview" debounceMs={80} className="font-black text-white drop-shadow-lg" />
                     <p className="text-[10px] font-bold text-zinc-400">{Number(evento.projectorState.bibleSlideIndex || 0) + 1} / {evento.projectorState.bibleSlideCount || 1} · {evento.projectorState.translation || 'RVR1960'}</p>
                   </div>
-                ) : displayLiveSlide ? (
+                ) : displayLiveSlide && !projectorPreviewMedia?.url ? (
                   <> {/* LETRAS EN VIVO */}
                     {!modoTransmision && fondoActivo && isVideoMediaUrl(fondoActivo) ? (
                       <video src={fondoActivo} autoPlay loop muted playsInline className="absolute inset-0 w-full h-full object-cover opacity-40 z-0 pointer-events-none" />
@@ -3782,16 +4089,16 @@ const ProyectorController = ({ user }) => {
                       />
                     )}
                   </>
-                ) : mediaActive?.url ? ( // MULTIMEDIA EN VIVO
+                ) : projectorPreviewMedia?.url ? ( // MULTIMEDIA EN VIVO EN PROYECTOR
                   <div className="flex flex-col items-center gap-3 animate-in fade-in zoom-in-95 duration-300">
                     <div className="absolute inset-0 z-0 opacity-40">
-                       {mediaActive.type === 'video' ? <video src={mediaActive.url} autoPlay loop muted playsInline className="w-full h-full object-contain" /> : <img src={mediaActive.url} className="w-full h-full object-contain" />}
+                       {projectorPreviewMedia.type === 'video' ? <video src={projectorPreviewMedia.url} autoPlay loop muted playsInline className="w-full h-full object-contain" /> : <img src={projectorPreviewMedia.url} className="w-full h-full object-contain" />}
                     </div>
                     <div className="relative z-10 text-center px-4 flex flex-col items-center justify-center h-full">
                       <p className="text-indigo-400 font-black text-[11px] uppercase tracking-[0.2em] mb-1">
-                        {mediaActive.type === 'video' ? 'Proyectando Video' : 'Proyectando Imagen'}
+                        {projectorPreviewMedia.type === 'video' ? 'Proyectando Video' : 'Proyectando Imagen'}
                       </p>
-                      <p className="text-white text-xs font-bold truncate max-w-[200px] mb-6 italic bg-black/50 px-3 py-1 rounded-full">"{mediaActive.name || 'Archivo'}"</p>
+                      <p className="text-white text-xs font-bold truncate max-w-[200px] mb-6 italic bg-black/50 px-3 py-1 rounded-full">"{projectorPreviewMedia.name || 'Archivo'}"</p>
                       <button 
                         onClick={detenerMedia} 
                         className="px-8 py-3 bg-red-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest shadow-2xl hover:bg-red-500 transition-all active:scale-95 border border-white/10"
@@ -3939,6 +4246,157 @@ const ProyectorController = ({ user }) => {
 
       {/* VISTA MÓVIL (App Remota de 1 Toque - Se oculta en PC) */}
       <div className="relative z-10 md:hidden flex-1 flex flex-col bg-zinc-950/80 overflow-hidden [@media_(orientation:landscape)_and_(max-height:500px)]:flex">
+        {/* KADOSH_CANVA_MOBILE_V4 */}
+        {projectionSourceMode === 'canva' && (
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden">
+            <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.07] p-4">
+              <p className="text-[9px] font-black uppercase tracking-[0.2em] text-cyan-300">Canva móvil</p>
+              <p className="mt-1 text-sm font-black text-white">Biblioteca, destinos y páginas</p>
+              <p className="mt-2 text-[10px] font-bold text-zinc-500">Sin iframe automático: evita audio duplicado y consumo innecesario.</p>
+            </div>
+
+            <div className="space-y-2">
+              {canvaLibrary.map((item) => (
+                <div key={item.id} className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <button type="button" onClick={() => selectCanvaPresentation(item)} className="w-full text-left">
+                    <p className="truncate text-sm font-black text-white">{item.title || 'Presentación Canva'}</p>
+                    <p className="mt-1 text-[9px] font-bold text-zinc-500">{Number(item.pageCount) >= 1 ? Math.floor(Number(item.pageCount)) + ' página(s)' : 'Total sin configurar'}</p>
+                  </button>
+                  {canProjectCanva && (
+                    <button type="button" onClick={() => projectSavedCanva(item)} className="mt-2 min-h-10 w-full rounded-xl bg-cyan-400 text-[9px] font-black uppercase text-zinc-950">Proyectar</button>
+                  )}
+                </div>
+              ))}
+              {canvaLibrary.length === 0 && (
+                <p className="rounded-2xl border border-white/10 bg-black/25 p-4 text-center text-xs font-bold text-zinc-600">No hay presentaciones guardadas.</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+              <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-cyan-200">Destinos</p>
+              <div className="grid grid-cols-3 gap-2">
+                {[['projector', 'Proyector'], ['singers', 'Cantantes'], ['musicians', 'Músicos']].map(([targetId, label]) => (
+                  <button
+                    key={targetId}
+                    type="button"
+                    onClick={() => toggleCanvaTarget(targetId)}
+                    className={canvaTargets[targetId] ? "min-h-11 rounded-xl bg-cyan-400 px-2 text-[9px] font-black uppercase text-zinc-950" : "min-h-11 rounded-xl border border-white/10 bg-zinc-900 px-2 text-[9px] font-black uppercase text-zinc-400"}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {canProjectCanva && <button type="button" onClick={projectCanva} className="min-h-11 rounded-xl bg-cyan-400 text-[9px] font-black uppercase text-zinc-950">Proyectar</button>}
+                {canProjectCanva && <button type="button" onClick={stopCanvaProjection} className="min-h-11 rounded-xl border border-amber-400/25 bg-amber-500/10 text-[9px] font-black uppercase text-amber-100">Retirar seleccionadas</button>}
+                {canProjectCanva && <button type="button" onClick={stopAllCanvaProjection} className="col-span-2 min-h-11 rounded-xl border border-red-400/25 bg-red-500/10 text-[9px] font-black uppercase text-red-200">Detener Canva en todas</button>}
+              </div>
+            </div>
+
+            {canvaHasConfiguredPageCount && (
+              <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                <p className="mb-2 text-[9px] font-black uppercase text-cyan-200">Páginas {canvaSafeWindowStart}-{canvaPageBlockEnd} de {canvaSafePageCount}</p>
+                <div className="grid grid-cols-5 gap-2">
+                  {canvaVisiblePages.map((page) => (
+                    <button key={page} type="button" onClick={() => changeCanvaPage(page)} className={canvaPage === page ? "min-h-11 rounded-xl bg-cyan-400 text-xs font-black text-zinc-950" : "min-h-11 rounded-xl border border-white/10 bg-zinc-900 text-xs font-black text-zinc-300"}>{page}</button>
+                  ))}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button type="button" disabled={canvaSafeWindowStart <= 1} onClick={() => setCanvaPageWindowStart(Math.max(1, canvaSafeWindowStart - 10))} className="min-h-10 rounded-xl border border-white/10 bg-zinc-900 text-[9px] font-black uppercase text-zinc-300 disabled:opacity-30">← Anterior</button>
+                  <button type="button" disabled={canvaPageBlockEnd >= canvaSafePageCount} onClick={() => setCanvaPageWindowStart(Math.min(canvaMaxWindowStart, canvaSafeWindowStart + 10))} className="min-h-10 rounded-xl border border-white/10 bg-zinc-900 text-[9px] font-black uppercase text-zinc-300 disabled:opacity-30">Siguiente →</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {projectionSourceMode === 'canva' && (
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden">
+            {!canAccessCanva ? (
+              <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-center text-xs font-bold text-red-100">No tienes permisos para usar Canva.</div>
+            ) : (
+              <>
+                <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.07] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-cyan-300">Canva móvil</p>
+                      <p className="mt-1 text-sm font-black text-white">Biblioteca, destinos y páginas</p>
+                    </div>
+                    {canCreateCanva && <button type="button" onClick={newCanvaPresentation} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[9px] font-black uppercase text-zinc-200"><Plus size={12} className="mr-1 inline" />Nueva</button>}
+                  </div>
+                  <p className="mt-2 text-[10px] font-bold leading-relaxed text-zinc-500">El móvil no carga automáticamente la vista previa de Canva, evitando consumo y audio duplicado.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">Mis presentaciones</p>
+                  {canvaLibrary.length === 0 ? (
+                    <p className="rounded-2xl border border-white/10 bg-black/25 p-4 text-center text-xs font-bold text-zinc-600">No hay presentaciones guardadas.</p>
+                  ) : canvaLibrary.map((item) => {
+                    const selected = selectedCanvaId === item.id;
+                    return (
+                      <div key={item.id} className={'rounded-2xl border p-3 ' + (selected ? 'border-cyan-300/40 bg-cyan-500/10' : 'border-white/10 bg-black/25')}>
+                        <button type="button" onClick={() => selectCanvaPresentation(item)} className="w-full text-left">
+                          <p className="truncate text-sm font-black text-white">{item.title || 'Presentación Canva'}</p>
+                          <p className="mt-1 text-[9px] font-bold text-zinc-500">{Number(item.pageCount) >= 1 ? Math.floor(Number(item.pageCount)) + ' página(s)' : 'Total de páginas sin configurar'}</p>
+                        </button>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => selectCanvaPresentation(item)} className="min-h-10 rounded-xl border border-white/10 bg-white/5 text-[9px] font-black uppercase text-zinc-300">Abrir</button>
+                          {canProjectCanva && <button type="button" onClick={() => projectSavedCanva(item)} className="min-h-10 rounded-xl bg-cyan-400 text-[9px] font-black uppercase text-zinc-950">Proyectar</button>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-3 rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <label className="grid gap-1.5">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Nombre</span>
+                    <input value={canvaDraft.title} onChange={(event) => setCanvaDraft((current) => ({ ...current, title: event.target.value }))} disabled={selectedCanvaId ? !canEditCanva : !canCreateCanva} className="min-h-11 rounded-xl border border-white/10 bg-zinc-950 px-3 text-sm font-bold text-white disabled:opacity-50" />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Enlace Canva</span>
+                    <input value={canvaDraft.url} onChange={(event) => setCanvaDraft((current) => ({ ...current, url: event.target.value }))} disabled={selectedCanvaId ? !canEditCanva : !canCreateCanva} placeholder="canva.link/... o /view" className="min-h-11 rounded-xl border border-white/10 bg-zinc-950 px-3 text-xs font-bold text-white disabled:opacity-50" />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Cantidad de páginas</span>
+                    <input type="number" min="1" max="500" value={canvaPageCount || ''} onChange={(event) => { const value = Math.max(0, Math.min(500, Math.floor(Number(event.target.value) || 0))); setCanvaPageCount(value); setCanvaPage(1); setCanvaPageWindowStart(1); }} disabled={selectedCanvaId ? !canEditCanva : !canCreateCanva} placeholder="Ej. 56" className="min-h-11 rounded-xl border border-white/10 bg-zinc-950 px-3 text-sm font-bold text-white disabled:opacity-50" />
+                  </label>
+
+                  {renderCanvaTargetSelectorCompact()}
+                  {canvaUrlError && <p className="rounded-xl border border-red-400/20 bg-red-500/10 p-2 text-[10px] font-bold text-red-100">{canvaUrlError}</p>}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {(selectedCanvaId ? canEditCanva : canCreateCanva) && <button type="button" onClick={saveCanvaPresentation} disabled={isSavingCanva} className="min-h-11 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-2 text-[9px] font-black uppercase text-emerald-100 disabled:opacity-40">{selectedCanvaId ? 'Guardar cambios' : 'Guardar'}</button>}
+                    {canProjectCanva && <button type="button" onClick={projectCanva} disabled={!hasTargets(canvaTargets)} className="min-h-11 rounded-xl bg-cyan-400 px-2 text-[9px] font-black uppercase text-zinc-950 disabled:opacity-40">Proyectar</button>}
+                    {canProjectCanva && <button type="button" onClick={stopCanvaProjection} className="min-h-11 rounded-xl border border-amber-400/25 bg-amber-500/10 px-2 text-[9px] font-black uppercase text-amber-100">Retirar seleccionadas</button>}
+                    {canProjectCanva && <button type="button" onClick={stopAllCanvaProjection} className="min-h-11 rounded-xl border border-red-400/25 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200">Detener en todas</button>}
+                  </div>
+                </div>
+
+                {canvaHasConfiguredPageCount ? (
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <p className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200">Páginas {canvaSafeWindowStart}-{canvaPageBlockEnd} de {canvaSafePageCount}</p>
+                      <span className="text-[10px] font-black text-white">Actual {canvaPage}</span>
+                    </div>
+                    <div className="grid grid-cols-5 gap-2">
+                      {canvaVisiblePages.map((page) => (
+                        <button key={page} type="button" onClick={() => changeCanvaPage(page)} className={'min-h-11 rounded-xl border text-xs font-black ' + (canvaPage === page ? 'border-cyan-200 bg-cyan-400 text-zinc-950' : 'border-white/10 bg-zinc-900 text-zinc-300')}>{page}</button>
+                      ))}
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button type="button" disabled={canvaSafeWindowStart <= 1} onClick={() => setCanvaPageWindowStart(Math.max(1, canvaSafeWindowStart - 10))} className="min-h-10 rounded-xl border border-white/10 bg-zinc-900 text-[9px] font-black uppercase text-zinc-300 disabled:opacity-30">← Bloque anterior</button>
+                      <button type="button" disabled={canvaPageBlockEnd >= canvaSafePageCount} onClick={() => setCanvaPageWindowStart(Math.min(canvaMaxWindowStart, canvaSafeWindowStart + 10))} className="min-h-10 rounded-xl border border-white/10 bg-zinc-900 text-[9px] font-black uppercase text-zinc-300 disabled:opacity-30">Bloque siguiente →</button>
+                    </div>
+                  </div>
+                ) : selectedCanvaId ? (
+                  <p className="rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3 text-center text-[10px] font-bold text-amber-100">Configura la cantidad de páginas y guarda para habilitar la navegación.</p>
+                ) : null}
+              </>
+            )}
+          </div>
+        )}
+
         {projectionSourceMode === 'songs' && (
           <>
         {/* Barra de Setlist Horizontal */}
@@ -4134,9 +4592,12 @@ const ProyectorController = ({ user }) => {
               <p className="rounded-2xl border border-white/10 bg-black/25 p-4 text-center text-xs font-bold text-zinc-500">No hay medios para mostrar.</p>
             )}
             {previewMedia && (
-              <button onClick={() => projectMedia(previewMedia)} className="w-full rounded-2xl bg-violet-600 py-3 text-xs font-black uppercase text-white shadow-lg shadow-violet-950/30">
-                Proyectar multimedia
-              </button>
+              <div className="space-y-2">
+                {renderMediaTargetSelector({ compact: true })}
+                <button disabled={!hasMediaTargets(mediaTargets)} onClick={() => projectMedia(previewMedia)} className="w-full rounded-2xl bg-violet-600 py-3 text-xs font-black uppercase text-white shadow-lg shadow-violet-950/30 disabled:opacity-40">
+                  Proyectar en seleccionadas
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -4241,7 +4702,9 @@ const ProyectorController = ({ user }) => {
                       <p className="text-xs font-black text-white truncate pr-4">{previewMedia.name}</p>
                       <button onClick={() => setPreviewMedia(null)}><X size={16} className="text-zinc-500"/></button>
                     </div>
-                    <button onClick={() => { projectMedia(previewMedia); setShowMobileControlsModal(false); }} className="w-full py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase shadow-lg">🚀 PROYECTAR AHORA</button>
+                    <div className="mb-3">{renderMediaTargetSelector({ compact: true })}</div>
+                    <button disabled={!hasMediaTargets(mediaTargets)} onClick={() => { projectMedia(previewMedia); setShowMobileControlsModal(false); }} className="w-full py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase shadow-lg disabled:opacity-40">🚀 PROYECTAR EN SELECCIONADAS</button>
+                    <div className="mt-2">{renderMediaStopActions()}</div>
                   </div>
                 )}
               </div>
@@ -4580,15 +5043,17 @@ const ProyectorController = ({ user }) => {
               <X size={24}/> CERRAR
             </button>
             <button 
+              disabled={!hasMediaTargets(mediaTargets)}
               onClick={() => { projectMedia(largePreview); setLargePreview(null); }}
-              className="absolute -top-12 left-0 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95"
+              className="absolute -top-12 left-0 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-40"
             >
-              <Send size={18}/> PROYECTAR AHORA
-            </button> {/* Botón para proyectar directamente desde la vista previa grande */}
+              <Send size={18}/> PROYECTAR EN SELECCIONADAS
+            </button>
 
+            <div className="mb-3 w-full space-y-2">{renderMediaTargetSelector()}{renderMediaStopActions()}</div>
             <div className="w-full aspect-video bg-zinc-900 rounded-3xl overflow-hidden border border-white/10 shadow-2xl">
               {largePreview.type === 'video' ? (
-                <video src={largePreview.url} autoPlay loop controls className="w-full h-full object-contain" />
+                <video src={largePreview.url} autoPlay loop controls muted playsInline className="w-full h-full object-contain" />
               ) : (
                 <img src={largePreview.url} className="w-full h-full object-contain" />
               )}

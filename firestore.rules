@@ -203,7 +203,7 @@ service cloud.firestore {
     function bibleProjectionFields() {
       return ['projectorState', 'proyectorSlide', 'proyectorMedia', 'proyectorLogo', 'proyectorApagado',
         'proyectorFondo', 'proyectorFondoMedia', 'proyectorSongId', 'proyectorSlideIndex',
-        'proyectorNextSlide', 'proyectorNextSong', 'proyectorOffset', 'liveState', 'currentSongId', 'canvaOutputs', 'announcementState'];
+        'proyectorNextSlide', 'proyectorNextSong', 'proyectorOffset', 'liveState', 'currentSongId', 'canvaOutputs', 'mediaOutputs', 'announcementState'];
     }
 
     function biblePreviousProjectionIsTrusted() {
@@ -550,6 +550,7 @@ service cloud.firestore {
         'proyectorTicker',
         'outputs',
         'canvaOutputs',
+        'mediaOutputs',
         'announcementState'
       ];
     }
@@ -636,8 +637,86 @@ service cloud.firestore {
           || (request.resource.data.canvaOutputs is map && request.resource.data.canvaOutputs.keys().size() == 0)
         )
         && (
+          !changedEventKeys().hasAny(['mediaOutputs'])
+          || (request.resource.data.mediaOutputs is map && request.resource.data.mediaOutputs.keys().size() == 0)
+        )
+        && (
           !changedEventKeys().hasAny(['announcementState'])
           || validInactiveAnnouncementState()
+        );
+    }
+
+
+    function validMediaOutputState(state) {
+      return state is map
+        && state.keys().hasOnly([
+          'active', 'mediaKey', 'mediaId', 'name', 'url', 'type', 'mode',
+          'playing', 'volume', 'loop', 'seekRequest', 'updatedAt', 'updatedBy'
+        ])
+        && state.active == true
+        && state.mediaKey is string
+        && state.mediaKey != ''
+        && state.mediaId is string
+        && state.name is string
+        && state.url is string
+        && state.url != ''
+        && state.type is string
+        && state.mode == 'foreground'
+        && state.playing is bool
+        && (state.volume is int || state.volume is float)
+        && state.volume >= 0
+        && state.volume <= 1
+        && state.loop is bool
+        && (!('seekRequest' in state) || (
+          state.seekRequest is map
+          && state.seekRequest.keys().hasOnly(['type', 'time'])
+          && state.seekRequest.type in ['start', 'back10', 'fwd10']
+          && state.seekRequest.time is int
+        ))
+        && state.updatedAt is int
+        && state.updatedBy is string;
+    }
+
+    function validMediaOutputsMap() {
+      let outputs = request.resource.data.mediaOutputs;
+      return outputs is map
+        && outputs.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && (!('projector' in outputs) || validMediaOutputState(outputs.projector))
+        && (!('singers' in outputs) || validMediaOutputState(outputs.singers))
+        && (!('musicians' in outputs) || validMediaOutputState(outputs.musicians));
+    }
+
+    function mediaOutputsOnlyRemove() {
+      let next = request.resource.data.mediaOutputs;
+      let previous = ('mediaOutputs' in resource.data && resource.data.mediaOutputs is map)
+        ? resource.data.mediaOutputs
+        : {};
+      return next is map
+        && next.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && (!('projector' in next) || ('projector' in previous && next.projector == previous.projector))
+        && (!('singers' in next) || ('singers' in previous && next.singers == previous.singers))
+        && (!('musicians' in next) || ('musicians' in previous && next.musicians == previous.musicians));
+    }
+
+    function canvaOutputsOnlyRemove() {
+      let next = request.resource.data.canvaOutputs;
+      let previous = ('canvaOutputs' in resource.data && resource.data.canvaOutputs is map)
+        ? resource.data.canvaOutputs
+        : {};
+      return next is map
+        && next.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && (!('projector' in next) || ('projector' in previous && next.projector == previous.projector))
+        && (!('singers' in next) || ('singers' in previous && next.singers == previous.singers))
+        && (!('musicians' in next) || ('musicians' in previous && next.musicians == previous.musicians));
+    }
+
+    function canUpdateEventMediaOutputs() {
+      return hasPermission('multimedia.project')
+        && onlyEventKeys(['mediaOutputs', 'canvaOutputs'])
+        && validMediaOutputsMap()
+        && (
+          !changedEventKeys().hasAny(['canvaOutputs'])
+          || (validCanvaOutputsMap() && canvaOutputsOnlyRemove())
         );
     }
 
@@ -664,8 +743,12 @@ service cloud.firestore {
 
     function canUpdateEventCanvaOutputs() {
       return hasPermission('canva.project')
-        && onlyEventKeys(['canvaOutputs'])
-        && validCanvaOutputsMap();
+        && onlyEventKeys(['canvaOutputs', 'mediaOutputs'])
+        && validCanvaOutputsMap()
+        && (
+          !changedEventKeys().hasAny(['mediaOutputs'])
+          || (validMediaOutputsMap() && mediaOutputsOnlyRemove())
+        );
     }
 
     function canUpdateEventBibleOutline() {
@@ -774,6 +857,7 @@ service cloud.firestore {
           || canUpdateEventSetlist()
           || canUpdateEventBibleOutline()
           || canUpdateEventCanvaOutputs()
+          || canUpdateEventMediaOutputs()
           || canUpdateEventAsParticipant()
           || canUpdateEventAsMedia());
     }

@@ -163,11 +163,13 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
       if (!manualMode) setSongId(nextSongId);
       if (!songId && nextSongId) setSongId(nextSongId);
       setCurrentIndex(nextLiveState.activeSectionIndex);
+      const routedMediaEnabled = Boolean(data.mediaOutputs && typeof data.mediaOutputs === 'object');
+      const routedMedia = data.mediaOutputs?.musicians;
       const isProjectedMedia = !data.proyectorApagado && (
         data.projectorState?.type === 'media'
         || ['media', 'preaching-media'].includes(nextLiveState.activeContentType)
       );
-      setMedia(isProjectedMedia ? (data.proyectorMedia || null) : null);
+      setMedia(routedMediaEnabled ? (routedMedia?.active ? routedMedia : null) : (isProjectedMedia ? (data.proyectorMedia || null) : null));
       setNextSlide(data.proyectorNextSlide || null);
       setAlerta(data.proyectorAlerta || null);
       setNextSong(data.proyectorNextSong || null);

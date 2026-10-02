@@ -32,6 +32,7 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const [projectorState, setProjectorState] = useState(null);
   const [announcementState, setAnnouncementState] = useState(null);
   const [canvaOutput, setCanvaOutput] = useState(null);
+  const [hasRoutedMedia, setHasRoutedMedia] = useState(false);
   const [showControls, setShowControls] = useState(false);
   const controlsTimerRef = useRef(null);
   const videoRef = useRef(null);
@@ -54,7 +55,10 @@ const Proyector = ({ eventoIdOverride, user }) => {
         lastFondoRef.current = nextFondo;
 
         setSlide(data.proyectorSlide || null);
-        setMedia(data.proyectorMedia || null);
+        const routedMedia = data.mediaOutputs?.projector;
+        const routedMediaEnabled = Boolean(data.mediaOutputs && typeof data.mediaOutputs === 'object');
+        setHasRoutedMedia(routedMediaEnabled);
+        setMedia(routedMediaEnabled ? (routedMedia?.active ? routedMedia : null) : (data.proyectorMedia || null));
         setApagar(data.proyectorApagado || false);
         setTransicion(data.proyectorTransicion || 'fade');
         setModoTransmision(data.proyectorModoTransmision || false);
@@ -336,7 +340,7 @@ const Proyector = ({ eventoIdOverride, user }) => {
 
       {/* Capa de Video Principal (Foreground) - Tapa todo lo dem?s */}
       {media?.url && media.mode === 'foreground' && (
-        <div key={media.url} className="absolute inset-0 z-40 bg-black animate-in fade-in duration-500 overflow-hidden block">
+        <div key={media.url} className={`absolute inset-0 ${hasRoutedMedia ? 'z-[80]' : 'z-40'} bg-black animate-in fade-in duration-500 overflow-hidden block`}>
           {media.type === 'video' || isVideoMediaUrl(media.url) ? (
             <video 
               ref={videoRef}
