@@ -30,16 +30,34 @@ service cloud.firestore {
       return role in ['dueño', 'dueno'] ? 'dueno' : role;
     }
 
-    // Legacy fallbacks keep existing users operational until an owner saves role defaults.
+    // Built-in fallbacks mirror the client defaults only when a permission has not been configured explicitly.
     function hasLegacyPermission(permission, role) {
-      return (permission in ['events.create', 'events.edit', 'events.delete', 'songs.delete', 'multimedia.delete']
-          && role in ['dueño', 'dueno', 'admin'])
-        || (permission in ['songs.create', 'songs.editLyrics', 'songs.editChords', 'songs.editMetadata', 'songs.manageMedia', 'songs.archive', 'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.project', 'multimedia.controlOutputs', 'bible.project', 'sermons.project']
-          && role in ['dueño', 'dueno', 'admin', 'multimedia'])
-        || (permission in ['announcements.view', 'announcements.create', 'announcements.edit', 'announcements.delete', 'announcements.project']
-          && role in ['dueño', 'dueno'])
-        || (permission == 'sermons.view' && role in ['dueño', 'dueno', 'multimedia', 'admin'])
-        || (permission in ['sermons.create', 'sermons.edit'] && role in ['dueño', 'dueno', 'multimedia']);
+      let roleKey = normalizedRoleKey(role);
+      return roleKey == 'dueno'
+        || (roleKey == 'admin' && permission in [
+          'dashboard.view', 'events.view', 'events.create', 'events.edit', 'events.delete',
+          'setlists.view', 'setlists.addSong', 'setlists.removeSong', 'setlists.reorder', 'setlists.control', 'setlists.manage',
+          'songs.view', 'songs.create', 'songs.editLyrics', 'songs.editChords', 'songs.editMetadata', 'songs.manageMedia', 'songs.archive', 'songs.delete',
+          'rehearsal.access', 'rehearsal.control', 'bible.view', 'bible.project', 'bible.quickProjection',
+          'sermons.view', 'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
+          'canva.view', 'canva.create', 'canva.edit', 'canva.delete', 'canva.project', 'profile.editOwn'
+        ])
+        || (roleKey == 'multimedia' && permission in [
+          'dashboard.view', 'events.view',
+          'setlists.view', 'setlists.addSong', 'setlists.removeSong', 'setlists.reorder', 'setlists.control', 'setlists.manage',
+          'songs.view', 'songs.create', 'songs.editLyrics', 'songs.editChords', 'songs.editMetadata', 'songs.manageMedia', 'songs.archive',
+          'rehearsal.access', 'rehearsal.control', 'bible.view', 'bible.project', 'bible.quickProjection',
+          'sermons.view', 'sermons.create', 'sermons.edit', 'sermons.createPoint', 'sermons.createBiblePassage', 'sermons.project',
+          'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
+          'canva.view', 'canva.create', 'canva.edit', 'canva.delete', 'canva.project', 'profile.editOwn'
+        ])
+        || (roleKey == 'musico' && permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view'])
+        || (roleKey == 'cantante' && permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn'])
+        || (roleKey == 'pastor' && permission in [
+          'dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view', 'bible.project',
+          'sermons.view', 'sermons.create', 'sermons.edit', 'sermons.createPoint', 'sermons.createBiblePassage', 'sermons.project'
+        ])
+        || (roleKey == 'predicador' && permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view', 'sermons.view']);
     }
 
     function hasPermissionOverride(profile, permission) {
@@ -78,13 +96,28 @@ service cloud.firestore {
         : false;
     }
 
+    function hasConfiguredRolePermissionEntry(role, permission) {
+      return exists(permissionConfigPath())
+        && hasConfiguredRolePermissionEntryFromDocument(role, permission);
+    }
+
+    function hasConfiguredRolePermissionEntryFromDocument(role, permission) {
+      let config = get(permissionConfigPath()).data;
+      let roleKey = normalizedRoleKey(role);
+      return 'roleDefaults' in config
+        && roleKey in config.roleDefaults
+        && permission in config.roleDefaults[roleKey];
+    }
+
     function hasPermission(permission) {
       let profile = get(userPath(request.auth.uid)).data;
       let role = profile.rol;
       return role in ['dueño', 'dueno']
         || (hasPermissionOverride(profile, permission)
           ? permissionOverrideIsEnabled(profile, permission)
-          : (hasConfiguredRolePermission(role, permission) || hasLegacyPermission(permission, role)));
+          : (hasConfiguredRolePermissionEntry(role, permission)
+            ? hasConfiguredRolePermission(role, permission)
+            : hasLegacyPermission(permission, role)));
     }
 
     function sensitiveUserFields() {

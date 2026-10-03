@@ -189,9 +189,9 @@ const ProyectorController = ({ user }) => {
     return window.localStorage.getItem('controller.preacherPanelOpen') === 'true';
   });
 
-  const canHandlePastorRequests = isOwner(user) || isMultimedia(user);
-  const canReadPastorRequests = canHandlePastorRequests || isAdmin(user);
-  const canManageBibleOutline = isOwner(user) || isAdmin(user) || isMultimedia(user);
+  const canHandlePastorRequests = canProjectPreaching;
+  const canReadPastorRequests = canViewPreaching || canEditPreaching || canProjectPreaching;
+  const canManageBibleOutline = canProjectBible;
   const canQuickProject = hasPermission(user, 'bible.quickProjection');
   const canViewCanva = hasPermission(user, 'canva.view');
   const canCreateCanva = hasPermission(user, 'canva.create');
@@ -199,7 +199,22 @@ const ProyectorController = ({ user }) => {
   const canDeleteCanva = hasPermission(user, 'canva.delete');
   const canProjectCanva = hasPermission(user, 'canva.project');
   const canProjectMedia = hasPermission(user, 'multimedia.project');
+  const canControlOutputs = hasPermission(user, 'multimedia.controlOutputs');
+  const canViewMedia = hasPermission(user, 'multimedia.libraryView');
+  const canUploadMedia = hasPermission(user, 'multimedia.upload');
+  const canEditMedia = hasPermission(user, 'multimedia.edit');
+  const canDeleteMedia = hasPermission(user, 'multimedia.delete');
+  const canViewBible = hasPermission(user, 'bible.view');
+  const canProjectBible = hasPermission(user, 'bible.project');
+  const canViewPreaching = hasPermission(user, 'sermons.view');
+  const canCreatePreaching = hasPermission(user, 'sermons.create');
+  const canEditPreaching = hasPermission(user, 'sermons.edit');
+  const canProjectPreaching = hasPermission(user, 'sermons.project');
+  const canControlSongs = hasPermission(user, 'setlists.control') || canProjectMedia;
   const canAccessCanva = canViewCanva || canCreateCanva || canEditCanva || canDeleteCanva || canProjectCanva;
+  const canAccessBibleController = canViewBible || canProjectBible || canQuickProject;
+  const canAccessPreachingController = canViewPreaching || canCreatePreaching || canEditPreaching || canProjectPreaching;
+  const canAccessMediaController = canViewMedia || canUploadMedia || canEditMedia || canDeleteMedia || canProjectMedia || canControlOutputs;
   const controllerScreens = [
     { id: 'projector', label: 'Proyector General', detail: 'Pantalla de congregacion', Icon: Monitor, path: `/proyector/${eventoId}` },
     { id: 'singers', label: 'Retorno Cantantes', detail: 'Letras e indicaciones', Icon: Type, path: `/retorno/${eventoId}` },
@@ -1508,6 +1523,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const projectBiblePassage = async ({ passage, slides = [], selectedIndex = 0, outlineItemId = null }) => {
+    if (!canProjectBible) {
+      notify('No tienes permiso para proyectar Biblia.', { type: 'error' });
+      return;
+    }
     if (!passage) return;
     const safeSlides = slides.length ? slides : [{
       reference: passage.reference,
@@ -1660,6 +1679,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const stopPublicBibleProjection = async () => {
+    if (!canProjectBible) {
+      notify('No tienes permiso para retirar la proyección bíblica.', { type: 'error' });
+      return;
+    }
     const projectionActionId = evento?.projectorState?.projectionActionId;
     if (!isMatchingBibleProjection(evento?.projectorState, projectionActionId)) return;
     try {
@@ -1847,6 +1870,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const projectSlide = async (slide) => {
+    if (!canProjectMedia) {
+      notify('No tienes permiso para proyectar canciones.', { type: 'error' });
+      return;
+    }
     if (!slide) { console.warn("No slide provided to projectSlide"); return; }
     rememberUndoSnapshot();
     
@@ -1965,6 +1992,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const projectBibleDeckSlideAt = async (targetIndex) => {
+    if (!canProjectBible) {
+      notify('No tienes permiso para navegar la proyección bíblica.', { type: 'error' });
+      return;
+    }
     const currentState = evento?.projectorState;
     const bible = currentState?.contentType === 'bible' ? currentState.bible : null;
     const slides = Array.isArray(bible?.slides) ? bible.slides : [];
@@ -2030,6 +2061,10 @@ const ProyectorController = ({ user }) => {
   const cancionesAgregadasTemporales = getSetlistSongItems().filter(isTemporarySetlistItem);
 
   const projectMedia = async (mediaObj) => {
+    if (!canProjectMedia) {
+      notify('No tienes permiso para proyectar Multimedia.', { type: 'error' });
+      return;
+    }
     if (!mediaObj?.url) return;
     const safeTargets = normalizeMediaTargets(mediaTargets);
     if (!hasMediaTargets(safeTargets)) {
@@ -2096,6 +2131,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const toggleBlackout = async () => {
+    if (!canControlOutputs) {
+      notify('No tienes permiso para controlar las salidas.', { type: 'error' });
+      return;
+    }
     const nextBlackout = !isBlackout;
     if (!nextBlackout) {
       try {
@@ -2146,12 +2185,20 @@ const ProyectorController = ({ user }) => {
   };
 
   const toggleTransmision = async () => {
+    if (!canControlOutputs) {
+      notify('No tienes permiso para cambiar el modo de transmisión.', { type: 'error' });
+      return;
+    }
     rememberUndoSnapshot();
     try { await setDoc(doc(db, 'eventos', eventoId), { proyectorModoTransmision: !modoTransmision }, { merge: true }); } 
     catch (e) { console.error(e); }
   };
 
   const toggleLogo = async () => {
+    if (!canControlOutputs) {
+      notify('No tienes permiso para controlar el logo.', { type: 'error' });
+      return;
+    }
     const nextLogo = !isLogoActive;
     const currentBackground = resolveProjectorBackground(evento);
     rememberUndoSnapshot();
@@ -2460,6 +2507,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const toggleCountdown = async (active) => {
+    if (!canControlOutputs) {
+      notify('No tienes permiso para controlar el contador.', { type: 'error' });
+      return;
+    }
     const mins = parseInt(countdownMinutes) || 5;
     const endTimestamp = active ? Date.now() + (mins * 60000) : null;
     try {
@@ -2470,6 +2521,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const botonPanico = async () => {
+    if (!canControlOutputs) {
+      notify('No tienes permiso para usar el botón de pánico.', { type: 'error' });
+      return;
+    }
     rememberUndoSnapshot();
     await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), buildPanicProjectorPayload({
       liveState: buildInactiveSongLiveState('blackout', 'Pantalla negra'),
@@ -2480,6 +2535,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const borrarArchivo = async (e, url) => {
+    if (!canDeleteMedia) {
+      notify('No tienes permiso para eliminar Multimedia.', { type: 'error' });
+      return;
+    }
     e.stopPropagation();
     setConfirmModal({
       show: true,
@@ -2517,6 +2576,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const renombrarArchivo = async (e, url) => {
+    if (!canEditMedia) {
+      notify('No tienes permiso para editar Multimedia.', { type: 'error' });
+      return;
+    }
     e.stopPropagation();
     const item = multimediaLib.find(m => m.url === url);
     if (!item) return;
@@ -2568,6 +2631,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const crearCarpeta = async () => {
+    if (!canUploadMedia) {
+      notify('No tienes permiso para crear carpetas Multimedia.', { type: 'error' });
+      return;
+    }
     setInputModal({
       show: true,
       title: 'Nueva Carpeta',
@@ -2593,6 +2660,10 @@ const ProyectorController = ({ user }) => {
   };
 
   const handleUploadBackground = async (e, { applyAsBackground = false } = {}) => {
+    if (!canUploadMedia) {
+      notify('No tienes permiso para subir Multimedia.', { type: 'error' });
+      return;
+    }
     const file = e.target.files[0];
     if (!file) return;
     
@@ -2685,6 +2756,10 @@ const ProyectorController = ({ user }) => {
 
   // Lógica para enviar mensajes a tarima
   const enviarAlerta = async (overrideText = null) => {
+    if (!canControlOutputs) {
+      notify('No tienes permiso para enviar alertas de tarima.', { type: 'error' });
+      return;
+    }
     const messageText = typeof overrideText === 'string' ? overrideText.trim() : alertaTarima.trim();
     if (!messageText) return;
     setIsSendingAlert(true);
@@ -2721,6 +2796,10 @@ const ProyectorController = ({ user }) => {
 
   // Lógica para enviar Marquesina (Ticker) Público
   const enviarTicker = async () => {
+    if (!canControlOutputs) {
+      notify('No tienes permiso para enviar marquesinas.', { type: 'error' });
+      return;
+    }
     if (!tickerMsg.trim()) return;
     setIsSendingTicker(true);
     try {
@@ -3209,11 +3288,11 @@ const ProyectorController = ({ user }) => {
           </div>
           <div className="grid grid-cols-2 gap-1 rounded-2xl border border-white/10 bg-black/30 p-1 sm:grid-cols-5">
             {[
-              ['songs', 'Canciones', Music],
-              ['preaching', 'Predica', ShieldCheck],
-              ['bible', 'Biblia', BookOpen],
+              ...(canControlSongs ? [['songs', 'Canciones', Music]] : []),
+              ...(canAccessPreachingController ? [['preaching', 'Predica', ShieldCheck]] : []),
+              ...(canAccessBibleController ? [['bible', 'Biblia', BookOpen]] : []),
               ...(canAccessCanva ? [['canva', 'Canva', Tv]] : []),
-              ['media', 'Multimedia', Film]
+              ...(canAccessMediaController ? [['media', 'Multimedia', Film]] : [])
             ].map(([mode, label, Icon]) => (
               <button
                 key={mode}
@@ -3445,7 +3524,7 @@ const ProyectorController = ({ user }) => {
                               </button>
                               <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
                                 <button type="button" onClick={() => selectCanvaPresentation(item)} className="min-h-10 rounded-lg border border-white/10 bg-white/5 px-2 text-[9px] font-black uppercase text-zinc-300 hover:bg-white/10">{canEditCanva ? <Edit2 size={12} className="mr-1 inline" /> : <Eye size={12} className="mr-1 inline" />}{canEditCanva ? 'Editar' : 'Abrir'}</button>
-                                <button type="button" onClick={() => projectSavedCanva(item)} className="min-h-10 rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-2 text-[9px] font-black uppercase text-cyan-100 hover:bg-cyan-500/20"><Monitor size={12} className="mr-1 inline" />Proyectar</button>
+                                <button type="button" disabled={!canProjectCanva} onClick={() => projectSavedCanva(item)} className="min-h-10 rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-2 text-[9px] font-black uppercase text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-30"><Monitor size={12} className="mr-1 inline" />Proyectar</button>
                                 {canDeleteCanva && <button type="button" onClick={() => deleteCanvaPresentation(item)} className="min-h-10 rounded-lg border border-red-400/20 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200 hover:bg-red-500/20"><Trash2 size={12} className="mr-1 inline" />Eliminar</button>}
                               </div>
                             </div>
@@ -3996,7 +4075,7 @@ const ProyectorController = ({ user }) => {
                   {renderMediaTargetSelector()}
                   <button
                     onClick={() => projectMedia(previewMedia)}
-                    disabled={!previewMedia || !hasMediaTargets(mediaTargets)}
+                    disabled={!canProjectMedia || !previewMedia || !hasMediaTargets(mediaTargets)}
                     className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
                   >
                     <Monitor size={18} /> Proyectar en seleccionadas
@@ -4008,7 +4087,7 @@ const ProyectorController = ({ user }) => {
                 <>
                   <button
                     onClick={() => projectBiblePassage({ ...biblePreview, outlineItemId: biblePreviewOutlineItemId })}
-                    disabled={!biblePreview}
+                    disabled={!canProjectBible || !biblePreview}
                     className="mt-4 py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
                   >
                     <Monitor size={18} /> Proyectar Biblia
@@ -4602,7 +4681,7 @@ const ProyectorController = ({ user }) => {
             {previewMedia && (
               <div className="space-y-2">
                 {renderMediaTargetSelector({ compact: true })}
-                <button disabled={!hasMediaTargets(mediaTargets)} onClick={() => projectMedia(previewMedia)} className="w-full rounded-2xl bg-violet-600 py-3 text-xs font-black uppercase text-white shadow-lg shadow-violet-950/30 disabled:opacity-40">
+                <button disabled={!canProjectMedia || !hasMediaTargets(mediaTargets)} onClick={() => projectMedia(previewMedia)} className="w-full rounded-2xl bg-violet-600 py-3 text-xs font-black uppercase text-white shadow-lg shadow-violet-950/30 disabled:opacity-40">
                   Proyectar en seleccionadas
                 </button>
               </div>
@@ -4663,7 +4742,7 @@ const ProyectorController = ({ user }) => {
                   <button onClick={crearCarpeta} className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-amber-600 px-2.5 py-2 text-[9px] font-black uppercase text-white"><FolderPlus size={13}/> Carpeta</button>
                   <label className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-violet-600 px-2.5 py-2 text-[9px] font-black uppercase text-white cursor-pointer">
                     <Upload size={13}/> Subir
-                    <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo} onChange={handleUploadBackground} />
+                    <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo || !canUploadMedia} onChange={handleUploadBackground} />
                   </label>
                 </div>
 
@@ -4696,9 +4775,9 @@ const ProyectorController = ({ user }) => {
                         <div className="absolute bottom-0 inset-x-0 bg-black/60 p-1"><p className="text-[8px] font-bold text-white truncate text-center">{m.name}</p></div>
                       </button>
                       <div className="grid grid-cols-3 gap-1 p-1">
-                        <button onClick={() => projectMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })} className="rounded-lg bg-violet-600 px-1 py-1.5 text-[8px] font-black uppercase text-white">Proy.</button>
-                        <button onClick={(e) => renombrarArchivo(e, m.url)} className="rounded-lg bg-zinc-800 px-1 py-1.5 text-[8px] font-black uppercase text-zinc-300">Ren.</button>
-                        <button onClick={(e) => borrarArchivo(e, m.url)} className="rounded-lg bg-red-500/10 px-1 py-1.5 text-[8px] font-black uppercase text-red-300">Elim.</button>
+                        <button disabled={!canProjectMedia} onClick={() => projectMedia({ url: m.url, type: m.type, mode: 'foreground', name: m.name })} className="rounded-lg bg-violet-600 px-1 py-1.5 text-[8px] font-black uppercase text-white disabled:opacity-30">Proy.</button>
+                        <button disabled={!canEditMedia} onClick={(e) => renombrarArchivo(e, m.url)} className="rounded-lg bg-zinc-800 px-1 py-1.5 text-[8px] font-black uppercase text-zinc-300 disabled:opacity-30">Ren.</button>
+                        <button disabled={!canDeleteMedia} onClick={(e) => borrarArchivo(e, m.url)} className="rounded-lg bg-red-500/10 px-1 py-1.5 text-[8px] font-black uppercase text-red-300 disabled:opacity-30">Elim.</button>
                       </div>
                     </div>
                   ))}
@@ -4711,7 +4790,7 @@ const ProyectorController = ({ user }) => {
                       <button onClick={() => setPreviewMedia(null)}><X size={16} className="text-zinc-500"/></button>
                     </div>
                     <div className="mb-3">{renderMediaTargetSelector({ compact: true })}</div>
-                    <button disabled={!hasMediaTargets(mediaTargets)} onClick={() => { projectMedia(previewMedia); setShowMobileControlsModal(false); }} className="w-full py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase shadow-lg disabled:opacity-40">🚀 PROYECTAR EN SELECCIONADAS</button>
+                    <button disabled={!canProjectMedia || !hasMediaTargets(mediaTargets)} onClick={() => { projectMedia(previewMedia); setShowMobileControlsModal(false); }} className="w-full py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase shadow-lg disabled:opacity-40">🚀 PROYECTAR EN SELECCIONADAS</button>
                     <div className="mt-2">{renderMediaStopActions()}</div>
                   </div>
                 )}
@@ -4957,7 +5036,7 @@ const ProyectorController = ({ user }) => {
                 <label className={`w-full py-4 rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-colors cursor-pointer ${isUploadingFondo ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 hover:border-indigo-500'}`}>
                   {isUploadingFondo ? <Loader2 size={24} className="text-indigo-500 animate-spin" /> : <Upload size={24} className="text-zinc-400" />}
                   <span className="text-sm font-bold text-zinc-300">{isUploadingFondo ? 'Subiendo archivo...' : 'Seleccionar Archivo'}</span>
-                  <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo} onChange={(event) => handleUploadBackground(event, { applyAsBackground: true })} />
+                  <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo || !canUploadMedia} onChange={(event) => handleUploadBackground(event, { applyAsBackground: true })} />
                 </label>
               </div>
 
@@ -5051,7 +5130,7 @@ const ProyectorController = ({ user }) => {
               <X size={24}/> CERRAR
             </button>
             <button 
-              disabled={!hasMediaTargets(mediaTargets)}
+              disabled={!canProjectMedia || !hasMediaTargets(mediaTargets)}
               onClick={() => { projectMedia(largePreview); setLargePreview(null); }}
               className="absolute -top-12 left-0 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-40"
             >
