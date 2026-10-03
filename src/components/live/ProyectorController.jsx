@@ -189,9 +189,6 @@ const ProyectorController = ({ user }) => {
     return window.localStorage.getItem('controller.preacherPanelOpen') === 'true';
   });
 
-  const canHandlePastorRequests = canProjectPreaching;
-  const canReadPastorRequests = canViewPreaching || canEditPreaching || canProjectPreaching;
-  const canManageBibleOutline = canProjectBible;
   const canQuickProject = hasPermission(user, 'bible.quickProjection');
   const canViewCanva = hasPermission(user, 'canva.view');
   const canCreateCanva = hasPermission(user, 'canva.create');
@@ -210,6 +207,9 @@ const ProyectorController = ({ user }) => {
   const canCreatePreaching = hasPermission(user, 'sermons.create');
   const canEditPreaching = hasPermission(user, 'sermons.edit');
   const canProjectPreaching = hasPermission(user, 'sermons.project');
+  const canHandlePastorRequests = canProjectPreaching;
+  const canReadPastorRequests = canViewPreaching || canEditPreaching || canProjectPreaching;
+  const canManageBibleOutline = canProjectBible;
   const canControlSongs = hasPermission(user, 'setlists.control') || canProjectMedia;
   const canAccessCanva = canViewCanva || canCreateCanva || canEditCanva || canDeleteCanva || canProjectCanva;
   const canAccessBibleController = canViewBible || canProjectBible || canQuickProject;
