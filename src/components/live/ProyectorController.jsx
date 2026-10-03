@@ -1012,14 +1012,14 @@ const ProyectorController = ({ user }) => {
       setMultimediaLib(current.library);
       setMultimediaFolders(current.folders);
 
-      const needsLegacyRecovery = !snap.exists()
-        || current.library.length === 0
-        || current.folders.length === 0;
-      if (!needsLegacyRecovery) return;
-
       getDoc(doc(db, 'eventos', 'global')).then(async (oldSnap) => {
         if (!oldSnap.exists()) return;
         const legacy = normalizeVaultData(oldSnap.data());
+        const needsLegacyRecovery = !snap.exists()
+          || current.library.length === 0
+          || current.folders.length === 0
+          || current.library.length < legacy.library.length;
+        if (!needsLegacyRecovery) return;
         const mergedLibrary = mergeVaultLibraries(current.library, legacy.library);
         const mergedFolders = [...new Set([
           ...current.folders,
@@ -2613,16 +2613,24 @@ const ProyectorController = ({ user }) => {
           url,
           source: 'vault'
         };
-        const nuevaLib = [...multimediaLib, { 
-          url, 
-        type: uploaded.type || fileType, 
+        const newVaultItem = {
+          url,
+          type: uploaded.type || fileType,
           name: file.name,
           folder: currentFolder || 'root'
-        }];
+        };
 
-        await setDoc(doc(db, 'sistema', 'multimedia'), { 
-          multimediaLib: nuevaLib 
-        }, { merge: true });
+        await runTransaction(db, async (transaction) => {
+          const vaultRef = doc(db, 'sistema', 'multimedia');
+          const vaultSnap = await transaction.get(vaultRef);
+          const serverLibrary = vaultSnap.exists() && Array.isArray(vaultSnap.data()?.multimediaLib)
+            ? vaultSnap.data().multimediaLib.filter((item) => item && typeof item === 'object')
+            : [];
+          const alreadyExists = serverLibrary.some((item) => String(item?.url || '') === String(newVaultItem.url || ''));
+          transaction.set(vaultRef, {
+            multimediaLib: alreadyExists ? serverLibrary : [...serverLibrary, newVaultItem]
+          }, { merge: true });
+        });
 
         if (applyAsBackground) {
           rememberUndoSnapshot();
