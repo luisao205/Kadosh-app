@@ -112,6 +112,9 @@ const ProyectorController = ({ user }) => {
   const [showMobileControlsModal, setShowMobileControlsModal] = useState(false); // NEW STATE for mobile controls
   const [mobileActiveTab, setMobileActiveTab] = useState('media'); // 'media' | 'liveControls'
   const [uploadingFiles, setUploadingFiles] = useState([]); // [{id, name, type}]
+  // KADOSH_MULTIMEDIA_UPLOAD_REVIEW_V1
+  const [pendingVaultUploads, setPendingVaultUploads] = useState([]);
+  const [showVaultUploadReview, setShowVaultUploadReview] = useState(false);
   const [multimediaFolders, setMultimediaFolders] = useState([]); // ['Carpeta 1', 'Carpeta 2']
   const [currentFolder, setCurrentFolder] = useState(null); // null = root
   const [availableScreens, setAvailableScreens] = useState([]);
@@ -2659,77 +2662,182 @@ const ProyectorController = ({ user }) => {
     });
   };
 
+  const clearPendingVaultUploads = () => {
+    setPendingVaultUploads((current) => {
+      current.forEach((item) => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      });
+      return [];
+    });
+  };
+
+  const closeVaultUploadReview = () => {
+    if (isUploadingFondo) return;
+    clearPendingVaultUploads();
+    setShowVaultUploadReview(false);
+  };
+
+  const removePendingVaultUpload = (id) => {
+    if (isUploadingFondo) return;
+    setPendingVaultUploads((current) => {
+      const removed = current.find((item) => item.id === id);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      const next = current.filter((item) => item.id !== id);
+      if (!next.length) setShowVaultUploadReview(false);
+      return next;
+    });
+  };
+
+  const stageVaultUploadFiles = (event) => {
+    if (!canUploadMedia) {
+      notify('No tienes permiso para subir Multimedia.', { type: 'error' });
+      return;
+    }
+    const selected = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!selected.length) return;
+
+    const validFiles = selected.filter((file) => file?.type?.startsWith('image/') || file?.type?.startsWith('video/'));
+    const rejected = selected.length - validFiles.length;
+    if (!validFiles.length) {
+      notify('Selecciona imágenes o videos compatibles.', { type: 'error' });
+      return;
+    }
+
+    clearPendingVaultUploads();
+    const token = Date.now();
+    const staged = validFiles.map((file, index) => ({
+      id: `${token}-${index}-${file.name}`,
+      file,
+      name: file.name,
+      size: file.size,
+      type: file.type.startsWith('video/') ? 'video' : 'image',
+      previewUrl: URL.createObjectURL(file),
+    }));
+    setPendingVaultUploads(staged);
+    setShowVaultUploadReview(true);
+    if (rejected) notify(`${rejected} archivo${rejected === 1 ? '' : 's'} no compatible${rejected === 1 ? '' : 's'} ignorado${rejected === 1 ? '' : 's'}.`, { type: 'warning' });
+  };
+
+  const confirmVaultUploadReview = async () => {
+    if (!pendingVaultUploads.length || isUploadingFondo) return;
+    const files = pendingVaultUploads.map((item) => item.file);
+    try {
+      await handleUploadBackground(
+        { target: { files, value: '' } },
+        { applyAsBackground: false }
+      );
+      clearPendingVaultUploads();
+      setShowVaultUploadReview(false);
+    } catch (error) {
+      console.error('Error confirmando subida a Bóveda:', error);
+    }
+  };
+
+  // KADOSH_MULTIMEDIA_BATCH_UPLOAD_V1
   const handleUploadBackground = async (e, { applyAsBackground = false } = {}) => {
     if (!canUploadMedia) {
       notify('No tienes permiso para subir Multimedia.', { type: 'error' });
       return;
     }
-    const file = e.target.files[0];
-    if (!file) return;
-    
-    const uploadId = Date.now();
-    const fileType = file.type.startsWith('video') ? 'video' : 'image';
-    setUploadingFiles(prev => [...prev, { id: uploadId, name: file.name, type: fileType, folder: currentFolder || 'root' }]);
+
+    const incomingFiles = Array.from(e.target.files || []);
+    if (!incomingFiles.length) return;
+
+    // Un fondo solo puede ser uno. La Bóveda sí acepta selección múltiple.
+    const files = applyAsBackground ? incomingFiles.slice(0, 1) : incomingFiles;
+    const batchToken = Date.now();
+    const batchEntries = files.map((file, index) => ({
+      id: `${batchToken}-${index}-${file.name}`,
+      name: file.name,
+      type: file.type.startsWith('video') ? 'video' : 'image',
+      folder: currentFolder || 'root'
+    }));
+
+    setUploadingFiles(prev => [...prev, ...batchEntries]);
     setIsUploadingFondo(true);
 
+    let uploadedCount = 0;
+    let failedCount = 0;
+    let lastBackground = null;
+
     try {
-      const uploaded = await uploadToCloudinary(file, 'kadosh/projector-backgrounds');
-      const url = uploaded.url;
-      
-      if (url) {
-        const uploadedBackgroundMedia = {
-          title: file.name,
-          name: file.name,
-          type: uploaded.type || fileType,
-          url,
-          source: 'vault'
-        };
-        const newVaultItem = {
-          url,
-          type: uploaded.type || fileType,
-          name: file.name,
-          folder: currentFolder || 'root'
-        };
+      // Secuencial a propósito: evita saturar Cloudinary y cada alta se protege con transacción.
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const fileType = file.type.startsWith('video') ? 'video' : 'image';
+        try {
+          const uploaded = await uploadToCloudinary(file, 'kadosh/projector-backgrounds');
+          const url = String(uploaded?.url || '').trim();
+          if (!url) throw new Error('Cloudinary no devolvió URL.');
 
-        await runTransaction(db, async (transaction) => {
-          const vaultRef = doc(db, 'sistema', 'multimedia');
-          const vaultSnap = await transaction.get(vaultRef);
-          const serverLibrary = vaultSnap.exists() && Array.isArray(vaultSnap.data()?.multimediaLib)
-            ? vaultSnap.data().multimediaLib.filter((item) => item && typeof item === 'object')
-            : [];
-          const alreadyExists = serverLibrary.some((item) => String(item?.url || '') === String(newVaultItem.url || ''));
-          transaction.set(vaultRef, {
-            multimediaLib: alreadyExists ? serverLibrary : [...serverLibrary, newVaultItem]
-          }, { merge: true });
-        });
+          const uploadedBackgroundMedia = {
+            title: file.name,
+            name: file.name,
+            type: uploaded.type || fileType,
+            url,
+            source: 'vault'
+          };
+          const newVaultItem = {
+            url,
+            type: uploaded.type || fileType,
+            name: file.name,
+            folder: currentFolder || 'root'
+          };
 
-        if (applyAsBackground) {
-          rememberUndoSnapshot();
-          await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
-            proyectorFondo: url,
-            proyectorFondoMedia: uploadedBackgroundMedia,
-            projectorState: {
-              ...(evento?.projectorState || {}),
-              background: url,
-              backgroundMedia: uploadedBackgroundMedia,
-              updatedAt: Date.now()
-            }
-          }));
-        }
-        
-        // Si es una cancion real (no modo global), guardamos la referencia
-        if (applyAsBackground && eventoId !== 'global' && activeSongId && guardarEnCancion) {
-          await updateSongMetadata(activeSongId, { fondoUrl: url });
-          setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: url } : c));
+          await runTransaction(db, async (transaction) => {
+            const vaultRef = doc(db, 'sistema', 'multimedia');
+            const vaultSnap = await transaction.get(vaultRef);
+            const serverLibrary = vaultSnap.exists() && Array.isArray(vaultSnap.data()?.multimediaLib)
+              ? vaultSnap.data().multimediaLib.filter((item) => item && typeof item === 'object')
+              : [];
+            const alreadyExists = serverLibrary.some((item) => String(item?.url || '') === url);
+            transaction.set(vaultRef, {
+              multimediaLib: alreadyExists ? serverLibrary : [...serverLibrary, newVaultItem]
+            }, { merge: true });
+          });
+
+          uploadedCount += 1;
+          lastBackground = { url, media: uploadedBackgroundMedia };
+        } catch (fileError) {
+          failedCount += 1;
+          console.error(`Error subiendo ${file.name}`, fileError);
+        } finally {
+          const entryId = batchEntries[index]?.id;
+          setUploadingFiles(prev => prev.filter(item => item.id !== entryId));
         }
       }
-    } catch (err) {
-      console.error("Error subiendo fondo", err);
-      notify("Hubo un error subiendo el fondo. Inténtalo nuevamente.", { type: 'error' });
+
+      if (applyAsBackground && lastBackground) {
+        rememberUndoSnapshot();
+        await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
+          proyectorFondo: lastBackground.url,
+          proyectorFondoMedia: lastBackground.media,
+          projectorState: {
+            ...(evento?.projectorState || {}),
+            background: lastBackground.url,
+            backgroundMedia: lastBackground.media,
+            updatedAt: Date.now()
+          }
+        }));
+
+        if (eventoId !== 'global' && activeSongId && guardarEnCancion) {
+          await updateSongMetadata(activeSongId, { fondoUrl: lastBackground.url });
+          setCanciones(prev => prev.map(c => c.id === activeSongId ? { ...c, fondoUrl: lastBackground.url } : c));
+        }
+      }
+
+      if (!applyAsBackground && uploadedCount > 0) {
+        notify(`${uploadedCount} archivo${uploadedCount === 1 ? '' : 's'} subido${uploadedCount === 1 ? '' : 's'} a la Bóveda.${failedCount ? ` ${failedCount} fallaron.` : ''}`, {
+          type: failedCount ? 'warning' : 'success'
+        });
+      } else if (failedCount > 0 && uploadedCount === 0) {
+        notify('No se pudo subir ningún archivo. Inténtalo nuevamente.', { type: 'error' });
+      }
     } finally {
       setIsUploadingFondo(false);
-      setShowFondosModal(false);
-      setUploadingFiles(prev => prev.filter(f => f.id !== uploadId));
+      if (applyAsBackground) setShowFondosModal(false);
+      setUploadingFiles(prev => prev.filter(item => !batchEntries.some(entry => entry.id === item.id)));
       e.target.value = '';
     }
   };
@@ -2885,13 +2993,135 @@ const ProyectorController = ({ user }) => {
     );
   };
 
+  // KADOSH_MEDIA_PER_OUTPUT_CONTROLS_V1
+  const MEDIA_OUTPUT_CONTROL_META = {
+    projector: { label: 'Proyector', Icon: Monitor, audible: true },
+    singers: { label: 'Cantantes', Icon: Type, audible: false },
+    musicians: { label: 'Músicos', Icon: Music, audible: false },
+  };
+
+  const getActiveRoutedMediaOutputs = () => {
+    const outputs = evento?.mediaOutputs && typeof evento.mediaOutputs === 'object' ? evento.mediaOutputs : {};
+    return ['projector', 'singers', 'musicians']
+      .map((targetId) => ({ targetId, state: outputs[targetId] }))
+      .filter(({ state }) => state?.active && state?.url);
+  };
+
+  const updateMediaOutputTarget = async (targetId, mutate) => {
+    if (!canProjectMedia) {
+      notify('No tienes permiso para controlar Multimedia.', { type: 'error' });
+      return false;
+    }
+    try {
+      let changed = false;
+      await runTransaction(db, async (transaction) => {
+        const eventRef = doc(db, 'eventos', eventoId);
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+        const outputs = snapshot.data()?.mediaOutputs;
+        if (!outputs || typeof outputs !== 'object') return;
+        const existing = outputs[targetId];
+        if (!existing?.active || !existing?.url) return;
+
+        const now = Date.now();
+        const nextOutputs = { ...outputs };
+        const nextState = mutate(existing, now);
+        if (nextState == null) delete nextOutputs[targetId];
+        else nextOutputs[targetId] = {
+          ...nextState,
+          updatedAt: now,
+          updatedBy: user?.nombre || user?.email || 'Multimedia',
+        };
+        transaction.update(eventRef, { mediaOutputs: nextOutputs });
+        changed = true;
+      });
+      return changed;
+    } catch (error) {
+      console.error('Error controlando salida Multimedia:', error);
+      notify('No se pudo controlar esa salida Multimedia.', { type: 'error' });
+      return false;
+    }
+  };
+
+  const controlMediaOutputTarget = (targetId, updates) => updateMediaOutputTarget(
+    targetId,
+    (existing) => ({ ...existing, ...updates })
+  );
+
+  const seekMediaOutputTarget = (targetId, type) => updateMediaOutputTarget(
+    targetId,
+    (existing) => ({
+      ...existing,
+      seekRequest: { type, time: Date.now() },
+    })
+  );
+
+  const stopMediaOutputTarget = (targetId) => updateMediaOutputTarget(targetId, () => null);
+
+  const renderMediaOutputControls = ({ compact = false } = {}) => {
+    const activeOutputs = getActiveRoutedMediaOutputs();
+    if (!activeOutputs.length) return null;
+
+    return (
+      <div className={compact ? 'rounded-2xl border border-violet-400/15 bg-violet-500/5 p-2.5' : 'rounded-2xl border border-violet-400/20 bg-violet-500/8 p-3'}>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-[9px] font-black uppercase tracking-[0.18em] text-violet-200">Control por pantalla</p>
+          <span className="text-[9px] font-bold text-zinc-500">{activeOutputs.length} salida{activeOutputs.length === 1 ? '' : 's'} activa{activeOutputs.length === 1 ? '' : 's'}</span>
+        </div>
+        <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+          {activeOutputs.map(({ targetId, state }) => {
+            const meta = MEDIA_OUTPUT_CONTROL_META[targetId];
+            const Icon = meta.Icon;
+            const isVideo = state.type === 'video' || isVideoMediaUrl(state.url);
+            const isPlaying = state.playing !== false;
+            const volume = Number.isFinite(Number(state.volume)) ? Math.max(0, Math.min(1, Number(state.volume))) : 1;
+            return (
+              <div key={targetId} className="rounded-xl border border-white/10 bg-black/35 p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex items-center gap-2">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-200"><Icon size={13}/></span>
+                    <div className="min-w-0">
+                      <p className="text-[9px] font-black uppercase tracking-wide text-white">{meta.label}</p>
+                      <p className="truncate text-[9px] font-bold text-zinc-500">{state.name || 'Multimedia'}</p>
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => stopMediaOutputTarget(targetId)} className="rounded-lg border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-[8px] font-black uppercase text-red-200">Retirar</button>
+                </div>
+
+                {isVideo && (
+                  <>
+                    <div className="mt-2 grid grid-cols-4 gap-1.5">
+                      <button type="button" onClick={() => seekMediaOutputTarget(targetId, 'start')} className="min-h-9 rounded-lg border border-white/10 bg-white/5 text-zinc-300" title="Reiniciar"><RotateCcw size={14} className="mx-auto"/></button>
+                      <button type="button" onClick={() => seekMediaOutputTarget(targetId, 'back10')} className="min-h-9 rounded-lg border border-white/10 bg-white/5 text-zinc-300" title="-10 segundos"><Rewind size={14} className="mx-auto"/></button>
+                      <button type="button" onClick={() => controlMediaOutputTarget(targetId, { playing: !isPlaying })} className="min-h-9 rounded-lg bg-white text-zinc-950" title={isPlaying ? 'Pausar' : 'Reproducir'}>{isPlaying ? <Pause size={15} className="mx-auto" fill="currentColor"/> : <Play size={15} className="mx-auto" fill="currentColor"/>}</button>
+                      <button type="button" onClick={() => seekMediaOutputTarget(targetId, 'fwd10')} className="min-h-9 rounded-lg border border-white/10 bg-white/5 text-zinc-300" title="+10 segundos"><FastForward size={14} className="mx-auto"/></button>
+                    </div>
+                    {meta.audible ? (
+                      <label className="mt-2 flex items-center gap-2 text-[8px] font-black uppercase text-zinc-500">
+                        <Volume2 size={12}/>
+                        <input type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => controlMediaOutputTarget(targetId, { volume: Number(event.target.value) })} className="min-w-0 flex-1 accent-violet-500"/>
+                        <span className="w-7 text-right">{Math.round(volume * 100)}%</span>
+                      </label>
+                    ) : (
+                      <p className="mt-2 text-[8px] font-bold uppercase tracking-wide text-zinc-600">Audio silenciado en retornos</p>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const renderMediaStopActions = () => (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="grid grid-cols-2 gap-2 pt-1">
       <button
         type="button"
         onClick={stopSelectedMediaOutputs}
         disabled={!canProjectMedia || !hasMediaTargets(mediaTargets)}
-        className="min-h-10 rounded-xl border border-amber-400/25 bg-amber-500/10 px-2 text-[9px] font-black uppercase text-amber-100 disabled:opacity-35"
+        className="min-h-9 sm:min-h-9 sm:min-h-10 rounded-xl border border-amber-400/25 bg-amber-500/10 px-2 text-[9px] font-black uppercase text-amber-100 disabled:opacity-35"
       >
         Retirar seleccionadas
       </button>
@@ -2899,7 +3129,7 @@ const ProyectorController = ({ user }) => {
         type="button"
         onClick={stopAllMediaOutputs}
         disabled={!canProjectMedia}
-        className="min-h-10 rounded-xl border border-red-400/25 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200 disabled:opacity-35"
+        className="min-h-9 sm:min-h-9 sm:min-h-10 rounded-xl border border-red-400/25 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200 disabled:opacity-35"
       >
         Detener en todas
       </button>
@@ -3630,7 +3860,18 @@ const ProyectorController = ({ user }) => {
                 </div>
                 <div className="flex gap-3">
                   <button onClick={crearCarpeta} className="text-[10px] font-bold text-amber-500 hover:text-amber-400 flex items-center gap-1"><FolderPlus size={12}/> Nueva Carpeta</button>
-                  <button onClick={() => setShowFondosModal(true)} className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1"><Upload size={12}/> Subir Medios</button>
+                  {/* KADOSH_SAFE_VAULT_UPLOAD_V1: subir a Bóveda nunca modifica fondo de canción/proyección */}
+                  <label className={`text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer ${isUploadingFondo || !canUploadMedia ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <Upload size={12}/> Subir Medios
+                    <input
+                      type="file"
+                      accept="video/mp4, video/webm, image/jpeg, image/png, image/gif"
+                      multiple
+                      className="hidden"
+                      disabled={isUploadingFondo || !canUploadMedia}
+                      onChange={stageVaultUploadFiles}
+                    />
+                  </label>
                 </div>
               </div>
 
@@ -3968,7 +4209,7 @@ const ProyectorController = ({ user }) => {
           )}
 
           {/* Pre-visualización */}
-          <div className="min-h-[260px] border-b border-white/10 flex flex-col">
+          <div className={`border-b border-white/10 flex flex-col shrink-0 ${projectionSourceMode === 'media' ? 'min-h-[360px]' : 'min-h-[260px]'}`}>
             <div className="p-3 border-b border-white/10 bg-zinc-950/70">
               <h2 className="font-bold text-sm flex items-center gap-2 text-zinc-400"><Eye size={16}/> Pre-proyección</h2>
             </div>
@@ -4071,16 +4312,17 @@ const ProyectorController = ({ user }) => {
                 </button>
               )}
               {projectionSourceMode === 'media' && (
-                <div className="mt-4 space-y-3">
-                  {renderMediaTargetSelector()}
+                <div className="mt-3 space-y-2.5 pb-1">
+                  {renderMediaTargetSelector({ compact: true })}
                   <button
                     onClick={() => projectMedia(previewMedia)}
                     disabled={!canProjectMedia || !previewMedia || !hasMediaTargets(mediaTargets)}
-                    className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
+                    className="w-full py-3 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl font-black text-sm uppercase tracking-wide flex items-center justify-center gap-2 disabled:opacity-40 disabled:grayscale transition-all active:scale-95 shadow-lg shadow-violet-900/20"
                   >
                     <Monitor size={18} /> Proyectar en seleccionadas
                   </button>
                   {renderMediaStopActions()}
+                  {renderMediaOutputControls({ compact: true })}
                 </div>
               )}
               {projectionSourceMode === 'bible' && (
@@ -4621,6 +4863,7 @@ const ProyectorController = ({ user }) => {
         {projectionSourceMode === 'media' && (
           <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-40">
             {/* KADOSH_MOBILE_MEDIA_CONTROL_MAIN_V3 */}
+            {renderMediaOutputControls({ compact: true })}
             {renderMobileMediaTransportV3()}
 
             <div className="rounded-3xl border border-indigo-500/20 bg-indigo-500/10 p-4">
@@ -4742,7 +4985,7 @@ const ProyectorController = ({ user }) => {
                   <button onClick={crearCarpeta} className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-amber-600 px-2.5 py-2 text-[9px] font-black uppercase text-white"><FolderPlus size={13}/> Carpeta</button>
                   <label className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-violet-600 px-2.5 py-2 text-[9px] font-black uppercase text-white cursor-pointer">
                     <Upload size={13}/> Subir
-                    <input type="file" accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo || !canUploadMedia} onChange={handleUploadBackground} />
+                    <input type="file" multiple accept="video/mp4, video/webm, image/jpeg, image/png, image/gif" className="hidden" disabled={isUploadingFondo || !canUploadMedia} onChange={stageVaultUploadFiles} />
                   </label>
                 </div>
 
@@ -5021,6 +5264,58 @@ const ProyectorController = ({ user }) => {
       )}
 
       {/* Modal para Subir/Seleccionar Fondos */}
+      {/* KADOSH_MULTIMEDIA_UPLOAD_REVIEW_MODAL_V1 */}
+      {showVaultUploadReview && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/85 p-3 sm:p-5">
+          <div className="flex max-h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-violet-400/20 bg-zinc-950 shadow-2xl">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 p-4 sm:p-5">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-violet-300">Revisar antes de subir</p>
+                <h3 className="mt-1 text-lg font-black text-white">${pendingVaultUploads.length} archivo${pendingVaultUploads.length === 1 ? '' : 's'} seleccionado${pendingVaultUploads.length === 1 ? '' : 's'}</h3>
+                <p className="mt-1 text-xs font-bold text-zinc-500">Quita cualquier imagen o video incorrecto. Nada se sube hasta confirmar.</p>
+              </div>
+              <button type="button" disabled={isUploadingFondo} onClick={closeVaultUploadReview} className="rounded-xl border border-white/10 bg-white/5 p-2 text-zinc-400 hover:text-white disabled:opacity-40"><X size={18}/></button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                {pendingVaultUploads.map((item) => (
+                  <div key={item.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/35">
+                    <div className="relative aspect-video bg-black">
+                      {item.type === 'video' ? (
+                        <video src={item.previewUrl} controls muted playsInline preload="metadata" className="h-full w-full object-contain" />
+                      ) : (
+                        <img src={item.previewUrl} alt={item.name} className="h-full w-full object-contain" />
+                      )}
+                      <button
+                        type="button"
+                        disabled={isUploadingFondo}
+                        onClick={() => removePendingVaultUpload(item.id)}
+                        className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border border-red-300/25 bg-red-600/90 text-white shadow-lg disabled:opacity-40"
+                        title="Quitar de la subida"
+                      >
+                        <X size={15}/>
+                      </button>
+                    </div>
+                    <div className="p-2.5">
+                      <p className="truncate text-[10px] font-black text-white" title={item.name}>{item.name}</p>
+                      <p className="mt-1 text-[9px] font-bold uppercase text-zinc-600">{item.type === 'video' ? 'Video' : 'Imagen'} · {(item.size / (1024 * 1024)).toFixed(1)} MB</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-white/10 bg-zinc-950/95 p-4 sm:p-5">
+              <button type="button" disabled={isUploadingFondo} onClick={closeVaultUploadReview} className="min-h-12 rounded-xl border border-white/10 bg-white/5 text-xs font-black uppercase text-zinc-300 disabled:opacity-40">Cancelar</button>
+              <button type="button" disabled={isUploadingFondo || !pendingVaultUploads.length} onClick={confirmVaultUploadReview} className="min-h-12 rounded-xl bg-violet-600 text-xs font-black uppercase text-white shadow-lg shadow-violet-950/30 disabled:opacity-40">
+                {isUploadingFondo ? 'Subiendo…' : `Subir ${pendingVaultUploads.length} archivo${pendingVaultUploads.length === 1 ? '' : 's'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showFondosModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
           <div className="bg-zinc-900 rounded-3xl border border-zinc-800 p-6 max-w-md w-full shadow-2xl">
