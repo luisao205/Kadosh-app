@@ -261,8 +261,9 @@ const StageDisplayCantantes = ({ eventoIdOverride }) => {
       )}
 
       {media?.url && <InternalScreenMedia media={media} label="Multimedia en retorno de cantantes" />}
-      <QuickMessagePresentation eventData={evento} layerClassName="z-[75]" />
-      <InternalScreenBible eventData={evento} />
+      {/* KADOSH_TARGETED_BIBLE_POINT_SINGERS_V1 */}
+      {evento?.projectionTargets?.singers !== false && <QuickMessagePresentation eventData={evento} layerClassName="z-[75]" />}
+      {evento?.projectionTargets?.singers !== false && <InternalScreenBible eventData={evento} />}
       <InternalScreenPreaching eventData={evento} />
       <InternalScreenBlackout active={evento?.proyectorApagado === true} />
       <InternalScreenCanva state={evento?.canvaOutputs?.singers} label="Canva en retorno de cantantes" />

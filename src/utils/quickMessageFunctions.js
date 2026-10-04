@@ -5,9 +5,10 @@ const projectQuickMessageCallable = httpsCallable(functions, 'projectQuickMessag
 const clearQuickMessageProjectionCallable = httpsCallable(functions, 'clearQuickMessageProjection');
 const updateQuickMessageHistoryCallable = httpsCallable(functions, 'updateQuickMessageHistory');
 
-export const projectQuickMessage = async ({ eventoId, presentationType, segments, historyEntryId = null }) => {
+export const projectQuickMessage = async ({ eventoId, presentationType, segments, historyEntryId = null, targets = null }) => {
   const payload = { eventoId, presentationType, segments };
   if (historyEntryId) payload.historyEntryId = historyEntryId;
+  if (targets) payload.targets = targets;
   const result = await projectQuickMessageCallable(payload);
   return result.data;
 };

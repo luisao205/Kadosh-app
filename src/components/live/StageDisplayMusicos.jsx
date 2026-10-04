@@ -348,8 +348,9 @@ const StageDisplayMusicos = ({ eventoIdOverride, defaultViewMode = 'musico', sto
       )}
 
       {media?.url && <InternalScreenMedia media={media} label="Multimedia en retorno de musicos" opacity={previewOpacity} />}
-      <QuickMessagePresentation eventData={evento} layerClassName="z-[75]" />
-      <InternalScreenBible eventData={evento} />
+      {/* KADOSH_TARGETED_BIBLE_POINT_MUSICIANS_V1 */}
+      {evento?.projectionTargets?.musicians !== false && <QuickMessagePresentation eventData={evento} layerClassName="z-[75]" />}
+      {evento?.projectionTargets?.musicians !== false && <InternalScreenBible eventData={evento} />}
       <InternalScreenPreaching eventData={evento} />
       <InternalScreenBlackout active={evento?.proyectorApagado === true} />
       <InternalScreenCanva state={evento?.canvaOutputs?.musicians} label="Canva en retorno de músicos" />

@@ -39,7 +39,7 @@ service cloud.firestore {
           'setlists.view', 'setlists.addSong', 'setlists.removeSong', 'setlists.reorder', 'setlists.control', 'setlists.manage',
           'songs.view', 'songs.create', 'songs.editLyrics', 'songs.editChords', 'songs.editMetadata', 'songs.manageMedia', 'songs.archive', 'songs.delete',
           'rehearsal.access', 'rehearsal.control', 'bible.view', 'bible.project', 'bible.quickProjection',
-          'sermons.view', 'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
+          'sermons.view', 'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.delete', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
           'canva.view', 'canva.create', 'canva.edit', 'canva.delete', 'canva.project', 'profile.editOwn'
         ])
         || (roleKey == 'multimedia' && permission in [
@@ -48,7 +48,7 @@ service cloud.firestore {
           'songs.view', 'songs.create', 'songs.editLyrics', 'songs.editChords', 'songs.editMetadata', 'songs.manageMedia', 'songs.archive',
           'rehearsal.access', 'rehearsal.control', 'bible.view', 'bible.project', 'bible.quickProjection',
           'sermons.view', 'sermons.create', 'sermons.edit', 'sermons.createPoint', 'sermons.createBiblePassage', 'sermons.project',
-          'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
+          'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.delete', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
           'canva.view', 'canva.create', 'canva.edit', 'canva.delete', 'canva.project', 'profile.editOwn'
         ])
         || (roleKey == 'musico' && permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view'])
@@ -236,7 +236,7 @@ service cloud.firestore {
     function bibleProjectionFields() {
       return ['projectorState', 'proyectorSlide', 'proyectorMedia', 'proyectorLogo', 'proyectorApagado',
         'proyectorFondo', 'proyectorFondoMedia', 'proyectorSongId', 'proyectorSlideIndex',
-        'proyectorNextSlide', 'proyectorNextSong', 'proyectorOffset', 'liveState', 'currentSongId', 'canvaOutputs', 'mediaOutputs', 'announcementState'];
+        'proyectorNextSlide', 'proyectorNextSong', 'proyectorOffset', 'liveState', 'currentSongId', 'canvaOutputs', 'mediaOutputs', 'announcementState', 'projectionTargets'];
     }
 
     function biblePreviousProjectionIsTrusted() {
@@ -584,7 +584,8 @@ service cloud.firestore {
         'outputs',
         'canvaOutputs',
         'mediaOutputs',
-        'announcementState'
+        'announcementState',
+        'projectionTargets'
       ];
     }
 
@@ -661,17 +662,31 @@ service cloud.firestore {
       return hasPermission('events.edit') && onlyEventKeys(adminEventFields());
     }
 
+    function validProjectionTargetsMap() {
+      let targets = request.resource.data.projectionTargets;
+      return targets is map
+        && targets.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && targets.keys().hasAll(['projector', 'singers', 'musicians'])
+        && targets.projector is bool
+        && targets.singers is bool
+        && targets.musicians is bool
+        && (targets.projector == true || targets.singers == true || targets.musicians == true);
+    }
+
     function canUpdateEventAsMedia() {
       return hasProjectionPermissionForRequestedState()
         && hasValidProjectionStateForPermission()
         && onlyEventKeys(projectorEventFields())
+        && (!changedEventKeys().hasAny(['projectionTargets']) || validProjectionTargetsMap())
         && (
           !changedEventKeys().hasAny(['canvaOutputs'])
           || (request.resource.data.canvaOutputs is map && request.resource.data.canvaOutputs.keys().size() == 0)
+          || (validCanvaOutputsMap() && canvaOutputsOnlyRemove())
         )
         && (
           !changedEventKeys().hasAny(['mediaOutputs'])
           || (request.resource.data.mediaOutputs is map && request.resource.data.mediaOutputs.keys().size() == 0)
+          || (validMediaOutputsMap() && mediaOutputsOnlyRemove())
         )
         && (
           !changedEventKeys().hasAny(['announcementState'])
@@ -753,14 +768,21 @@ service cloud.firestore {
         );
     }
 
+    // KADOSH_CANVA_OUTPUT_DESK_RULES_V1
     function validCanvaOutputState(state) {
       return state is map
-        && state.keys().hasOnly(['active', 'presentationId', 'title', 'sourceUrl', 'embedUrl', 'updatedAt', 'updatedBy'])
+        && state.keys().hasOnly([
+          'active', 'presentationId', 'title', 'sourceUrl', 'embedUrl',
+          'page', 'pageCount', 'updatedAt', 'updatedBy'
+        ])
         && state.active == true
         && state.presentationId is string
         && state.title is string
         && state.sourceUrl is string
         && state.embedUrl is string
+        && (!('page' in state) || (state.page is int && state.page >= 1 && state.page <= 500))
+        && (!('pageCount' in state) || (state.pageCount is int && state.pageCount >= 0 && state.pageCount <= 500))
+        && (!('page' in state) || !('pageCount' in state) || state.pageCount == 0 || state.page <= state.pageCount)
         && state.updatedAt is int
         && state.updatedBy is string;
     }
@@ -774,18 +796,31 @@ service cloud.firestore {
         && (!('musicians' in outputs) || validCanvaOutputState(outputs.musicians));
     }
 
+    function validCanvaPageMemory() {
+      let memory = request.resource.data.canvaPageMemory;
+      return memory is map
+        && memory.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && (!('projector' in memory) || (memory.projector is map && memory.projector.size() <= 500))
+        && (!('singers' in memory) || (memory.singers is map && memory.singers.size() <= 500))
+        && (!('musicians' in memory) || (memory.musicians is map && memory.musicians.size() <= 500));
+    }
+
     function canUpdateEventCanvaOutputs() {
       return hasPermission('canva.project')
-        && onlyEventKeys(['canvaOutputs', 'mediaOutputs'])
+        && onlyEventKeys(['canvaOutputs', 'mediaOutputs', 'canvaPageMemory'])
         && validCanvaOutputsMap()
         && (
           !changedEventKeys().hasAny(['mediaOutputs'])
           || (validMediaOutputsMap() && mediaOutputsOnlyRemove())
+        )
+        && (
+          !changedEventKeys().hasAny(['canvaPageMemory'])
+          || validCanvaPageMemory()
         );
     }
 
     function canUpdateEventBibleOutline() {
-      return hasPermission('events.edit')
+      return (hasPermission('bible.project') || hasPermission('events.edit'))
         && onlyEventKeys(['bibleOutline'])
         && request.resource.data.bibleOutline is map
         && request.resource.data.bibleOutline.keys().hasOnly(['items', 'updatedAt'])
@@ -867,13 +902,70 @@ service cloud.firestore {
       return signedIn() && onlyEventKeys(sharedEventParticipationFields());
     }
 
+    // KADOSH_SONG_PROJECTION_RULES_V1
+    function canUpdateEventLyricsProjection() {
+      return hasPermission('multimedia.project')
+        && request.resource.data.projectorState is map
+        && request.resource.data.projectorState.type == 'lyrics'
+        && request.resource.data.projectorState.contentType == 'lyrics'
+        && request.resource.data.projectorState.media == null
+        && request.resource.data.proyectorMedia == null
+        && onlyEventKeys(projectorEventFields())
+        && (
+          !changedEventKeys().hasAny(['canvaOutputs'])
+          || (request.resource.data.canvaOutputs is map && canvaOutputsOnlyRemove())
+        )
+        && (
+          !changedEventKeys().hasAny(['mediaOutputs'])
+          || (request.resource.data.mediaOutputs is map && mediaOutputsOnlyRemove())
+        )
+        && (
+          !changedEventKeys().hasAny(['announcementState'])
+          || validInactiveAnnouncementState()
+        );
+    }
+
+    // KADOSH_BIBLE_PROJECTION_RULES_V1
+    function canUpdateEventBibleProjection() {
+      return hasPermission('bible.project')
+        && request.resource.data.projectorState is map
+        && request.resource.data.projectorState.type == 'preaching'
+        && request.resource.data.projectorState.contentType == 'bible'
+        && request.resource.data.projectorState.media == null
+        && request.resource.data.proyectorMedia == null
+        && request.resource.data.proyectorFondo == null
+        && request.resource.data.proyectorFondoMedia == null
+        && onlyEventKeys(bibleProjectionFields())
+        && biblePreviousProjectionIsTrusted()
+        && (
+          !changedEventKeys().hasAny(['canvaOutputs'])
+          || (request.resource.data.canvaOutputs is map && canvaOutputsOnlyRemove())
+        )
+        && (
+          !changedEventKeys().hasAny(['mediaOutputs'])
+          || (request.resource.data.mediaOutputs is map && mediaOutputsOnlyRemove())
+        )
+        && (
+          !changedEventKeys().hasAny(['announcementState'])
+          || validInactiveAnnouncementState()
+        )
+        && (
+          !changedEventKeys().hasAny(['projectionTargets'])
+          || validProjectionTargetsMap()
+        );
+    }
+
     function canUpdateEventProjection(eventoId) {
       let state = request.resource.data.projectorState;
-      return state is map && state.type == 'announcement'
-        ? canUpdateEventAnnouncement()
-        : (state is map && 'sourceActor' in state && state.sourceActor == 'pastor'
-          ? canUpdateEventAsPastorProjection(eventoId)
-          : canUpdateEventAsMedia());
+      return state is map && state.type == 'lyrics' && state.contentType == 'lyrics'
+        ? canUpdateEventLyricsProjection()
+        : (state is map && state.type == 'preaching' && state.contentType == 'bible'
+          ? canUpdateEventBibleProjection()
+          : (state is map && state.type == 'announcement'
+          ? canUpdateEventAnnouncement()
+            : (state is map && 'sourceActor' in state && state.sourceActor == 'pastor'
+              ? canUpdateEventAsPastorProjection(eventoId)
+              : canUpdateEventAsMedia())));
     }
 
     function canUpdateEvent(eventoId) {
@@ -995,9 +1087,11 @@ service cloud.firestore {
 
     function validCanvaPresentationDocument() {
       return request.resource.data.keys().hasOnly([
-          'title', 'inputUrl', 'sourceUrl', 'embedUrl', 'pageCount', 'defaultTargets',
+          'title', 'inputUrl', 'sourceUrl', 'embedUrl', 'pageCount', 'defaultTargets', 'setlistId',
           'createdAt', 'createdBy', 'updatedAt', 'updatedBy'
         ])
+        && request.resource.data.setlistId is string
+        && request.resource.data.setlistId.size() > 0
         && request.resource.data.title is string
         && request.resource.data.title != ''
         && request.resource.data.inputUrl is string

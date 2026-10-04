@@ -27,8 +27,9 @@ const PERMISSION_CATALOG = new Set([
   "setlists.view", "setlists.addSong", "setlists.removeSong", "setlists.reorder", "setlists.control", "setlists.manage",
   "songs.view", "songs.create", "songs.editLyrics", "songs.editChords", "songs.editMetadata", "songs.manageMedia", "songs.archive", "songs.delete",
   "rehearsal.access", "rehearsal.control", "bible.view", "bible.project", "bible.quickProjection",
-  "sermons.view", "sermons.create", "sermons.edit", "sermons.delete", "sermons.project",
+  "sermons.view", "sermons.create", "sermons.edit", "sermons.createPoint", "sermons.createBiblePassage", "sermons.delete", "sermons.project",
   "multimedia.libraryView", "multimedia.upload", "multimedia.edit", "multimedia.delete", "multimedia.centralAccess", "multimedia.controlOutputs", "multimedia.project",
+  "canva.view", "canva.create", "canva.edit", "canva.delete", "canva.project",
   "announcements.view", "announcements.create", "announcements.edit", "announcements.delete", "announcements.project",
   "team.view", "team.edit", "team.manageRoles", "team.managePermissions",
   "devotionals.view", "devotionals.manage", "devotionals.confirm", "profile.editOwn"
@@ -153,15 +154,32 @@ const assertQuickMessageHistoryEntryId = (value, { optional = false } = {}) => {
   return value.trim();
 };
 
+const normalizeProjectionTargets = (value) => {
+  const source = isPlainObject(value) ? value : { projector: true, singers: true, musicians: true };
+  const targets = {
+    projector: source.projector === true,
+    singers: source.singers === true,
+    musicians: source.musicians === true
+  };
+  if (!targets.projector && !targets.singers && !targets.musicians) {
+    throw new functions.https.HttpsError("invalid-argument", "Selecciona al menos una pantalla.");
+  }
+  return targets;
+};
+
 const assertQuickMessagePayload = (data) => {
   const payload = isPlainObject(data) ? { ...data } : data;
   const historyEntryId = isPlainObject(payload) && Object.prototype.hasOwnProperty.call(payload, "historyEntryId")
     ? assertQuickMessageHistoryEntryId(payload.historyEntryId, { optional: true })
     : null;
-  if (isPlainObject(payload)) delete payload.historyEntryId;
+  const targets = normalizeProjectionTargets(isPlainObject(payload) ? payload.targets : null);
+  if (isPlainObject(payload)) {
+    delete payload.historyEntryId;
+    delete payload.targets;
+  }
 
   try {
-    return { ...validateQuickMessagePayload(payload), historyEntryId };
+    return { ...validateQuickMessagePayload(payload), historyEntryId, targets };
   } catch (error) {
     throw new functions.https.HttpsError("invalid-argument", error.message);
   }
@@ -477,7 +495,15 @@ exports.projectQuickMessage = functions.https.onCall(async (data, context) => {
     if (!eventSnap.exists) throw new functions.https.HttpsError("not-found", "El evento ya no esta disponible.");
     const now = Date.now();
     const projectionActionId = `quick-${now}-${randomUUID()}`;
-    const previousProjectionFields = captureQuickMessagePreviousProjection(eventSnap.data() || {});
+    const currentEventData = eventSnap.data() || {};
+    const previousProjectionFields = captureQuickMessagePreviousProjection(currentEventData);
+    const nextCanvaOutputs = isPlainObject(currentEventData.canvaOutputs) ? { ...currentEventData.canvaOutputs } : {};
+    const nextMediaOutputs = isPlainObject(currentEventData.mediaOutputs) ? { ...currentEventData.mediaOutputs } : {};
+    ['projector', 'singers', 'musicians'].forEach((targetId) => {
+      if (!message.targets[targetId]) return;
+      delete nextCanvaOutputs[targetId];
+      delete nextMediaOutputs[targetId];
+    });
     const actorName = actor.user.nombre || actor.user.email || "Multimedia";
     const quickMessageHistory = appendQuickMessageHistory(
       eventSnap.get("quickMessageHistory"),
@@ -486,6 +512,9 @@ exports.projectQuickMessage = functions.https.onCall(async (data, context) => {
       message.historyEntryId
     );
     transaction.update(eventRef, {
+      canvaOutputs: nextCanvaOutputs,
+      mediaOutputs: nextMediaOutputs,
+      projectionTargets: message.targets,
       announcementState: buildInactiveAnnouncementState(now),
       projectorState: {
         type: "preaching", contentType: "quickMessage", preachingType: "quickMessage",

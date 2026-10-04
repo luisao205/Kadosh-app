@@ -171,10 +171,21 @@ const ProyectorController = ({ user }) => {
   const [selectedCanvaId, setSelectedCanvaId] = useState('');
   const [canvaTargets, setCanvaTargets] = useState({ projector: true, singers: false, musicians: false });
   const [mediaTargets, setMediaTargets] = useState({ projector: true, singers: false, musicians: false });
+  // KADOSH_CONTENT_OUTPUT_TARGETS_V1
+  const [contentTargets, setContentTargets] = useState({ projector: true, singers: true, musicians: true });
+  const [showMobileContentTargets, setShowMobileContentTargets] = useState(false);
   const [isSavingCanva, setIsSavingCanva] = useState(false);
   const [canvaPage, setCanvaPage] = useState(1);
   const [canvaPageCount, setCanvaPageCount] = useState(0);
   const [canvaPageWindowStart, setCanvaPageWindowStart] = useState(1);
+  // KADOSH_CANVA_OUTPUT_DESK_V1
+  const [canvaControlTarget, setCanvaControlTarget] = useState('projector');
+  // KADOSH_CANVA_PAGE_SYNC_TOGGLE_V1
+  const [canvaPageSyncMode, setCanvaPageSyncMode] = useState(false);
+  // KADOSH_CANVA_RESPONSIVE_WORKSPACE_V1
+  const [showMobileCanvaEditor, setShowMobileCanvaEditor] = useState(false);
+  const [showMobileCanvaPreview, setShowMobileCanvaPreview] = useState(false);
+  const [showMobileCanvaPages, setShowMobileCanvaPages] = useState(false);
   const [showScreensMenu, setShowScreensMenu] = useState(false);
   const [screensMenuPosition, setScreensMenuPosition] = useState(null);
   const screensMenuButtonRef = useRef(null);
@@ -233,12 +244,13 @@ const ProyectorController = ({ user }) => {
 
     const libraryQuery = query(collection(db, 'canvaPresentations'), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(libraryQuery, (snapshot) => {
-      setCanvaLibrary(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
+      const presentations = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      setCanvaLibrary(presentations.filter((item) => item.setlistId === eventoId));
     }, (error) => {
-      console.error('Error leyendo biblioteca Canva:', error);
+      console.error('Error leyendo biblioteca Canva del setlist:', error);
     });
     return () => unsubscribe();
-  }, [canAccessCanva]);
+  }, [canAccessCanva, eventoId]);
 
   const openControllerScreen = (path) => {
     setShowScreensMenu(false);
@@ -330,22 +342,76 @@ const ProyectorController = ({ user }) => {
     setCanvaPageWindowStart(1);
   };
 
-  const selectCanvaPresentation = (item) => {
+  const selectCanvaPresentation = (item, targetId = canvaControlTarget, pageOverride = null) => {
+    if (!item) return;
+    const fallbackPage = pageOverride == null
+      ? readRememberedCanvaPage(evento, targetId, item.id, item.sourceUrl || item.inputUrl || item.embedUrl || '', 1)
+      : Math.max(1, Math.floor(Number(pageOverride) || 1));
+    const safePageCount = Number(item.pageCount) >= 1
+      ? Math.max(1, Math.min(500, Math.floor(Number(item.pageCount))))
+      : 0;
+    const restoredPage = safePageCount ? Math.min(safePageCount, fallbackPage) : fallbackPage;
+
     setSelectedCanvaId(item.id);
     setCanvaDraft({
       title: item.title || 'Presentación Canva',
       url: item.inputUrl || item.sourceUrl || '',
     });
-    setCanvaPreviewUrl(item.embedUrl || '');
+    setCanvaPreviewUrl(withCanvaPage(item.embedUrl || '', restoredPage));
     setCanvaUrlError('');
-    setCanvaPage(1);
-    setCanvaPageCount(Number(item.pageCount) >= 1 ? Math.max(1, Math.min(500, Math.floor(Number(item.pageCount)))) : 0);
-    setCanvaPageWindowStart(1);
+    setCanvaPage(restoredPage);
+    setCanvaPageCount(safePageCount);
+    setCanvaPageWindowStart((Math.floor((restoredPage - 1) / 10) * 10) + 1);
     setCanvaTargets({
       projector: item.defaultTargets?.projector === true,
       singers: item.defaultTargets?.singers === true,
       musicians: item.defaultTargets?.musicians === true,
     });
+  };
+
+  const openMobileCanvaCreate = () => {
+    newCanvaPresentation();
+    setShowMobileCanvaPreview(false);
+    setShowMobileCanvaPages(false);
+    setShowMobileCanvaEditor(true);
+  };
+
+  const openMobileCanvaEdit = (item) => {
+    selectCanvaPresentation(item);
+    setShowMobileCanvaPreview(false);
+    setShowMobileCanvaPages(false);
+    setShowMobileCanvaEditor(true);
+  };
+
+  // KADOSH_CANVA_MULTI_OUTPUT_MOBILE_V1
+  const openMobileCanvaProjectTargets = (item) => {
+    if (!item?.id || !canProjectCanva) return;
+    selectCanvaPresentation(item);
+    setCanvaUrlError('');
+    setShowMobileCanvaPreview(false);
+    setShowMobileCanvaPages(false);
+    setShowMobileCanvaEditor(true);
+  };
+
+  const closeMobileCanvaEditor = () => {
+    setShowMobileCanvaPreview(false);
+    setShowMobileCanvaEditor(false);
+  };
+
+  // KADOSH_CANVA_MOBILE_CLOSE_AFTER_PROJECT_V1
+  const projectCanvaAndCloseMobile = async () => {
+    const projected = await projectCanva();
+    if (!projected) return;
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+      setShowMobileCanvaPreview(false);
+      setShowMobileCanvaPages(true);
+      setShowMobileCanvaEditor(false);
+    }
+  };
+
+  const openExplicitMobileCanvaPreview = async () => {
+    const previewUrl = await prepareCanvaPreview();
+    if (previewUrl) setShowMobileCanvaPreview(true);
   };
 
   const saveCanvaPresentation = async () => {
@@ -384,6 +450,7 @@ const ProyectorController = ({ user }) => {
         sourceUrl: resolved.sourceUrl,
         embedUrl: resolved.embedUrl,
         pageCount: Math.max(1, Math.min(500, Math.floor(Number(canvaPageCount) || 1))),
+        setlistId: eventoId,
         defaultTargets: {
           projector: canvaTargets.projector === true,
           singers: canvaTargets.singers === true,
@@ -445,6 +512,41 @@ const ProyectorController = ({ user }) => {
     }
   };
 
+  const getCanvaPageFromUrl = (value, fallback = 1) => {
+    try {
+      const hash = String(new URL(String(value || '')).hash || '').replace(/^#/, '');
+      const parsed = Math.floor(Number(hash));
+      return Number.isFinite(parsed) && parsed >= 1 ? parsed : Math.max(1, Math.floor(Number(fallback) || 1));
+    } catch {
+      const hash = String(value || '').split('#')[1] || '';
+      const parsed = Math.floor(Number(hash));
+      return Number.isFinite(parsed) && parsed >= 1 ? parsed : Math.max(1, Math.floor(Number(fallback) || 1));
+    }
+  };
+
+  const getCanvaMemoryKey = (presentationId = '', sourceUrl = '') => {
+    const safeId = String(presentationId || '').trim();
+    if (safeId) return 'id:' + safeId;
+    const safeSource = stripCanvaPageHash(sourceUrl || '').trim();
+    return safeSource ? 'url:' + safeSource : '';
+  };
+
+  const readRememberedCanvaPage = (eventData, targetId, presentationId, sourceUrl, fallback = 1) => {
+    const key = getCanvaMemoryKey(presentationId, sourceUrl);
+    const stored = key ? eventData?.canvaPageMemory?.[targetId]?.[key] : null;
+    const parsed = Math.floor(Number(stored));
+    return Number.isFinite(parsed) && parsed >= 1 ? parsed : Math.max(1, Math.floor(Number(fallback) || 1));
+  };
+
+  const cloneCanvaPageMemory = (value) => {
+    const current = value && typeof value === 'object' ? value : {};
+    return {
+      projector: { ...(current.projector || {}) },
+      singers: { ...(current.singers || {}) },
+      musicians: { ...(current.musicians || {}) },
+    };
+  };
+
   const normalizeCanvaTargets = (targets) => ({
     projector: targets?.projector === true,
     singers: targets?.singers === true,
@@ -460,6 +562,95 @@ const ProyectorController = ({ user }) => {
   });
 
   const hasMediaTargets = (targets) => Object.values(normalizeMediaTargets(targets)).some(Boolean);
+
+  const normalizeContentTargets = (targets = {}) => ({
+    projector: targets?.projector === true,
+    singers: targets?.singers === true,
+    musicians: targets?.musicians === true,
+  });
+
+  const hasContentTargets = (targets) => Object.values(normalizeContentTargets(targets)).some(Boolean);
+
+  const renderContentTargetSelector = () => {
+    const safeTargets = normalizeContentTargets(contentTargets);
+    const allSelected = safeTargets.projector && safeTargets.singers && safeTargets.musicians;
+    const options = [
+      ['projector', 'Proyector', Monitor],
+      ['singers', 'Cantantes', Type],
+      ['musicians', 'Músicos', Music],
+    ];
+    return (
+      <div className="mb-3 rounded-2xl border border-blue-400/20 bg-blue-500/[0.07] p-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-[0.2em] text-blue-200">Destino Biblia / Puntos</p>
+            <p className="mt-0.5 text-[9px] font-bold text-zinc-500">Solo reemplaza el contenido de las pantallas seleccionadas.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setContentTargets({ projector: true, singers: true, musicians: true })}
+            className={'shrink-0 rounded-xl border px-3 py-2 text-[9px] font-black uppercase ' + (allSelected ? 'border-blue-200 bg-blue-500 text-white' : 'border-white/10 bg-black/20 text-zinc-300')}
+          >
+            Todas
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {options.map(([targetId, label, Icon]) => {
+            const active = safeTargets[targetId];
+            return (
+              <button
+                key={'content-target-' + targetId}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setContentTargets((current) => ({ ...current, [targetId]: !current[targetId] }))}
+                className={'min-h-10 rounded-xl border px-2 py-2 text-[9px] font-black uppercase transition-all ' + (active ? 'border-blue-200 bg-blue-600 text-white' : 'border-white/10 bg-black/20 text-zinc-500')}
+              >
+                <span className="flex items-center justify-center gap-1.5"><Icon size={13} /> {label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMobileContentTargetSelector = () => {
+    const safeTargets = normalizeContentTargets(contentTargets);
+    const activeLabels = [
+      safeTargets.projector ? 'PROY' : '',
+      safeTargets.singers ? 'CANT' : '',
+      safeTargets.musicians ? 'MÚS' : '',
+    ].filter(Boolean);
+    const allSelected = activeLabels.length === 3;
+    return (
+      <div className="mb-3 rounded-2xl border border-blue-400/20 bg-blue-500/[0.07] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-blue-200">Destino Biblia / Puntos</p>
+            <p className="mt-1 truncate text-[9px] font-bold text-zinc-500">{allSelected ? 'TODAS' : (activeLabels.join(' · ') || 'NINGUNA')}</p>
+          </div>
+          <button type="button" onClick={() => setShowMobileContentTargets((current) => !current)} className="shrink-0 rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[9px] font-black uppercase text-zinc-200">
+            {showMobileContentTargets ? 'Cerrar' : 'Cambiar'}
+          </button>
+        </div>
+        {showMobileContentTargets && (
+          <div className="mt-3 border-t border-white/10 pt-3">
+            <div className="grid grid-cols-3 gap-2">
+              {[['projector', 'Proyector', Monitor], ['singers', 'Cantantes', Type], ['musicians', 'Músicos', Music]].map(([targetId, label, Icon]) => {
+                const active = safeTargets[targetId];
+                return (
+                  <button key={'mobile-content-' + targetId} type="button" aria-pressed={active} onClick={() => setContentTargets((current) => ({ ...current, [targetId]: !current[targetId] }))} className={'min-h-11 rounded-xl border px-1 text-[8px] font-black uppercase ' + (active ? 'border-blue-200 bg-blue-600 text-white' : 'border-white/10 bg-black/20 text-zinc-500')}>
+                    <Icon size={13} className="mx-auto mb-1" />{label}
+                  </button>
+                );
+              })}
+            </div>
+            <button type="button" onClick={() => setContentTargets({ projector: true, singers: true, musicians: true })} className={'mt-2 min-h-10 w-full rounded-xl border text-[9px] font-black uppercase ' + (allSelected ? 'border-blue-200 bg-blue-500 text-white' : 'border-white/10 bg-black/20 text-zinc-300')}>Todas</button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const getMediaRouteKey = (media = {}) => String(
     media?.mediaKey || media?.mediaId || media?.id || media?.url || ''
@@ -515,25 +706,16 @@ const ProyectorController = ({ user }) => {
     }));
   };
 
-  const applyCanvaTargets = async ({ resolved, title, presentationId = '', targets, page = 1 }) => {
+  const applyCanvaTargets = async ({ resolved, title, presentationId = '', targets, page = 1, pageCount = canvaPageCount }) => {
     const safeTargets = normalizeCanvaTargets(targets);
     if (!hasTargets(safeTargets)) throw new Error('Selecciona al menos un destino.');
 
-    // Compatibilidad: retirar el Canva global de la primera implementación para que
-    // no siga cubriendo el Proyector cuando ahora usamos salidas independientes.
     await clearLegacyCanvaProjection();
 
     const eventRef = doc(db, 'eventos', eventoId);
-    const now = Date.now();
-    const outputState = {
-      active: true,
-      presentationId: presentationId || '',
-      title,
-      sourceUrl: resolved.sourceUrl,
-      embedUrl: withCanvaPage(resolved.embedUrl, page),
-      updatedAt: now,
-      updatedBy: user?.nombre || user?.email || 'Multimedia',
-    };
+    const safeFallbackPage = Math.max(1, Math.floor(Number(page) || 1));
+    const safePageCount = Number(pageCount) >= 1 ? Math.max(1, Math.min(500, Math.floor(Number(pageCount)))) : 0;
+    const memoryKey = getCanvaMemoryKey(presentationId, resolved.sourceUrl || resolved.embedUrl || '');
 
     await runTransaction(db, async (transaction) => {
       const snapshot = await transaction.get(eventRef);
@@ -541,16 +723,29 @@ const ProyectorController = ({ user }) => {
       const data = snapshot.data();
       const nextOutputs = { ...(data.canvaOutputs || {}) };
       const nextMediaOutputs = { ...(data.mediaOutputs || {}) };
+      const nextMemory = cloneCanvaPageMemory(data.canvaPageMemory);
+      const now = Date.now();
 
       ['projector', 'singers', 'musicians'].forEach((targetId) => {
         if (safeTargets[targetId]) {
-          nextOutputs[targetId] = outputState;
+          const remembered = readRememberedCanvaPage(data, targetId, presentationId, resolved.sourceUrl || resolved.embedUrl || '', safeFallbackPage);
+          const targetPage = safePageCount ? Math.min(safePageCount, remembered) : remembered;
+          nextOutputs[targetId] = {
+            active: true,
+            presentationId: presentationId || '',
+            title,
+            sourceUrl: resolved.sourceUrl,
+            embedUrl: withCanvaPage(resolved.embedUrl, targetPage),
+            page: targetPage,
+            pageCount: safePageCount,
+            updatedAt: now,
+            updatedBy: user?.nombre || user?.email || 'Multimedia',
+          };
+          if (memoryKey) nextMemory[targetId][memoryKey] = targetPage;
           delete nextMediaOutputs[targetId];
           return;
         }
 
-        // Al cambiar destinos de ESTA misma presentación, retirarla de las pantallas
-        // que dejaron de estar seleccionadas, sin tocar otros Canva activos.
         const existing = nextOutputs[targetId];
         const samePresentation = presentationId
           ? existing?.presentationId === presentationId
@@ -558,7 +753,11 @@ const ProyectorController = ({ user }) => {
         if (samePresentation) delete nextOutputs[targetId];
       });
 
-      transaction.update(eventRef, { canvaOutputs: nextOutputs, mediaOutputs: nextMediaOutputs });
+      transaction.update(eventRef, {
+        canvaOutputs: nextOutputs,
+        mediaOutputs: nextMediaOutputs,
+        canvaPageMemory: nextMemory,
+      });
     });
   };
 
@@ -593,10 +792,12 @@ const ProyectorController = ({ user }) => {
         presentationId: selectedCanvaId || '',
         targets: canvaTargets,
         page: canvaPage,
+        pageCount: canvaPageCount,
       });
       setCanvaPreviewUrl(withCanvaPage(resolved.embedUrl, canvaPage));
       setCanvaUrlError('');
       notify('Canva enviado a las pantallas seleccionadas.', { type: 'success' });
+      return true;
     } catch (error) {
       console.error('Error proyectando Canva por destinos:', error);
       notify('No se pudo enviar Canva a las pantallas seleccionadas.', { type: 'error' });
@@ -605,6 +806,10 @@ const ProyectorController = ({ user }) => {
 
   const projectSavedCanva = async (item) => {
     if (!item?.id || !canProjectCanva) return;
+    if (item.setlistId !== eventoId) {
+      notify('Esta presentación Canva no pertenece a este setlist.', { type: 'error' });
+      return;
+    }
     const targets = normalizeCanvaTargets(item.defaultTargets);
     if (!hasTargets(targets)) {
       notify('Esta presentación no tiene destinos guardados.', { type: 'error' });
@@ -622,14 +827,14 @@ const ProyectorController = ({ user }) => {
       return;
     }
 
-    setSelectedCanvaId(item.id);
-    setCanvaDraft({ title: item.title || 'Presentación Canva', url: item.inputUrl || item.sourceUrl || '' });
-    setCanvaPreviewUrl(withCanvaPage(item.embedUrl || '', 1));
-    setCanvaTargets(targets);
-    setCanvaPage(1);
-    setCanvaPageCount(Number(item.pageCount) >= 1 ? Math.max(1, Math.min(500, Math.floor(Number(item.pageCount)))) : 0);
-    setCanvaPageWindowStart(1);
-    setCanvaUrlError('');
+    const pageForControlTarget = readRememberedCanvaPage(
+      evento,
+      canvaControlTarget,
+      item.id,
+      item.sourceUrl || item.inputUrl || item.embedUrl || '',
+      1
+    );
+    selectCanvaPresentation(item, canvaControlTarget, pageForControlTarget);
 
     try {
       await applyCanvaTargets({
@@ -637,61 +842,79 @@ const ProyectorController = ({ user }) => {
         title: item.title || 'Presentación Canva',
         presentationId: item.id,
         targets,
-        page: 1,
+        page: pageForControlTarget,
+        pageCount: item.pageCount,
       });
-      notify('"' + (item.title || 'Canva') + '" proyectado en sus destinos guardados.', { type: 'success' });
+      notify('"' + (item.title || 'Canva') + '" proyectado retomando sus páginas guardadas.', { type: 'success' });
     } catch (error) {
       console.error('Error proyectando Canva guardado:', error);
       notify('No se pudo proyectar la presentación guardada.', { type: 'error' });
     }
   };
 
-
-  const changeCanvaPage = async (requestedPage) => {
+  const changeCanvaPage = async (requestedPage, targetId = canvaControlTarget) => {
     const safePageCount = Math.max(1, Math.min(500, Math.floor(Number(canvaPageCount) || 1)));
     const nextPage = Math.max(1, Math.min(safePageCount, Math.floor(Number(requestedPage) || 1)));
     const currentPreviewBase = stripCanvaPageHash(canvaPreviewUrl);
+    setCanvaControlTarget(targetId);
     setCanvaPage(nextPage);
     setCanvaPageWindowStart((Math.floor((nextPage - 1) / 10) * 10) + 1);
     if (currentPreviewBase) setCanvaPreviewUrl(withCanvaPage(currentPreviewBase, nextPage));
 
     const eventRef = doc(db, 'eventos', eventoId);
     try {
-      let changedOutputs = 0;
       await runTransaction(db, async (transaction) => {
         const snapshot = await transaction.get(eventRef);
         if (!snapshot.exists()) throw new Error('El evento ya no existe.');
         const data = snapshot.data();
         const nextOutputs = { ...(data.canvaOutputs || {}) };
+        const nextMemory = cloneCanvaPageMemory(data.canvaPageMemory);
+        const anchorOutput = nextOutputs[targetId];
+        const anchorPresentationId = anchorOutput?.presentationId || selectedCanvaId || '';
+        const anchorSource = stripCanvaPageHash(anchorOutput?.sourceUrl || anchorOutput?.embedUrl || currentPreviewBase || canvaDraft.url || '');
         const now = Date.now();
 
-        ['projector', 'singers', 'musicians'].forEach((targetId) => {
-          const existing = nextOutputs[targetId];
-          if (!existing?.active || !existing?.embedUrl) return;
+        const isSameCanva = (output) => {
+          if (!output?.active || !output?.embedUrl) return false;
+          if (anchorPresentationId) return output.presentationId === anchorPresentationId;
+          const outputSource = stripCanvaPageHash(output.sourceUrl || output.embedUrl || '');
+          return Boolean(anchorSource) && outputSource === anchorSource;
+        };
 
-          const samePresentation = selectedCanvaId
-            ? existing.presentationId === selectedCanvaId
-            : Boolean(currentPreviewBase) && stripCanvaPageHash(existing.embedUrl) === currentPreviewBase;
-          if (!samePresentation) return;
+        const targetIds = canvaPageSyncMode
+          ? ['projector', 'singers', 'musicians'].filter((outputId) => isSameCanva(nextOutputs[outputId]))
+          : [targetId];
 
-          nextOutputs[targetId] = {
+        targetIds.forEach((outputId) => {
+          const existing = nextOutputs[outputId];
+          if (!isSameCanva(existing)) return;
+          const outputPageCount = Number(existing.pageCount) >= 1
+            ? Math.max(1, Math.min(500, Math.floor(Number(existing.pageCount))))
+            : safePageCount;
+          const outputPage = Math.min(outputPageCount, nextPage);
+          nextOutputs[outputId] = {
             ...existing,
-            embedUrl: withCanvaPage(existing.embedUrl, nextPage),
+            embedUrl: withCanvaPage(existing.embedUrl, outputPage),
+            page: outputPage,
+            pageCount: outputPageCount,
             updatedAt: now,
             updatedBy: user?.nombre || user?.email || 'Multimedia',
           };
-          changedOutputs += 1;
+          const memoryKey = getCanvaMemoryKey(
+            existing.presentationId || anchorPresentationId,
+            existing.sourceUrl || existing.embedUrl || anchorSource
+          );
+          if (memoryKey) nextMemory[outputId][memoryKey] = outputPage;
         });
 
-        if (changedOutputs > 0) transaction.update(eventRef, { canvaOutputs: nextOutputs });
+        transaction.update(eventRef, {
+          canvaOutputs: nextOutputs,
+          canvaPageMemory: nextMemory,
+        });
       });
-
-      if (changedOutputs > 0) {
-        notify('Canva sincronizado en página ' + nextPage + '.', { type: 'success' });
-      }
     } catch (error) {
-      console.error('Error sincronizando página Canva:', error);
-      notify('No se pudo sincronizar la página de Canva.', { type: 'error' });
+      console.error('Error cambiando página Canva:', error);
+      notify('No se pudo cambiar la página de Canva.', { type: 'error' });
     }
   };
 
@@ -706,6 +929,180 @@ const ProyectorController = ({ user }) => {
     { length: canvaPageBlockEnd - canvaSafeWindowStart + 1 },
     (_, index) => canvaSafeWindowStart + index
   );
+
+  const CANVA_OUTPUT_DESK_META = {
+    projector: { label: 'Proyector', Icon: Monitor },
+    singers: { label: 'Cantantes', Icon: Type },
+    musicians: { label: 'Músicos', Icon: Music },
+  };
+
+  const selectCanvaControlTarget = (targetId) => {
+    setCanvaControlTarget(targetId);
+    const liveOutput = evento?.canvaOutputs?.[targetId];
+    if (liveOutput?.active) {
+      const item = canvaLibrary.find((candidate) =>
+        (liveOutput.presentationId && candidate.id === liveOutput.presentationId)
+        || (!liveOutput.presentationId && stripCanvaPageHash(candidate.embedUrl || '') === stripCanvaPageHash(liveOutput.embedUrl || ''))
+      );
+      if (item) {
+        selectCanvaPresentation(item, targetId, liveOutput.page || getCanvaPageFromUrl(liveOutput.embedUrl, 1));
+        return;
+      }
+    }
+
+    const currentItem = canvaLibrary.find((candidate) => candidate.id === selectedCanvaId);
+    if (currentItem) selectCanvaPresentation(currentItem, targetId);
+  };
+
+  const stopCanvaOutputTarget = async (targetId) => {
+    if (!canProjectCanva) return;
+    try {
+      await runTransaction(db, async (transaction) => {
+        const eventRef = doc(db, 'eventos', eventoId);
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+        const nextOutputs = { ...(snapshot.data()?.canvaOutputs || {}) };
+        delete nextOutputs[targetId];
+        transaction.update(eventRef, { canvaOutputs: nextOutputs });
+      });
+    } catch (error) {
+      console.error('Error retirando Canva de salida:', error);
+      notify('No se pudo retirar Canva de esa pantalla.', { type: 'error' });
+    }
+  };
+
+  const renderCanvaOutputDesk = ({ compact = false } = {}) => {
+    const liveOutput = evento?.canvaOutputs?.[canvaControlTarget];
+    const activeItem = liveOutput?.presentationId
+      ? canvaLibrary.find((item) => item.id === liveOutput.presentationId)
+      : null;
+    const pageCount = Number(liveOutput?.pageCount) >= 1
+      ? Math.max(1, Math.floor(Number(liveOutput.pageCount)))
+      : Number(activeItem?.pageCount) >= 1
+        ? Math.max(1, Math.floor(Number(activeItem.pageCount)))
+        : 0;
+    const currentPage = liveOutput?.active
+      ? Math.max(1, Math.floor(Number(liveOutput.page) || getCanvaPageFromUrl(liveOutput.embedUrl, 1)))
+      : canvaPage;
+
+    return (
+      <div className={compact ? 'rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.06] p-3' : 'rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.06] p-4'}>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-[0.2em] text-cyan-300">Control por pantalla</p>
+            <p className="mt-1 text-[10px] font-bold text-zinc-500">Cada salida conserva su Canva y su página.</p>
+          {/* KADOSH_CANVA_PAGE_SYNC_TOGGLE_UI_V1 */}
+          <div className="mt-2 inline-flex rounded-xl border border-white/10 bg-black/25 p-1">
+            <button
+              type="button"
+              onClick={() => setCanvaPageSyncMode(false)}
+              className={'rounded-lg px-2.5 py-1.5 text-[8px] font-black uppercase transition-colors ' + (!canvaPageSyncMode ? 'bg-cyan-400 text-zinc-950' : 'text-zinc-500 hover:text-zinc-200')}
+            >
+              Individual
+            </button>
+            <button
+              type="button"
+              onClick={() => setCanvaPageSyncMode(true)}
+              className={'rounded-lg px-2.5 py-1.5 text-[8px] font-black uppercase transition-colors ' + (canvaPageSyncMode ? 'bg-violet-500 text-white' : 'text-zinc-500 hover:text-zinc-200')}
+            >
+              Sincronizar
+            </button>
+          </div>
+          <p className="mt-1 text-[8px] font-bold text-zinc-600">{canvaPageSyncMode ? 'Los cambios de página afectan solo las pantallas que muestran este mismo Canva.' : 'Los cambios de página afectan únicamente la pantalla seleccionada.'}</p>
+          </div>
+          {liveOutput?.active && <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2 py-1 text-[8px] font-black uppercase text-emerald-200">En vivo</span>}
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {Object.entries(CANVA_OUTPUT_DESK_META).map(([targetId, meta]) => {
+            const output = evento?.canvaOutputs?.[targetId];
+            const outputPage = output?.active ? Math.max(1, Math.floor(Number(output.page) || getCanvaPageFromUrl(output.embedUrl, 1))) : null;
+            const Icon = meta.Icon;
+            const selected = canvaControlTarget === targetId;
+            return (
+              <button
+                key={targetId}
+                type="button"
+                onClick={() => selectCanvaControlTarget(targetId)}
+                className={'min-w-0 rounded-xl border p-2 text-left transition-colors ' + (selected ? 'border-cyan-300/50 bg-cyan-400 text-zinc-950' : 'border-white/10 bg-black/30 text-zinc-300')}
+              >
+                <span className="flex items-center gap-1 text-[8px] font-black uppercase"><Icon size={11}/>{meta.label}</span>
+                <span className={'mt-1 block truncate text-[9px] font-black ' + (selected ? 'text-zinc-950' : 'text-white')}>{output?.active ? (output.title || 'Canva') : 'Libre'}</span>
+                <span className={'mt-0.5 block text-[8px] font-bold ' + (selected ? 'text-zinc-800' : 'text-zinc-600')}>{output?.active ? 'Página ' + outputPage : 'Sin Canva'}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {liveOutput?.active && (
+          <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-[10px] font-black text-white">{liveOutput.title || 'Presentación Canva'}</p>
+                <p className="mt-0.5 text-[8px] font-bold uppercase text-zinc-500">{CANVA_OUTPUT_DESK_META[canvaControlTarget].label} · Página {currentPage}{pageCount ? ' / ' + pageCount : ''}</p>
+              </div>
+              <button type="button" onClick={() => stopCanvaOutputTarget(canvaControlTarget)} className="shrink-0 rounded-lg border border-red-400/20 bg-red-500/10 px-2 py-1.5 text-[8px] font-black uppercase text-red-200">Retirar</button>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button type="button" disabled={currentPage <= 1} onClick={() => changeCanvaPage(currentPage - 1, canvaControlTarget)} className="min-h-10 rounded-xl border border-white/10 bg-white/5 text-[9px] font-black uppercase text-zinc-200 disabled:opacity-30">← Anterior</button>
+              <button type="button" disabled={pageCount > 0 && currentPage >= pageCount} onClick={() => changeCanvaPage(currentPage + 1, canvaControlTarget)} className="min-h-10 rounded-xl border border-cyan-400/20 bg-cyan-500/10 text-[9px] font-black uppercase text-cyan-100 disabled:opacity-30">Siguiente →</button>
+            </div>
+            {compact && pageCount > 0 && (
+              <div className="mt-3 border-t border-white/10 pt-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-[8px] font-black uppercase tracking-[0.16em] text-cyan-200">Páginas {canvaSafeWindowStart}-{canvaPageBlockEnd}</p>
+                  <span className="text-[8px] font-black text-zinc-500">{currentPage} / {pageCount}</span>
+                </div>
+                <div className="grid grid-cols-5 gap-2">
+                  {canvaVisiblePages.map((page) => (
+                    <button
+                      key={'output-page-' + page}
+                      type="button"
+                      onClick={() => changeCanvaPage(page, canvaControlTarget)}
+                      className={'min-h-10 rounded-xl border text-xs font-black ' + (currentPage === page ? 'border-cyan-200 bg-cyan-400 text-zinc-950' : 'border-white/10 bg-zinc-900 text-zinc-300')}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                </div>
+                {(canvaSafeWindowStart > 1 || canvaPageBlockEnd < pageCount) && (
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <button type="button" disabled={canvaSafeWindowStart <= 1} onClick={() => setCanvaPageWindowStart(Math.max(1, canvaSafeWindowStart - 10))} className="min-h-9 rounded-xl border border-white/10 bg-zinc-900 text-[8px] font-black uppercase text-zinc-300 disabled:opacity-30">← 10 páginas</button>
+                    <button type="button" disabled={canvaPageBlockEnd >= pageCount} onClick={() => setCanvaPageWindowStart(Math.min(canvaMaxWindowStart, canvaSafeWindowStart + 10))} className="min-h-9 rounded-xl border border-white/10 bg-zinc-900 text-[8px] font-black uppercase text-zinc-300 disabled:opacity-30">10 páginas →</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const stopCanvaOutput = async (targetId) => {
+    if (!canProjectCanva) {
+      notify('No tienes permiso para retirar Canva.', { type: 'error' });
+      return;
+    }
+    if (!['projector', 'singers', 'musicians'].includes(targetId)) return;
+
+    const outputLabels = { projector: 'Proyector', singers: 'Cantantes', musicians: 'Músicos' };
+    try {
+      if (targetId === 'projector') await clearLegacyCanvaProjection();
+      const eventRef = doc(db, 'eventos', eventoId);
+      await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(eventRef);
+        if (!snapshot.exists()) throw new Error('El evento ya no existe.');
+        const nextOutputs = { ...(snapshot.data()?.canvaOutputs || {}) };
+        delete nextOutputs[targetId];
+        transaction.update(eventRef, { canvaOutputs: nextOutputs });
+      });
+      notify('Canva retirado de ' + outputLabels[targetId] + '.', { type: 'success' });
+    } catch (error) {
+      console.error('Error retirando Canva de una salida:', error);
+      notify('No se pudo retirar Canva de ' + outputLabels[targetId] + '.', { type: 'error' });
+    }
+  };
 
   const stopCanvaProjection = async () => {
     const safeTargets = normalizeCanvaTargets(canvaTargets);
@@ -854,6 +1251,14 @@ const ProyectorController = ({ user }) => {
     setPreviewSlide(null);
     setPreviewMedia(null);
     setMediaTargets({ projector: true, singers: false, musicians: false });
+    setSelectedCanvaId('');
+    setCanvaDraft({ title: 'Presentación Canva', url: '' });
+    setCanvaPreviewUrl('');
+    setCanvaUrlError('');
+    setCanvaTargets({ projector: true, singers: false, musicians: false });
+    setCanvaPage(1);
+    setCanvaPageCount(0);
+    setCanvaPageWindowStart(1);
     setBiblePreview(null);
     setBiblePreviewOutlineItemId(null);
     setIsBibleOutlinePickerOpen(false);
@@ -1430,8 +1835,8 @@ const ProyectorController = ({ user }) => {
         previousProjectorState: evento?.projectorState || null
       });
       await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
-        canvaOutputs: {},
-        mediaOutputs: {},
+        'canvaOutputs.projector': deleteField(),
+        'mediaOutputs.projector': deleteField(),
         announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
@@ -1501,8 +1906,8 @@ const ProyectorController = ({ user }) => {
         previousProjectorState: evento?.projectorState || null
       });
       await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
-        canvaOutputs: {},
-        mediaOutputs: {},
+        'canvaOutputs.projector': deleteField(),
+        'mediaOutputs.projector': deleteField(),
         announcementState: buildInactiveAnnouncementState(),
         projectorState,
         proyectorSlide: null,
@@ -1531,6 +1936,11 @@ const ProyectorController = ({ user }) => {
       return;
     }
     if (!passage) return;
+    const safeContentTargets = normalizeContentTargets(contentTargets);
+    if (!hasContentTargets(safeContentTargets)) {
+      notify('Selecciona al menos una pantalla para Biblia.', { type: 'error' });
+      return;
+    }
     const safeSlides = slides.length ? slides : [{
       reference: passage.reference,
       translation: passage.abbreviation,
@@ -1547,10 +1957,19 @@ const ProyectorController = ({ user }) => {
         const eventRef = doc(db, 'eventos', eventoId);
         const eventSnapshot = await transaction.get(eventRef);
         if (!eventSnapshot.exists()) throw new Error('El evento ya no esta disponible.');
-        const previousProjectionFields = capturePreviousProjectionFields(eventSnapshot.data());
+        const eventData = eventSnapshot.data();
+        const nextCanvaOutputs = { ...(eventData.canvaOutputs || {}) };
+        const nextMediaOutputs = { ...(eventData.mediaOutputs || {}) };
+        ['projector', 'singers', 'musicians'].forEach((targetId) => {
+          if (!safeContentTargets[targetId]) return;
+          delete nextCanvaOutputs[targetId];
+          delete nextMediaOutputs[targetId];
+        });
+        const previousProjectionFields = capturePreviousProjectionFields(eventData);
         transaction.update(eventRef, {
-        canvaOutputs: {},
-        mediaOutputs: {},
+        canvaOutputs: nextCanvaOutputs,
+        mediaOutputs: nextMediaOutputs,
+        projectionTargets: safeContentTargets,
         announcementState: buildInactiveAnnouncementState(),
         projectorState: buildCanonicalBibleProjectorState({
           type: 'preaching',
@@ -1713,6 +2132,11 @@ const ProyectorController = ({ user }) => {
 
   const projectQuickMessage = async (draft, { historyEntryId = null } = {}) => {
     if (!canQuickProject) return null;
+    const safeContentTargets = normalizeContentTargets(contentTargets);
+    if (!hasContentTargets(safeContentTargets)) {
+      notify('Selecciona al menos una pantalla para el Punto.', { type: 'error' });
+      return null;
+    }
     const message = createQuickMessage(draft);
     if (!message) {
       notify('El punto debe contener texto valido y no superar el limite permitido.', { type: 'error' });
@@ -1724,7 +2148,8 @@ const ProyectorController = ({ user }) => {
         eventoId,
         presentationType: message.presentationType,
         segments: message.segments,
-        historyEntryId
+        historyEntryId,
+        targets: safeContentTargets
       }));
       notify('Punto del mensaje proyectado.', { type: 'success' });
       return result;
@@ -1928,8 +2353,8 @@ const ProyectorController = ({ user }) => {
     }
 
     const updates = {
-      canvaOutputs: {},
-      mediaOutputs: {},
+      'canvaOutputs.projector': deleteField(),
+      'mediaOutputs.projector': deleteField(),
       announcementState: buildInactiveAnnouncementState(),
       proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
       projectorState: {
@@ -3198,6 +3623,26 @@ const ProyectorController = ({ user }) => {
     }
   }
 
+  // KADOSH_PROJECTOR_SOURCE_HANDOFF_V1
+  const hasRoutedCanvaOutputs = Boolean(evento?.canvaOutputs && typeof evento.canvaOutputs === 'object');
+  const projectorCanvaRoute = evento?.canvaOutputs?.projector || null;
+  const projectorCanvaUpdatedAt = Number(projectorCanvaRoute?.updatedAt || 0);
+  const projectorMediaUpdatedAt = Number(evento?.mediaOutputs?.projector?.updatedAt || 0);
+  const projectorStateUsesOutputTargets = Boolean(
+    evento?.projectorState?.contentType === 'bible'
+    || evento?.projectorState?.contentType === 'quickMessage'
+    || evento?.projectorState?.type === 'quickMessage'
+  );
+  const projectorStateTargetsProjector = !projectorStateUsesOutputTargets || evento?.projectionTargets?.projector !== false;
+  const projectorStateUpdatedAt = projectorStateTargetsProjector
+    ? Number(evento?.projectorState?.updatedAt || evento?.projectorState?.projectionVersion || 0)
+    : 0;
+  const projectorCanvaOwnsOutput = Boolean(
+    projectorCanvaRoute?.active
+    && projectorCanvaRoute?.embedUrl
+    && projectorCanvaUpdatedAt >= Math.max(projectorMediaUpdatedAt, projectorStateUpdatedAt)
+  );
+
   const projectorPreviewMedia = evento?.mediaOutputs && typeof evento.mediaOutputs === 'object'
     ? (evento.mediaOutputs?.projector?.active ? evento.mediaOutputs.projector : null)
     : mediaActive;
@@ -3262,7 +3707,9 @@ const ProyectorController = ({ user }) => {
     </div>
   );
   const bibleOutlinePanel = (
-    <div className="space-y-3">
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] xl:items-start">
+      {/* KADOSH_BIBLE_DESKTOP_SPLIT_V1 */}
+      <div className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4">
         <div>
           <p className="text-[10px] font-black uppercase tracking-[0.24em] text-blue-300">Bosquejo biblico</p>
@@ -3368,6 +3815,8 @@ const ProyectorController = ({ user }) => {
           })}
         </div>
       )}
+      </div>
+      <div className="min-w-0 xl:sticky xl:top-0 [&>section]:mt-0">
       <QuickMessagePanel
         active={canQuickProject}
         history={evento?.quickMessageHistory}
@@ -3376,6 +3825,7 @@ const ProyectorController = ({ user }) => {
         onRemoveHistoryEntry={(entryId) => updateQuickMessageHistory({ operation: 'remove', entryId })}
         onClearHistory={() => updateQuickMessageHistory({ operation: 'clear' })}
       />
+      </div>
     </div>
   );
   const screensMenu = showScreensMenu && screensMenuPosition && typeof document !== 'undefined'
@@ -3540,7 +3990,7 @@ const ProyectorController = ({ user }) => {
       {/* VISTA PC: 3 Columnas (Se oculta en móviles) */}
       <div className="relative z-10 hidden min-h-0 md:flex flex-1 overflow-hidden [@media_(orientation:landscape)_and_(max-height:500px)]:hidden">
         {/* Columna Izquierda: Setlist */}
-        <div className="w-1/4 min-w-[250px] min-h-0 bg-zinc-950/55 border-r border-white/10 flex flex-col backdrop-blur-sm">
+        <div className={`w-1/4 min-w-[250px] min-h-0 bg-zinc-950/55 border-r border-white/10 flex-col backdrop-blur-sm ${['canva', 'bible'].includes(projectionSourceMode) ? 'hidden' : 'flex'}`}>
           <div className="p-4 border-b border-white/10 bg-zinc-950/65">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={14} />
@@ -3643,7 +4093,7 @@ const ProyectorController = ({ user }) => {
             
             {projectionSourceMode === 'canva' && (
               <div className="min-h-0 flex-1 overflow-y-auto border-b border-white/10 bg-zinc-950/45 p-3 sm:p-4 [&::-webkit-scrollbar]:hidden">
-                <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+                <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
                   <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.07] p-4">
                     <div className="flex items-start gap-3">
                       <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-400/20 bg-cyan-500/10 text-cyan-200"><Tv size={19} /></div>
@@ -3655,116 +4105,7 @@ const ProyectorController = ({ user }) => {
                     </div>
                   </div>
 
-                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)]">
-                    <div className="grid gap-3 rounded-2xl border border-white/10 bg-black/25 p-3 sm:p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{selectedCanvaId ? 'Editando presentación guardada' : 'Nueva presentación'}</p>
-                        {canCreateCanva && <button type="button" onClick={newCanvaPresentation} className="min-h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-[9px] font-black uppercase text-zinc-300 hover:bg-white/10"><Plus size={13} className="mr-1 inline" />Nueva</button>}
-                      </div>
-
-                      <label className="grid gap-1.5">
-                        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Nombre</span>
-                        <input type="text" value={canvaDraft.title} onChange={(event) => setCanvaDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Ej. Jesús" className="min-h-11 w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-cyan-400/40" />
-                      </label>
-
-                      <label className="grid gap-1.5">
-                        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Enlace o código de inserción de Canva</span>
-                        <input type="url" value={canvaDraft.url} onChange={(event) => { setCanvaDraft((current) => ({ ...current, url: event.target.value })); setCanvaUrlError(''); }} placeholder="https://canva.link/... o enlace /view" className="min-h-11 w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-cyan-400/40" />
-                      </label>
-
-                      <label className="grid gap-1.5">
-                        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Cantidad de páginas</span>
-                        <input
-                          type="number"
-                          min="1"
-                          max="500"
-                          value={canvaPageCount || ''}
-                          placeholder="Ej. 56"
-                          onChange={(event) => {
-                            const rawCount = event.target.value;
-                            if (rawCount === '') {
-                              setCanvaPageCount(0);
-                              setCanvaPageWindowStart(1);
-                              setCanvaUrlError('');
-                              return;
-                            }
-                            const nextCount = Math.max(1, Math.min(500, Math.floor(Number(rawCount) || 1)));
-                            setCanvaPageCount(nextCount);
-                            if (canvaPage > nextCount) setCanvaPage(nextCount);
-                            setCanvaPageWindowStart((current) => Math.min(current, (Math.floor((nextCount - 1) / 10) * 10) + 1));
-                            setCanvaUrlError('');
-                          }}
-                          className="min-h-11 w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-cyan-400/40"
-                        />
-                        <span className="text-[9px] font-bold leading-relaxed text-zinc-600">Kadosh usa este total para mostrar solo páginas válidas y agruparlas de 10 en 10.</span>
-                      </label>
-
-                      <div className="rounded-2xl border border-white/10 bg-zinc-950/60 p-3">
-                        <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Destinos predeterminados</p>
-                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                          {[
-                            ['projector', 'Proyector', Monitor],
-                            ['singers', 'Cantantes', Type],
-                            ['musicians', 'Músicos', Music],
-                          ].map(([targetId, label, Icon]) => {
-                            const active = canvaTargets[targetId] === true;
-                            return (
-                              <button key={targetId} type="button" onClick={() => toggleCanvaTarget(targetId)} className={'min-h-12 rounded-xl border px-3 text-[10px] font-black uppercase transition-colors ' + (active ? 'border-cyan-300/50 bg-cyan-400 text-zinc-950' : 'border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10')}>
-                                <Icon size={15} className="mr-2 inline" />{active ? '✓ ' : ''}{label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {canvaUrlError && <p className="rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-[10px] font-bold text-red-200">{canvaUrlError}</p>}
-
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        <button type="button" onClick={prepareCanvaPreview} className="min-h-12 rounded-xl border border-cyan-400/25 bg-cyan-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-cyan-100 hover:bg-cyan-500/20"><Eye size={14} className="mr-2 inline" />Vista previa</button>
-                        {(selectedCanvaId ? canEditCanva : canCreateCanva) && <button type="button" onClick={saveCanvaPresentation} disabled={isSavingCanva} className="min-h-12 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-50">{isSavingCanva ? <Loader2 size={14} className="mr-2 inline animate-spin" /> : <Star size={14} className="mr-2 inline" />}{selectedCanvaId ? 'Guardar cambios' : 'Guardar presentación'}</button>}
-                        {canProjectCanva && <button type="button" onClick={projectCanva} className="min-h-12 rounded-xl bg-cyan-400 px-3 text-[10px] font-black uppercase tracking-wide text-zinc-950 hover:bg-cyan-300"><Monitor size={14} className="mr-2 inline" />Proyectar en seleccionadas</button>}
-                        <button type="button" onClick={stopCanvaProjection} className="min-h-12 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-amber-100 hover:bg-amber-500/20"><PowerOff size={14} className="mr-2 inline" />Retirar de seleccionadas</button>
-                        {canProjectCanva && <button type="button" onClick={stopAllCanvaProjection} className="min-h-12 rounded-xl border border-red-400/25 bg-red-500/10 px-3 text-[10px] font-black uppercase tracking-wide text-red-200 hover:bg-red-500/20"><X size={14} className="mr-2 inline" />Detener Canva en todas</button>}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-white/10 bg-black/25 p-3 sm:p-4">
-                      <div className="mb-3 flex items-center justify-between gap-2">
-                        <div>
-                          <p className="text-[9px] font-black uppercase tracking-widest text-cyan-300">Mis presentaciones Canva</p>
-                          <p className="mt-1 text-[10px] font-bold text-zinc-500">{canvaLibrary.length} guardada(s)</p>
-                          <p className="mt-1 text-[9px] font-bold text-zinc-600">En vivo: {['projector', 'singers', 'musicians'].filter((id) => evento?.canvaOutputs?.[id]?.active).map((id) => id === 'projector' ? 'Proyector' : id === 'singers' ? 'Cantantes' : 'Músicos').join(' · ') || 'ninguna salida'}</p>
-                        </div>
-                      </div>
-                      <div className="grid max-h-[360px] gap-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden">
-                        {canvaLibrary.length ? canvaLibrary.map((item) => {
-                          const selected = item.id === selectedCanvaId;
-                          const targetSummary = [
-                            item.defaultTargets?.projector ? 'Proyector' : '',
-                            item.defaultTargets?.singers ? 'Cantantes' : '',
-                            item.defaultTargets?.musicians ? 'Músicos' : '',
-                          ].filter(Boolean).join(' · ') || 'Sin destinos';
-                          return (
-                            <div key={item.id} className={'rounded-xl border p-3 ' + (selected ? 'border-cyan-300/40 bg-cyan-500/10' : 'border-white/10 bg-zinc-950/65')}>
-                              <button type="button" onClick={() => selectCanvaPresentation(item)} className="w-full text-left">
-                                <p className="truncate text-xs font-black text-white">{item.title || 'Presentación Canva'}</p>
-                                <p className="mt-1 text-[9px] font-bold uppercase tracking-wide text-cyan-200">{targetSummary}</p>
-                                <p className="mt-1 text-[9px] font-bold text-zinc-500">{Number(item.pageCount) >= 1 ? (Math.floor(Number(item.pageCount)) + ' página(s)') : 'Total de páginas sin configurar'}</p>
-                                <p className="mt-1 truncate text-[9px] text-zinc-600">{item.inputUrl || item.sourceUrl}</p>
-                              </button>
-                              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                                <button type="button" onClick={() => selectCanvaPresentation(item)} className="min-h-10 rounded-lg border border-white/10 bg-white/5 px-2 text-[9px] font-black uppercase text-zinc-300 hover:bg-white/10">{canEditCanva ? <Edit2 size={12} className="mr-1 inline" /> : <Eye size={12} className="mr-1 inline" />}{canEditCanva ? 'Editar' : 'Abrir'}</button>
-                                <button type="button" disabled={!canProjectCanva} onClick={() => projectSavedCanva(item)} className="min-h-10 rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-2 text-[9px] font-black uppercase text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-30"><Monitor size={12} className="mr-1 inline" />Proyectar</button>
-                                {canDeleteCanva && <button type="button" onClick={() => deleteCanvaPresentation(item)} className="min-h-10 rounded-lg border border-red-400/20 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200 hover:bg-red-500/20"><Trash2 size={12} className="mr-1 inline" />Eliminar</button>}
-                              </div>
-                            </div>
-                          );
-                        }) : (
-                          <div className="rounded-xl border border-dashed border-white/10 p-5 text-center text-[10px] font-bold text-zinc-600">Todavía no hay presentaciones Canva guardadas.</div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  {renderCanvaOutputDesk()}
 
                   {canvaPreviewUrl && (
                     <div className="overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl shadow-black/30">
@@ -3819,7 +4160,7 @@ const ProyectorController = ({ user }) => {
                                 </button>
                               </div>
                             )}
-                            <p className="mt-2 text-center text-[9px] font-bold text-zinc-600">Los números de Kadosh sincronizan todas las salidas que muestran esta presentación.</p>
+                            <p className="mt-2 text-center text-[9px] font-bold text-zinc-600">Los números cambian únicamente la pantalla seleccionada; las demás conservan su propia página.</p>
                           </>
                         ) : (
                           <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-center">
@@ -3833,6 +4174,51 @@ const ProyectorController = ({ user }) => {
                       </div>
                     </div>
                   )}
+
+                  <div className="grid gap-4">
+                    <div className="rounded-2xl border border-white/10 bg-black/25 p-3 sm:p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-cyan-300">Canva de este setlist</p>
+                          <p className="mt-1 text-[10px] font-bold text-zinc-500">{canvaLibrary.length} guardada(s)</p>
+                          <p className="mt-1 text-[9px] font-bold text-zinc-600">En vivo: {['projector', 'singers', 'musicians'].filter((id) => evento?.canvaOutputs?.[id]?.active).map((id) => id === 'projector' ? 'Proyector' : id === 'singers' ? 'Cantantes' : 'Músicos').join(' · ') || 'ninguna salida'}</p>
+                        </div>
+                        {canCreateCanva && (
+                          <button type="button" onClick={openMobileCanvaCreate} className="shrink-0 rounded-xl bg-cyan-400 px-3 py-2.5 text-[9px] font-black uppercase text-zinc-950"><Plus size={13} className="mr-1 inline" />Nueva</button>
+                        )}
+                      </div>
+                      <div className="grid max-h-[360px] gap-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden">
+                        {canvaLibrary.length ? canvaLibrary.map((item) => {
+                          const selected = item.id === selectedCanvaId;
+                          const targetSummary = [
+                            item.defaultTargets?.projector ? 'Proyector' : '',
+                            item.defaultTargets?.singers ? 'Cantantes' : '',
+                            item.defaultTargets?.musicians ? 'Músicos' : '',
+                          ].filter(Boolean).join(' · ') || 'Sin destinos';
+                          return (
+                            <div key={item.id} className={'rounded-xl border p-3 ' + (selected ? 'border-cyan-300/40 bg-cyan-500/10' : 'border-white/10 bg-zinc-950/65')}>
+                              <button type="button" onClick={() => selectCanvaPresentation(item)} className="w-full text-left">
+                                <p className="truncate text-xs font-black text-white">{item.title || 'Presentación Canva'}</p>
+                                <p className="mt-1 text-[9px] font-bold uppercase tracking-wide text-cyan-200">{targetSummary}</p>
+                                <p className="mt-1 text-[9px] font-bold text-zinc-500">{Number(item.pageCount) >= 1 ? (Math.floor(Number(item.pageCount)) + ' página(s)') : 'Total de páginas sin configurar'}</p>
+                                <p className="mt-1 text-[8px] font-black uppercase tracking-wide text-cyan-300">Dest.: {['projector', 'singers', 'musicians'].filter((id) => item.defaultTargets?.[id] === true).map((id) => id === 'projector' ? 'PROY' : id === 'singers' ? 'CANT' : 'MÚS').join(' · ') || 'SIN DEST.'}</p>
+                                <p className="mt-1 truncate text-[9px] text-zinc-600">{item.inputUrl || item.sourceUrl}</p>
+                              </button>
+                              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                <button type="button" onClick={() => (canEditCanva ? openMobileCanvaEdit(item) : selectCanvaPresentation(item))} className="min-h-10 rounded-lg border border-white/10 bg-white/5 px-2 text-[9px] font-black uppercase text-zinc-300 hover:bg-white/10">{canEditCanva ? <Edit2 size={12} className="mr-1 inline" /> : <Eye size={12} className="mr-1 inline" />}{canEditCanva ? 'Editar' : 'Abrir'}</button>
+                                <button type="button" disabled={!canProjectCanva} onClick={() => projectSavedCanva(item)} className="min-h-10 rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-2 text-[9px] font-black uppercase text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-30"><Monitor size={12} className="mr-1 inline" />Proyectar</button>
+                                {canDeleteCanva && <button type="button" onClick={() => deleteCanvaPresentation(item)} className="min-h-10 rounded-lg border border-red-400/20 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200 hover:bg-red-500/20"><Trash2 size={12} className="mr-1 inline" />Eliminar</button>}
+                              </div>
+                            </div>
+                          );
+                        }) : (
+                          <div className="rounded-xl border border-dashed border-white/10 p-5 text-center text-[10px] font-bold text-zinc-600">Todavía no hay presentaciones Canva guardadas.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+
                 </div>
               </div>
             )}
@@ -4039,6 +4425,8 @@ const ProyectorController = ({ user }) => {
                     </span>
                   )}
                 </div>
+                {/* KADOSH_BIBLE_TARGET_SELECTOR_DESKTOP_V2 */}
+                {renderContentTargetSelector()}
                 {bibleOutlinePanel}
               </div>
             )}
@@ -4379,12 +4767,15 @@ const ProyectorController = ({ user }) => {
                 )}
                 {isBlackout ? (
                    <p className="relative z-10 text-red-900/50 font-black uppercase tracking-widest">Pantalla en Negro</p>
-                ) : (evento?.canvaOutputs?.projector?.active || evento?.projectorState?.contentType === 'canva') ? (
+                ) : (projectorCanvaOwnsOutput || (!hasRoutedCanvaOutputs && evento?.projectorState?.contentType === 'canva')) ? (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black p-4 text-center">
                     <Tv size={28} className="text-cyan-300" />
-                    <p className="text-[10px] font-black uppercase tracking-widest text-cyan-200">Canva en vivo</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-cyan-200">Canva en Proyector</p>
                     <p className="max-w-[220px] truncate text-xs font-bold text-white">{evento?.canvaOutputs?.projector?.title || evento?.projectorState?.title || 'Presentación Canva'}</p>
-                    <button type="button" onClick={stopCanvaProjection} className="rounded-xl border border-amber-400/25 bg-amber-500/10 px-4 py-2 text-[9px] font-black uppercase tracking-wide text-amber-100">Detener Canva</button>
+                    {evento?.canvaOutputs?.projector?.page && (
+                      <p className="text-[9px] font-black uppercase tracking-wide text-zinc-500">Página {evento.canvaOutputs.projector.page}{evento?.canvaOutputs?.projector?.pageCount ? ' / ' + evento.canvaOutputs.projector.pageCount : ''}</p>
+                    )}
+                    <button type="button" onClick={() => stopCanvaOutput('projector')} className="rounded-xl border border-amber-400/25 bg-amber-500/10 px-4 py-2 text-[9px] font-black uppercase tracking-wide text-amber-100">Retirar de Proyector</button>
                   </div>
                 ) : evento?.projectorState?.contentType === 'bible' ? (
                   <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-3 text-center">
@@ -4575,108 +4966,88 @@ const ProyectorController = ({ user }) => {
 
       {/* VISTA MÓVIL (App Remota de 1 Toque - Se oculta en PC) */}
       <div className="relative z-10 md:hidden flex-1 flex flex-col bg-zinc-950/80 overflow-hidden [@media_(orientation:landscape)_and_(max-height:500px)]:flex">
-        {/* KADOSH_CANVA_MOBILE_V4 */}
+        {/* KADOSH_CANVA_MOBILE_WORKSPACE_V1 */}
         {projectionSourceMode === 'canva' && (
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden">
-            <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.07] p-4">
-              <p className="text-[9px] font-black uppercase tracking-[0.2em] text-cyan-300">Canva móvil</p>
-              <p className="mt-1 text-sm font-black text-white">Biblioteca, destinos y páginas</p>
-              <p className="mt-2 text-[10px] font-bold text-zinc-500">Sin iframe automático: evita audio duplicado y consumo innecesario.</p>
-            </div>
-
-            <div className="space-y-2">
-              {canvaLibrary.map((item) => (
-                <div key={item.id} className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                  <button type="button" onClick={() => selectCanvaPresentation(item)} className="w-full text-left">
-                    <p className="truncate text-sm font-black text-white">{item.title || 'Presentación Canva'}</p>
-                    <p className="mt-1 text-[9px] font-bold text-zinc-500">{Number(item.pageCount) >= 1 ? Math.floor(Number(item.pageCount)) + ' página(s)' : 'Total sin configurar'}</p>
-                  </button>
-                  {canProjectCanva && (
-                    <button type="button" onClick={() => projectSavedCanva(item)} className="mt-2 min-h-10 w-full rounded-xl bg-cyan-400 text-[9px] font-black uppercase text-zinc-950">Proyectar</button>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[calc(env(safe-area-inset-bottom)+7.5rem)] [&::-webkit-scrollbar]:hidden">
+            {!canAccessCanva ? (
+              <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-center text-xs font-bold text-red-100">No tienes permisos para usar Canva.</div>
+            ) : (
+              <div className="mx-auto flex w-full max-w-xl flex-col gap-3">
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.07] p-3">
+                  <div className="min-w-0">
+                    <p className="text-[9px] font-black uppercase tracking-[0.2em] text-cyan-300">Canva</p>
+                    <p className="mt-1 truncate text-sm font-black text-white">Control y biblioteca</p>
+                    <p className="mt-1 text-[9px] font-bold text-zinc-500">Controla cada pantalla sin abrir formularios largos.</p>
+                  </div>
+                  {canCreateCanva && (
+                    <button type="button" onClick={openMobileCanvaCreate} className="shrink-0 rounded-xl bg-cyan-400 px-3 py-2.5 text-[9px] font-black uppercase text-zinc-950 shadow-lg shadow-cyan-950/20">
+                      <Plus size={13} className="mr-1 inline" /> Nueva
+                    </button>
                   )}
                 </div>
-              ))}
-              {canvaLibrary.length === 0 && (
-                <p className="rounded-2xl border border-white/10 bg-black/25 p-4 text-center text-xs font-bold text-zinc-600">No hay presentaciones guardadas.</p>
-              )}
-            </div>
 
-            <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-              <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-cyan-200">Destinos</p>
-              <div className="grid grid-cols-3 gap-2">
-                {[['projector', 'Proyector'], ['singers', 'Cantantes'], ['musicians', 'Músicos']].map(([targetId, label]) => (
-                  <button
-                    key={targetId}
-                    type="button"
-                    onClick={() => toggleCanvaTarget(targetId)}
-                    className={canvaTargets[targetId] ? "min-h-11 rounded-xl bg-cyan-400 px-2 text-[9px] font-black uppercase text-zinc-950" : "min-h-11 rounded-xl border border-white/10 bg-zinc-900 px-2 text-[9px] font-black uppercase text-zinc-400"}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {canProjectCanva && <button type="button" onClick={projectCanva} className="min-h-11 rounded-xl bg-cyan-400 text-[9px] font-black uppercase text-zinc-950">Proyectar</button>}
-                {canProjectCanva && <button type="button" onClick={stopCanvaProjection} className="min-h-11 rounded-xl border border-amber-400/25 bg-amber-500/10 text-[9px] font-black uppercase text-amber-100">Retirar seleccionadas</button>}
-                {canProjectCanva && <button type="button" onClick={stopAllCanvaProjection} className="col-span-2 min-h-11 rounded-xl border border-red-400/25 bg-red-500/10 text-[9px] font-black uppercase text-red-200">Detener Canva en todas</button>}
-              </div>
-            </div>
+                {renderCanvaOutputDesk({ compact: true })}
 
-            {canvaHasConfiguredPageCount && (
-              <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                <p className="mb-2 text-[9px] font-black uppercase text-cyan-200">Páginas {canvaSafeWindowStart}-{canvaPageBlockEnd} de {canvaSafePageCount}</p>
-                <div className="grid grid-cols-5 gap-2">
-                  {canvaVisiblePages.map((page) => (
-                    <button key={page} type="button" onClick={() => changeCanvaPage(page)} className={canvaPage === page ? "min-h-11 rounded-xl bg-cyan-400 text-xs font-black text-zinc-950" : "min-h-11 rounded-xl border border-white/10 bg-zinc-900 text-xs font-black text-zinc-300"}>{page}</button>
-                  ))}
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <button type="button" disabled={canvaSafeWindowStart <= 1} onClick={() => setCanvaPageWindowStart(Math.max(1, canvaSafeWindowStart - 10))} className="min-h-10 rounded-xl border border-white/10 bg-zinc-900 text-[9px] font-black uppercase text-zinc-300 disabled:opacity-30">← Anterior</button>
-                  <button type="button" disabled={canvaPageBlockEnd >= canvaSafePageCount} onClick={() => setCanvaPageWindowStart(Math.min(canvaMaxWindowStart, canvaSafeWindowStart + 10))} className="min-h-10 rounded-xl border border-white/10 bg-zinc-900 text-[9px] font-black uppercase text-zinc-300 disabled:opacity-30">Siguiente →</button>
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">Canva de este setlist</p>
+                      <p className="mt-1 text-[10px] font-bold text-zinc-600">{canvaLibrary.length} guardada{canvaLibrary.length === 1 ? '' : 's'}</p>
+                    </div>
+                    {canProjectCanva && Object.values(evento?.canvaOutputs || {}).some((output) => output?.active) && (
+                      <button type="button" onClick={stopAllCanvaProjection} className="rounded-xl border border-red-400/20 bg-red-500/10 px-2.5 py-2 text-[8px] font-black uppercase text-red-200">Detener todas</button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    {canvaLibrary.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-white/10 p-5 text-center">
+                        <Tv size={22} className="mx-auto text-zinc-700" />
+                        <p className="mt-2 text-xs font-bold text-zinc-600">No hay presentaciones guardadas.</p>
+                        {canCreateCanva && <button type="button" onClick={openMobileCanvaCreate} className="mt-3 rounded-xl bg-cyan-400 px-4 py-2 text-[9px] font-black uppercase text-zinc-950">Crear primera</button>}
+                      </div>
+                    ) : canvaLibrary.map((item) => {
+                      const selected = selectedCanvaId === item.id;
+                      const liveTargets = ['projector', 'singers', 'musicians'].filter((targetId) => evento?.canvaOutputs?.[targetId]?.active && evento.canvaOutputs[targetId].presentationId === item.id);
+                      return (
+                        <div key={item.id} className={'rounded-xl border p-3 ' + (selected ? 'border-cyan-300/35 bg-cyan-500/10' : 'border-white/10 bg-zinc-950/60')}>
+                          <button type="button" onClick={() => selectCanvaPresentation(item)} className="w-full text-left">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-black text-white">{item.title || 'Presentación Canva'}</p>
+                                <p className="mt-1 text-[9px] font-bold text-zinc-500">{Number(item.pageCount) >= 1 ? Math.floor(Number(item.pageCount)) + ' página(s)' : 'Total sin configurar'}</p>
+                                <p className="mt-1 text-[8px] font-black uppercase tracking-wide text-cyan-300">Dest.: {['projector', 'singers', 'musicians'].filter((id) => item.defaultTargets?.[id] === true).map((id) => id === 'projector' ? 'PROY' : id === 'singers' ? 'CANT' : 'MÚS').join(' · ') || 'SIN DEST.'}</p>
+                              </div>
+                              {liveTargets.length > 0 && <span className="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2 py-1 text-[8px] font-black uppercase text-emerald-200">En vivo</span>}
+                            </div>
+                            {liveTargets.length > 0 && <p className="mt-2 text-[8px] font-black uppercase tracking-wide text-cyan-300">{liveTargets.map((targetId) => CANVA_OUTPUT_DESK_META[targetId]?.label).filter(Boolean).join(' · ')}</p>}
+                          </button>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <button type="button" onClick={() => openMobileCanvaEdit(item)} className="min-h-10 rounded-xl border border-white/10 bg-white/5 text-[9px] font-black uppercase text-zinc-300">Editar</button>
+                            {canProjectCanva && <button type="button" onClick={() => openMobileCanvaProjectTargets(item)} className="min-h-10 rounded-xl bg-cyan-400 text-[9px] font-black uppercase text-zinc-950">Pantallas / Proyectar</button>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {projectionSourceMode === 'canva' && (
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden">
-            {!canAccessCanva ? (
-              <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-center text-xs font-bold text-red-100">No tienes permisos para usar Canva.</div>
-            ) : (
-              <>
-                <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/[0.07] p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-cyan-300">Canva móvil</p>
-                      <p className="mt-1 text-sm font-black text-white">Biblioteca, destinos y páginas</p>
-                    </div>
-                    {canCreateCanva && <button type="button" onClick={newCanvaPresentation} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[9px] font-black uppercase text-zinc-200"><Plus size={12} className="mr-1 inline" />Nueva</button>}
-                  </div>
-                  <p className="mt-2 text-[10px] font-bold leading-relaxed text-zinc-500">El móvil no carga automáticamente la vista previa de Canva, evitando consumo y audio duplicado.</p>
+        {showMobileCanvaEditor && createPortal(
+          <div className="fixed inset-0 z-[210] flex flex-col bg-black/90 p-2 backdrop-blur-xl">
+            <div className="mx-auto flex min-h-0 w-full max-w-lg md:max-w-3xl flex-1 flex-col overflow-hidden rounded-[1.75rem] border border-white/10 bg-zinc-950 shadow-2xl">
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-300">{selectedCanvaId ? 'Editar Canva' : 'Nueva presentación'}</p>
+                  <p className="mt-1 truncate text-sm font-black text-white">{canvaDraft.title || 'Presentación Canva'}</p>
                 </div>
+                <button type="button" onClick={closeMobileCanvaEditor} className="rounded-xl border border-white/10 bg-white/5 p-2 text-zinc-400"><X size={18}/></button>
+              </div>
 
-                <div className="space-y-2">
-                  <p className="text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">Mis presentaciones</p>
-                  {canvaLibrary.length === 0 ? (
-                    <p className="rounded-2xl border border-white/10 bg-black/25 p-4 text-center text-xs font-bold text-zinc-600">No hay presentaciones guardadas.</p>
-                  ) : canvaLibrary.map((item) => {
-                    const selected = selectedCanvaId === item.id;
-                    return (
-                      <div key={item.id} className={'rounded-2xl border p-3 ' + (selected ? 'border-cyan-300/40 bg-cyan-500/10' : 'border-white/10 bg-black/25')}>
-                        <button type="button" onClick={() => selectCanvaPresentation(item)} className="w-full text-left">
-                          <p className="truncate text-sm font-black text-white">{item.title || 'Presentación Canva'}</p>
-                          <p className="mt-1 text-[9px] font-bold text-zinc-500">{Number(item.pageCount) >= 1 ? Math.floor(Number(item.pageCount)) + ' página(s)' : 'Total de páginas sin configurar'}</p>
-                        </button>
-                        <div className="mt-2 grid grid-cols-2 gap-2">
-                          <button type="button" onClick={() => selectCanvaPresentation(item)} className="min-h-10 rounded-xl border border-white/10 bg-white/5 text-[9px] font-black uppercase text-zinc-300">Abrir</button>
-                          {canProjectCanva && <button type="button" onClick={() => projectSavedCanva(item)} className="min-h-10 rounded-xl bg-cyan-400 text-[9px] font-black uppercase text-zinc-950">Proyectar</button>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-28 [&::-webkit-scrollbar]:hidden">
                 <div className="space-y-3 rounded-2xl border border-white/10 bg-black/25 p-3">
                   <label className="grid gap-1.5">
                     <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Nombre</span>
@@ -4688,43 +5059,58 @@ const ProyectorController = ({ user }) => {
                   </label>
                   <label className="grid gap-1.5">
                     <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">Cantidad de páginas</span>
-                    <input type="number" min="1" max="500" value={canvaPageCount || ''} onChange={(event) => { const value = Math.max(0, Math.min(500, Math.floor(Number(event.target.value) || 0))); setCanvaPageCount(value); setCanvaPage(1); setCanvaPageWindowStart(1); }} disabled={selectedCanvaId ? !canEditCanva : !canCreateCanva} placeholder="Ej. 56" className="min-h-11 rounded-xl border border-white/10 bg-zinc-950 px-3 text-sm font-bold text-white disabled:opacity-50" />
+                    <input type="number" min="1" max="500" value={canvaPageCount || ''} onChange={(event) => { const value = Math.max(0, Math.min(500, Math.floor(Number(event.target.value) || 0))); setCanvaPageCount(value); if (value && canvaPage > value) setCanvaPage(value); setCanvaPageWindowStart(1); }} disabled={selectedCanvaId ? !canEditCanva : !canCreateCanva} placeholder="Ej. 56" className="min-h-11 rounded-xl border border-white/10 bg-zinc-950 px-3 text-sm font-bold text-white disabled:opacity-50" />
                   </label>
+                </div>
 
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                  <p className="mb-1 text-[9px] font-black uppercase tracking-[0.16em] text-cyan-200">Destinos predeterminados</p>
+                  <p className="mb-2 text-[9px] font-bold text-zinc-500">Puedes marcar una o varias pantallas. Proyectar usa esta selección ahora; Guardar cambios la deja como predeterminada.</p>
                   {renderCanvaTargetSelectorCompact()}
-                  {canvaUrlError && <p className="rounded-xl border border-red-400/20 bg-red-500/10 p-2 text-[10px] font-bold text-red-100">{canvaUrlError}</p>}
+                </div>
 
+                {canvaUrlError && <p className="rounded-xl border border-red-400/20 bg-red-500/10 p-3 text-[10px] font-bold text-red-100">{canvaUrlError}</p>}
+
+                <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
                   <div className="grid grid-cols-2 gap-2">
-                    {(selectedCanvaId ? canEditCanva : canCreateCanva) && <button type="button" onClick={saveCanvaPresentation} disabled={isSavingCanva} className="min-h-11 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-2 text-[9px] font-black uppercase text-emerald-100 disabled:opacity-40">{selectedCanvaId ? 'Guardar cambios' : 'Guardar'}</button>}
-                    {canProjectCanva && <button type="button" onClick={projectCanva} disabled={!hasTargets(canvaTargets)} className="min-h-11 rounded-xl bg-cyan-400 px-2 text-[9px] font-black uppercase text-zinc-950 disabled:opacity-40">Proyectar</button>}
+                    <button type="button" onClick={openExplicitMobileCanvaPreview} className="min-h-11 rounded-xl border border-cyan-400/20 bg-cyan-500/10 text-[9px] font-black uppercase text-cyan-100"><Eye size={13} className="mr-1 inline" /> Vista previa</button>
+                    {canProjectCanva && <button type="button" onClick={projectCanvaAndCloseMobile} disabled={!hasTargets(canvaTargets)} className="min-h-11 rounded-xl bg-cyan-400 px-2 text-[9px] font-black uppercase text-zinc-950 disabled:opacity-40">Proyectar</button>}
                     {canProjectCanva && <button type="button" onClick={stopCanvaProjection} className="min-h-11 rounded-xl border border-amber-400/25 bg-amber-500/10 px-2 text-[9px] font-black uppercase text-amber-100">Retirar seleccionadas</button>}
-                    {canProjectCanva && <button type="button" onClick={stopAllCanvaProjection} className="min-h-11 rounded-xl border border-red-400/25 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200">Detener en todas</button>}
+                    {canProjectCanva && <button type="button" onClick={stopAllCanvaProjection} className="min-h-11 rounded-xl border border-red-400/25 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200">Detener todas</button>}
                   </div>
                 </div>
 
-                {canvaHasConfiguredPageCount ? (
-                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <p className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200">Páginas {canvaSafeWindowStart}-{canvaPageBlockEnd} de {canvaSafePageCount}</p>
-                      <span className="text-[10px] font-black text-white">Actual {canvaPage}</span>
+                {showMobileCanvaPreview && canvaPreviewUrl && (
+                  <div className="overflow-hidden rounded-2xl border border-cyan-400/20 bg-black">
+                    <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+                      <p className="text-[9px] font-black uppercase text-cyan-200">Vista previa</p>
+                      <button type="button" onClick={() => setShowMobileCanvaPreview(false)} className="text-[9px] font-black uppercase text-zinc-500">Ocultar</button>
                     </div>
-                    <div className="grid grid-cols-5 gap-2">
-                      {canvaVisiblePages.map((page) => (
-                        <button key={page} type="button" onClick={() => changeCanvaPage(page)} className={'min-h-11 rounded-xl border text-xs font-black ' + (canvaPage === page ? 'border-cyan-200 bg-cyan-400 text-zinc-950' : 'border-white/10 bg-zinc-900 text-zinc-300')}>{page}</button>
-                      ))}
-                    </div>
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      <button type="button" disabled={canvaSafeWindowStart <= 1} onClick={() => setCanvaPageWindowStart(Math.max(1, canvaSafeWindowStart - 10))} className="min-h-10 rounded-xl border border-white/10 bg-zinc-900 text-[9px] font-black uppercase text-zinc-300 disabled:opacity-30">← Bloque anterior</button>
-                      <button type="button" disabled={canvaPageBlockEnd >= canvaSafePageCount} onClick={() => setCanvaPageWindowStart(Math.min(canvaMaxWindowStart, canvaSafeWindowStart + 10))} className="min-h-10 rounded-xl border border-white/10 bg-zinc-900 text-[9px] font-black uppercase text-zinc-300 disabled:opacity-30">Bloque siguiente →</button>
+                    <div className="aspect-video w-full bg-black">
+                      <iframe key={canvaPreviewUrl} src={canvaPreviewUrl} title="Vista previa Canva móvil" className="h-full w-full border-0" allow="fullscreen" allowFullScreen loading="lazy" />
                     </div>
                   </div>
-                ) : selectedCanvaId ? (
-                  <p className="rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3 text-center text-[10px] font-bold text-amber-100">Configura la cantidad de páginas y guarda para habilitar la navegación.</p>
-                ) : null}
-              </>
-            )}
+                )}
+
+                {selectedCanvaId && canvaHasConfiguredPageCount && (
+                  <div className="rounded-2xl border border-white/10 bg-black/25 p-3">
+                    <p className="mb-2 text-[9px] font-black uppercase text-cyan-200">Página de trabajo · {canvaPage} / {canvaSafePageCount}</p>
+                    <div className="grid grid-cols-5 gap-2">
+                      {canvaVisiblePages.map((page) => (
+                        <button key={page} type="button" onClick={() => changeCanvaPage(page)} className={'min-h-10 rounded-xl border text-xs font-black ' + (canvaPage === page ? 'border-cyan-200 bg-cyan-400 text-zinc-950' : 'border-white/10 bg-zinc-900 text-zinc-300')}>{page}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="absolute inset-x-2 bottom-2 mx-auto grid max-w-lg md:max-w-3xl grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur-xl">
+                <button type="button" onClick={closeMobileCanvaEditor} className="min-h-11 rounded-xl border border-white/10 bg-white/5 text-[9px] font-black uppercase text-zinc-300">Cerrar</button>
+                {(selectedCanvaId ? canEditCanva : canCreateCanva) && <button type="button" onClick={saveCanvaPresentation} disabled={isSavingCanva} className="min-h-11 rounded-xl bg-emerald-600 text-[9px] font-black uppercase text-white disabled:opacity-40">{isSavingCanva ? 'Guardando…' : selectedCanvaId ? 'Guardar cambios' : 'Guardar'}</button>}
+              </div>
+            </div>
           </div>
-        )}
+        , document.body)}
 
         {projectionSourceMode === 'songs' && (
           <>
@@ -4856,6 +5242,8 @@ const ProyectorController = ({ user }) => {
 
         {projectionSourceMode === 'bible' && (
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-[calc(env(safe-area-inset-bottom)+11rem)] scroll-pb-[calc(env(safe-area-inset-bottom)+11rem)]">
+            {/* KADOSH_BIBLE_TARGET_SELECTOR_MOBILE_V2 */}
+            {renderMobileContentTargetSelector()}
             {bibleOutlinePanel}
           </div>
         )}

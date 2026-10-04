@@ -32,6 +32,8 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const [projectorState, setProjectorState] = useState(null);
   const [announcementState, setAnnouncementState] = useState(null);
   const [canvaOutput, setCanvaOutput] = useState(null);
+  const [projectionTargets, setProjectionTargets] = useState(null);
+  const [hasRoutedCanva, setHasRoutedCanva] = useState(false);
   const [hasRoutedMedia, setHasRoutedMedia] = useState(false);
   const [showControls, setShowControls] = useState(false);
   const controlsTimerRef = useRef(null);
@@ -66,7 +68,9 @@ const Proyector = ({ eventoIdOverride, user }) => {
         setTicker(data.proyectorTicker || null);
         setCountdown(data.proyectorCountdown || null);
         setProjectorState(data.projectorState || null);
+        setProjectionTargets(data.projectionTargets || null);
         setAnnouncementState(data.announcementState || null);
+        setHasRoutedCanva(Boolean(data.canvaOutputs && typeof data.canvaOutputs === 'object'));
         setCanvaOutput(data.canvaOutputs?.projector || null);
       }
     });
@@ -250,8 +254,25 @@ const Proyector = ({ eventoIdOverride, user }) => {
   };
 
   // Permitir renderizar si hay video principal, aunque no haya letras
+  const routedCanvaUpdatedAt = Number(canvaOutput?.updatedAt || 0);
+  const routedMediaUpdatedAt = Number(media?.updatedAt || 0);
+  const projectorStateUsesOutputTargets = Boolean(
+    projectorState?.contentType === 'bible'
+    || projectorState?.contentType === 'quickMessage'
+    || projectorState?.type === 'quickMessage'
+  );
+  const projectorReceivesTargetedContent = !projectorStateUsesOutputTargets || projectionTargets?.projector !== false;
+  const stateUpdatedAt = projectorReceivesTargetedContent
+    ? Number(projectorState?.updatedAt || projectorState?.projectionVersion || 0)
+    : 0;
+  const canvaOwnsProjector = Boolean(
+    canvaOutput?.active
+    && canvaOutput?.embedUrl
+    && routedCanvaUpdatedAt >= Math.max(routedMediaUpdatedAt, stateUpdatedAt)
+  );
+
   if (apagar) return <div className="fixed inset-0 bg-black animate-in fade-in duration-700"></div>;
-  if (canvaOutput?.active && canvaOutput?.embedUrl) return <InternalScreenCanva state={canvaOutput} label="Canva en proyector" />;
+  if (canvaOwnsProjector) return <InternalScreenCanva state={canvaOutput} label="Canva en proyector" />;
   if (projectorState?.type === 'announcement' && announcementState?.presentationActive) {
     return <AnnouncementPresentation user={user} state={announcementState} />;
   }
@@ -261,12 +282,16 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const activePreachingState = resolveActivePreachingProjectorState({ projectorState, proyectorApagado: apagar });
   const preachingContent = resolvePreachingProjectionContent(activePreachingState);
   const isPreachingContent = Boolean(preachingContent);
-  const activeBibleState = resolveActiveBibleProjectorState({ projectorState, proyectorApagado: apagar });
+  const activeBibleState = projectorReceivesTargetedContent
+    ? resolveActiveBibleProjectorState({ projectorState, proyectorApagado: apagar })
+    : null;
   const isBibleContent = Boolean(activeBibleState);
   const activeBibleSlide = resolveActiveBibleSlide(activeBibleState);
-  const activeQuickMessageState = resolveActiveQuickMessageProjectorState({ projectorState, proyectorApagado: apagar });
+  const activeQuickMessageState = projectorReceivesTargetedContent
+    ? resolveActiveQuickMessageProjectorState({ projectorState, proyectorApagado: apagar })
+    : null;
   const isQuickMessageContent = Boolean(activeQuickMessageState);
-  const activeCanvaEmbedUrl = projectorState?.contentType === 'canva' ? String(projectorState?.canva?.embedUrl || '') : '';
+  const activeCanvaEmbedUrl = !hasRoutedCanva && projectorState?.contentType === 'canva' ? String(projectorState?.canva?.embedUrl || '') : '';
   const bibleHeading = activeBibleSlide?.heading || null;
   const hasProjectedTextContent = isBibleContent || isPreachingContent || isQuickMessageContent;
 
