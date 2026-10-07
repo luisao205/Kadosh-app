@@ -589,6 +589,36 @@ service cloud.firestore {
       ];
     }
 
+    // Output controls must not depend on the content currently on a screen.
+    function projectorControlFields() {
+      return ['proyectorModoTransmision', 'proyectorTransicion', 'proyectorCountdown'];
+    }
+
+    function validProjectorCountdown() {
+      return request.resource.data.proyectorCountdown is map
+        && request.resource.data.proyectorCountdown.keys().hasOnly(['active', 'endTimestamp'])
+        && request.resource.data.proyectorCountdown.active is bool
+        && (
+          (request.resource.data.proyectorCountdown.active
+            && request.resource.data.proyectorCountdown.endTimestamp is int
+            && request.resource.data.proyectorCountdown.endTimestamp >= 946684800000
+            && request.resource.data.proyectorCountdown.endTimestamp <= 4102444800000)
+          || (!request.resource.data.proyectorCountdown.active
+            && request.resource.data.proyectorCountdown.endTimestamp == null)
+        );
+    }
+
+    function canUpdateProjectorControls() {
+      let changed = changedEventKeys();
+      return hasPermission('multimedia.controlOutputs')
+        && changed.hasOnly(projectorControlFields())
+        && (!changed.hasAny(['proyectorModoTransmision'])
+          || request.resource.data.proyectorModoTransmision is bool)
+        && (!changed.hasAny(['proyectorTransicion'])
+          || request.resource.data.proyectorTransicion in ['fade', 'slide', 'zoom', 'none'])
+        && (!changed.hasAny(['proyectorCountdown']) || validProjectorCountdown());
+    }
+
     function sharedEventParticipationFields() {
       return [
         'estadoAsistencia',
@@ -970,7 +1000,10 @@ service cloud.firestore {
 
     function canUpdateEvent(eventoId) {
       let projectionChange = changedEventKeys().hasAny(['projectorState']);
-      return projectionChange
+      let controlChange = changedEventKeys().hasAny(projectorControlFields());
+      return controlChange
+        ? canUpdateProjectorControls()
+        : (projectionChange
         ? (isExactBlackoutRestore()
           ? hasPermission('multimedia.controlOutputs')
           : (request.resource.data.projectorState is map
@@ -984,7 +1017,7 @@ service cloud.firestore {
           || canUpdateEventCanvaOutputs()
           || canUpdateEventMediaOutputs()
           || canUpdateEventAsParticipant()
-          || canUpdateEventAsMedia());
+          || canUpdateEventAsMedia()));
     }
 
     function canUpdateEventAsPastorProjection(eventoId) {
