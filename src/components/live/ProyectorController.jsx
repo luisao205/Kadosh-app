@@ -5808,14 +5808,14 @@ const ProyectorController = ({ user }) => {
           <div className="relative max-w-4xl w-full flex flex-col items-center">
             <button 
               onClick={() => setLargePreview(null)}
-              className="absolute -top-12 right-0 p-2 text-zinc-400 hover:text-white flex items-center gap-2 font-bold"
+              className="absolute -top-12 right-0 z-10 p-2 text-zinc-400 hover:text-white flex items-center gap-2 font-bold"
             > {/* Botón para cerrar la vista previa grande */}
               <X size={24}/> CERRAR
             </button>
             <button 
               disabled={!canProjectMedia || !hasMediaTargets(mediaTargets)}
               onClick={() => { projectMedia(largePreview); setLargePreview(null); }}
-              className="absolute -top-12 left-0 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-40"
+              className="absolute -top-12 left-0 z-10 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-40"
             >
               <Send size={18}/> PROYECTAR EN SELECCIONADAS
             </button>
