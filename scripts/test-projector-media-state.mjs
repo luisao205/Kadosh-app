@@ -215,9 +215,9 @@ const controllerSource = await readFile(
   'utf8'
 );
 assert.match(controllerSource, /handleUploadBackground = async \(e, \{ applyAsBackground = false \} = \{\}\)/);
-assert.match(controllerSource, /if \(applyAsBackground\) \{/);
+assert.match(controllerSource, /if \(applyAsBackground && lastBackground\) \{/);
 assert.match(controllerSource, /onChange=\{\(event\) => handleUploadBackground\(event, \{ applyAsBackground: true \}\)\}/);
-assert.match(controllerSource, /onChange=\{handleUploadBackground\}/);
+assert.match(controllerSource, /await handleUploadBackground\(\s*\{ target: \{ files, value: '' \} \},\s*\{ applyAsBackground: false \}\s*\)/);
 assert.doesNotMatch(controllerSource, /background: evento\?\.projectorState\?\.background \|\| fondoActivo/);
 assert.match(controllerSource, /onClick=\{\(\) => setLargePreview\(null\)\}[\s\S]{0,180}className="absolute -top-12 right-0 z-10/);
 assert.match(controllerSource, /onClick=\{\(\) => \{ projectMedia\(largePreview\); setLargePreview\(null\); \}\}[\s\S]{0,260}className="absolute -top-12 left-0 z-10/);
