@@ -1,6 +1,8 @@
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
-const { randomUUID } = require("crypto");
+const { FieldPath, FieldValue, Timestamp } = require("firebase-admin/firestore");
+const { createHash, randomUUID } = require("crypto");
+const { resolveCanvaInput } = require("./canvaLinkResolver");
 const {
   canEditChordsOnly,
   canEditLyricsOnly
@@ -323,6 +325,182 @@ const readActorInTransaction = async (transaction, uid) => {
   };
 };
 
+const CANVA_OUTPUT_TARGETS = new Set(["projector", "singers", "musicians"]);
+const CANVA_UNDO_WINDOW_MS = 10 * 60 * 1000;
+
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+
+const assertProjectionId = (value, field) => {
+  const id = assertNonEmptyString(value, field);
+  if (id.length > 256) throw new functions.https.HttpsError("invalid-argument", `${field} invalido.`);
+  return id;
+};
+
+const assertCanvaProjectionRequest = (data) => {
+  assertExactPayload(data, ["eventId", "canvaId", "page", "destinations", "requestId"]);
+  const eventId = assertProjectionId(data.eventId, "eventId");
+  const canvaId = assertProjectionId(data.canvaId, "canvaId");
+  const requestId = assertProjectionId(data.requestId, "requestId");
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(requestId)) {
+    throw new functions.https.HttpsError("invalid-argument", "requestId invalido.");
+  }
+  if (!Number.isInteger(data.page) || data.page < 1 || data.page > 500) {
+    throw new functions.https.HttpsError("invalid-argument", "page invalida.");
+  }
+  if (!Array.isArray(data.destinations) || !data.destinations.length || data.destinations.length > CANVA_OUTPUT_TARGETS.size
+    || data.destinations.some((target) => typeof target !== "string" || !CANVA_OUTPUT_TARGETS.has(target))
+    || new Set(data.destinations).size !== data.destinations.length) {
+    throw new functions.https.HttpsError("invalid-argument", "Destinos invalidos.");
+  }
+  return {
+    eventId,
+    canvaId,
+    page: data.page,
+    destinations: [...data.destinations].sort(),
+    requestId
+  };
+};
+
+const assertTemporaryCanvaProjectionRequest = (data) => {
+  assertExactPayload(data, ["eventId", "rawUrl", "title", "page", "pageCount", "destinations", "requestId"]);
+  const eventId = assertProjectionId(data.eventId, "eventId");
+  const requestId = assertProjectionId(data.requestId, "requestId");
+  const rawUrl = typeof data.rawUrl === "string" ? data.rawUrl.trim() : "";
+  const title = typeof data.title === "string" ? data.title.trim() : "";
+  if (!rawUrl || rawUrl.length > 2048 || !title || title.length > 160) {
+    throw new functions.https.HttpsError("invalid-argument", "Datos temporales de Canva invalidos.");
+  }
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(requestId)) {
+    throw new functions.https.HttpsError("invalid-argument", "requestId invalido.");
+  }
+  if (!Number.isInteger(data.pageCount) || data.pageCount < 1 || data.pageCount > 500
+    || !Number.isInteger(data.page) || data.page < 1 || data.page > data.pageCount) {
+    throw new functions.https.HttpsError("invalid-argument", "Pagina temporal invalida.");
+  }
+  if (!Array.isArray(data.destinations) || !data.destinations.length || data.destinations.length > CANVA_OUTPUT_TARGETS.size
+    || data.destinations.some((target) => typeof target !== "string" || !CANVA_OUTPUT_TARGETS.has(target))
+    || new Set(data.destinations).size !== data.destinations.length) {
+    throw new functions.https.HttpsError("invalid-argument", "Destinos invalidos.");
+  }
+  return {
+    eventId,
+    rawUrl,
+    title,
+    page: data.page,
+    pageCount: data.pageCount,
+    destinations: [...data.destinations].sort(),
+    requestId
+  };
+};
+
+const projectionFingerprint = (payload) => createHash("sha256")
+  .update(JSON.stringify({
+    action: "canva",
+    eventId: payload.eventId,
+    canvaId: payload.canvaId,
+    page: payload.page,
+    destinations: payload.destinations
+  }))
+  .digest("hex");
+
+const temporaryCanvaProjectionFingerprint = (payload) => createHash("sha256")
+  .update(JSON.stringify({
+    action: "canva-temporary",
+    eventId: payload.eventId,
+    sourceUrl: payload.sourceUrl,
+    title: payload.title,
+    page: payload.page,
+    pageCount: payload.pageCount,
+    destinations: payload.destinations
+  }))
+  .digest("hex");
+
+const deterministicUndoOperationId = (uid, eventId, requestId) => createHash("sha256")
+  .update(`${uid}\u0000${eventId}\u0000${requestId}`)
+  .digest("hex");
+
+const undoValue = (map, key) => hasOwn(map, key)
+  ? { exists: true, value: map[key] }
+  : { exists: false };
+
+const stableUndoValue = (value) => {
+  if (value == null || typeof value !== "object") return value;
+  if (value instanceof Timestamp) {
+    return { __timestamp: [value.seconds, value.nanoseconds] };
+  }
+  if (Array.isArray(value)) return value.map(stableUndoValue);
+  return Object.keys(value).sort().reduce((result, key) => {
+    result[key] = stableUndoValue(value[key]);
+    return result;
+  }, {});
+};
+
+const sameUndoValue = (left, right) => JSON.stringify(stableUndoValue(left)) === JSON.stringify(stableUndoValue(right));
+
+const isValidSavedCanva = (presentation) => {
+  if (!isPlainObject(presentation)
+    || typeof presentation.title !== "string" || !presentation.title.trim()
+    || typeof presentation.sourceUrl !== "string" || !presentation.sourceUrl
+    || typeof presentation.embedUrl !== "string" || !presentation.embedUrl
+    || !Number.isInteger(presentation.pageCount) || presentation.pageCount < 1 || presentation.pageCount > 500) {
+    return false;
+  }
+  try {
+    const url = new URL(presentation.embedUrl);
+    const host = url.hostname.toLowerCase();
+    return (host === "canva.com" || host.endsWith(".canva.com"))
+      && url.protocol === "https:"
+      && url.pathname.includes("/design/")
+      && url.pathname.includes("/view");
+  } catch {
+    return false;
+  }
+};
+
+const canvaEmbedPageUrl = (embedUrl, page) => {
+  const url = new URL(embedUrl);
+  url.hash = String(page);
+  return url.toString();
+};
+
+const groupRequiresMediaRestore = (group) => group?.before?.mediaOutput?.exists === true;
+
+const groupHasModernCanvaIdentity = (group) => (
+  typeof group?.expectedAfter?.canvaOutput?.value?.projectionOperationId === "string"
+  && group.expectedAfter.canvaOutput.value.projectionOperationId.length > 0
+);
+
+const groupMatchesExpectedAfter = (eventData, group) => {
+  const target = group.target;
+  const currentCanva = undoValue(eventData.canvaOutputs || {}, target);
+  const currentMedia = undoValue(eventData.mediaOutputs || {}, target);
+  const expectedCanva = group.expectedAfter.canvaOutput;
+  if (groupHasModernCanvaIdentity(group)) {
+    return currentCanva.exists === true
+      && currentCanva.value?.active === true
+      && currentCanva.value?.presentationId === expectedCanva.value.presentationId
+      && currentCanva.value?.projectionOperationId === expectedCanva.value.projectionOperationId
+      && sameUndoValue(currentMedia, group.expectedAfter.mediaOutput);
+  }
+  const currentMemory = undoValue(eventData.canvaPageMemory?.[target] || {}, group.memoryKey);
+  return sameUndoValue(currentCanva, group.expectedAfter.canvaOutput)
+    && sameUndoValue(currentMedia, group.expectedAfter.mediaOutput)
+    && sameUndoValue(currentMemory, group.expectedAfter.canvaPageMemory);
+};
+
+const addUndoFieldUpdates = (updates, target, group, stage) => {
+  const values = group[stage];
+  const deleteValue = FieldValue.delete();
+  updates.push(new FieldPath("canvaOutputs", target), values.canvaOutput.exists ? values.canvaOutput.value : deleteValue);
+  updates.push(new FieldPath("mediaOutputs", target), values.mediaOutput.exists ? values.mediaOutput.value : deleteValue);
+  if (!(stage === "before" && group.preserveCanvaPageMemory)) {
+    updates.push(
+      new FieldPath("canvaPageMemory", target, group.memoryKey),
+      values.canvaPageMemory.exists ? values.canvaPageMemory.value : deleteValue
+    );
+  }
+};
+
 const requireOwner = async (uid) => {
   const actor = await loadActor(uid);
   if (actor.role !== "dueno") {
@@ -480,6 +658,269 @@ exports.updateSongLyrics = functions.https.onCall(async (data, context) => {
     transaction.set(ref.collection("permissionAudit").doc(), songAuditData(actor, "songs.editLyrics", ["letraRaw"]));
   });
   return { ok: true };
+});
+
+exports.projectSavedCanva = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesion.");
+  const request = assertCanvaProjectionRequest(data);
+  const db = admin.firestore();
+  const eventRef = db.collection("eventos").doc(request.eventId);
+  const presentationRef = db.collection("canvaPresentations").doc(request.canvaId);
+  const operationId = deterministicUndoOperationId(context.auth.uid, request.eventId, request.requestId);
+  const operationRef = eventRef.collection("undoOperations").doc(operationId);
+  const fingerprint = projectionFingerprint(request);
+
+  return db.runTransaction(async (transaction) => {
+    const [actor, eventSnap, operationSnap, presentationSnap] = await Promise.all([
+      readActorInTransaction(transaction, context.auth.uid),
+      transaction.get(eventRef),
+      transaction.get(operationRef),
+      transaction.get(presentationRef)
+    ]);
+    if (!hasPermission(actor.user, actor.roleDefaults, "canva.project")) {
+      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para proyectar Canva.");
+    }
+    if (!eventSnap.exists) throw new functions.https.HttpsError("not-found", "El evento ya no esta disponible.");
+    if (operationSnap.exists) {
+      if (operationSnap.get("fingerprint") !== fingerprint || operationSnap.get("action") !== "canva") {
+        throw new functions.https.HttpsError("already-exists", "requestId ya fue usado para otra operacion.");
+      }
+      return { ok: true, operationId, status: operationSnap.get("status"), idempotent: true };
+    }
+
+    const eventData = eventSnap.data() || {};
+    if (eventData.projectorState?.contentType === "canva") {
+      return { ok: false, code: "LEGACY_CANVA_ACTIVE" };
+    }
+    if (!presentationSnap.exists) throw new functions.https.HttpsError("not-found", "La presentacion Canva no existe.");
+    const presentation = presentationSnap.data() || {};
+    if (presentation.setlistId !== request.eventId) {
+      throw new functions.https.HttpsError("permission-denied", "La presentacion Canva no pertenece a este evento.");
+    }
+    if (!isValidSavedCanva(presentation)) {
+      throw new functions.https.HttpsError("failed-precondition", "La presentacion Canva guardada no es valida.");
+    }
+    if (request.page > presentation.pageCount) {
+      throw new functions.https.HttpsError("invalid-argument", "page invalida.");
+    }
+
+    const now = Date.now();
+    const memoryKey = `id:${request.canvaId}`;
+    const actorName = actor.user.nombre || actor.user.email || "Multimedia";
+    const groups = {};
+    const eventUpdates = [];
+
+    request.destinations.forEach((target) => {
+      const rememberedPage = eventData.canvaPageMemory?.[target]?.[memoryKey];
+      const targetPage = Number.isInteger(rememberedPage)
+        ? Math.max(1, Math.min(presentation.pageCount, rememberedPage))
+        : request.page;
+      const before = {
+        canvaOutput: undoValue(eventData.canvaOutputs || {}, target),
+        mediaOutput: undoValue(eventData.mediaOutputs || {}, target),
+        canvaPageMemory: undoValue(eventData.canvaPageMemory?.[target] || {}, memoryKey)
+      };
+      const expectedAfter = {
+        canvaOutput: {
+          exists: true,
+          value: {
+            active: true,
+            presentationId: request.canvaId,
+            projectionOperationId: operationId,
+            title: presentation.title,
+            sourceUrl: presentation.sourceUrl,
+            embedUrl: canvaEmbedPageUrl(presentation.embedUrl, targetPage),
+            page: targetPage,
+            pageCount: presentation.pageCount,
+            updatedAt: now,
+            updatedBy: actorName
+          }
+        },
+        mediaOutput: { exists: false },
+        canvaPageMemory: { exists: true, value: targetPage }
+      };
+      const group = { target, memoryKey, before, expectedAfter, preserveCanvaPageMemory: true };
+      groups[`route_${target}`] = group;
+      addUndoFieldUpdates(eventUpdates, target, group, "expectedAfter");
+    });
+
+    transaction.create(operationRef, {
+      version: 1,
+      action: "canva",
+      actorUid: actor.uid,
+      requestId: request.requestId,
+      fingerprint,
+      createdAt: now,
+      expiresAt: now + CANVA_UNDO_WINDOW_MS,
+      status: "applied",
+      groups,
+      outcome: { projected: Object.keys(groups) }
+    });
+    transaction.update(eventRef, ...eventUpdates);
+    return { ok: true, operationId, status: "applied", idempotent: false };
+  });
+});
+
+exports.projectTemporaryCanva = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesion.");
+  const request = assertTemporaryCanvaProjectionRequest(data);
+  let resolved;
+  try {
+    resolved = await resolveCanvaInput(request.rawUrl);
+  } catch (error) {
+    console.error("Error resolviendo Canva temporal:", error);
+    throw new functions.https.HttpsError("invalid-argument", "El enlace temporal de Canva no es valido.");
+  }
+
+  const db = admin.firestore();
+  const eventRef = db.collection("eventos").doc(request.eventId);
+  const operationId = deterministicUndoOperationId(context.auth.uid, request.eventId, request.requestId);
+  const operationRef = eventRef.collection("undoOperations").doc(operationId);
+  const fingerprint = temporaryCanvaProjectionFingerprint({ ...request, sourceUrl: resolved.sourceUrl });
+
+  return db.runTransaction(async (transaction) => {
+    const [actor, eventSnap, operationSnap] = await Promise.all([
+      readActorInTransaction(transaction, context.auth.uid),
+      transaction.get(eventRef),
+      transaction.get(operationRef)
+    ]);
+    if (!hasPermission(actor.user, actor.roleDefaults, "canva.project")) {
+      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para proyectar Canva.");
+    }
+    if (!eventSnap.exists) throw new functions.https.HttpsError("not-found", "El evento ya no esta disponible.");
+    if (operationSnap.exists) {
+      if (operationSnap.get("fingerprint") !== fingerprint || operationSnap.get("action") !== "canva" || operationSnap.get("canvaKind") !== "temporary") {
+        throw new functions.https.HttpsError("already-exists", "requestId ya fue usado para otra operacion.");
+      }
+      return { ok: true, operationId, status: operationSnap.get("status"), idempotent: true };
+    }
+
+    const eventData = eventSnap.data() || {};
+    if (eventData.projectorState?.contentType === "canva") {
+      return { ok: false, code: "LEGACY_CANVA_ACTIVE" };
+    }
+
+    const now = Date.now();
+    const actorName = actor.user.nombre || actor.user.email || "Multimedia";
+    const memoryKey = `url:${resolved.sourceUrl}`;
+    const groups = {};
+    const eventUpdates = [];
+    request.destinations.forEach((target) => {
+      const rememberedPage = eventData.canvaPageMemory?.[target]?.[memoryKey];
+      const targetPage = Number.isInteger(rememberedPage)
+        ? Math.max(1, Math.min(request.pageCount, rememberedPage))
+        : request.page;
+      const before = {
+        canvaOutput: undoValue(eventData.canvaOutputs || {}, target),
+        mediaOutput: undoValue(eventData.mediaOutputs || {}, target),
+        canvaPageMemory: undoValue(eventData.canvaPageMemory?.[target] || {}, memoryKey)
+      };
+      const expectedAfter = {
+        canvaOutput: {
+          exists: true,
+          value: {
+            active: true,
+            presentationId: "",
+            projectionOperationId: operationId,
+            title: request.title,
+            sourceUrl: resolved.sourceUrl,
+            embedUrl: canvaEmbedPageUrl(resolved.embedUrl, targetPage),
+            page: targetPage,
+            pageCount: request.pageCount,
+            updatedAt: now,
+            updatedBy: actorName
+          }
+        },
+        mediaOutput: { exists: false },
+        canvaPageMemory: { exists: true, value: targetPage }
+      };
+      const group = { target, memoryKey, before, expectedAfter, preserveCanvaPageMemory: true };
+      groups[`route_${target}`] = group;
+      addUndoFieldUpdates(eventUpdates, target, group, "expectedAfter");
+    });
+
+    transaction.create(operationRef, {
+      version: 1,
+      action: "canva",
+      canvaKind: "temporary",
+      actorUid: actor.uid,
+      requestId: request.requestId,
+      fingerprint,
+      createdAt: now,
+      expiresAt: now + CANVA_UNDO_WINDOW_MS,
+      status: "applied",
+      groups,
+      outcome: { projected: Object.keys(groups) }
+    });
+    transaction.update(eventRef, ...eventUpdates);
+    return { ok: true, operationId, status: "applied", idempotent: false };
+  });
+});
+
+exports.restoreProjectionUndo = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesion.");
+  assertExactPayload(data, ["eventId", "operationId"]);
+  const eventId = assertProjectionId(data.eventId, "eventId");
+  const operationId = assertProjectionId(data.operationId, "operationId");
+  const db = admin.firestore();
+  const eventRef = db.collection("eventos").doc(eventId);
+  const operationRef = eventRef.collection("undoOperations").doc(operationId);
+
+  return db.runTransaction(async (transaction) => {
+    const [actor, eventSnap, operationSnap] = await Promise.all([
+      readActorInTransaction(transaction, context.auth.uid),
+      transaction.get(eventRef),
+      transaction.get(operationRef)
+    ]);
+    if (!eventSnap.exists) throw new functions.https.HttpsError("not-found", "El evento ya no esta disponible.");
+    if (!operationSnap.exists) throw new functions.https.HttpsError("not-found", "La operacion de deshacer no existe.");
+    const operation = operationSnap.data() || {};
+    if (operation.action !== "canva" || !isPlainObject(operation.groups)) {
+      throw new functions.https.HttpsError("failed-precondition", "La operacion no se puede restaurar.");
+    }
+    if (!hasPermission(actor.user, actor.roleDefaults, "canva.project")) {
+      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para restaurar Canva.");
+    }
+    if (Date.now() > Number(operation.expiresAt || 0)) {
+      throw new functions.https.HttpsError("failed-precondition", "La operacion de deshacer expiro.");
+    }
+    if (operation.status !== "applied") {
+      return { ok: true, operationId, status: "already_restored", restored: [], skipped: [] };
+    }
+    const groups = Object.entries(operation.groups);
+    const isOwnTemporaryCanvaUndo = operation.canvaKind === "temporary"
+      && operation.actorUid === context.auth.uid;
+    if (groups.some(([, group]) => groupRequiresMediaRestore(group))
+      && !isOwnTemporaryCanvaUndo
+      && !hasPermission(actor.user, actor.roleDefaults, "multimedia.project")) {
+      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para restaurar Multimedia.");
+    }
+
+    const eventData = eventSnap.data() || {};
+    const restored = [];
+    const skipped = [];
+    const eventUpdates = [];
+    groups.forEach(([groupName, group]) => {
+      if (!isPlainObject(group) || !CANVA_OUTPUT_TARGETS.has(group.target) || typeof group.memoryKey !== "string"
+        || !isPlainObject(group.before) || !isPlainObject(group.expectedAfter)) {
+        throw new functions.https.HttpsError("failed-precondition", "La operacion almacenada es invalida.");
+      }
+      if (!groupHasModernCanvaIdentity(group)) {
+        skipped.push({ group: groupName, reason: "unsupported_legacy_operation" });
+        return;
+      }
+      if (!groupMatchesExpectedAfter(eventData, group)) {
+        skipped.push({ group: groupName, reason: "expected_after_mismatch" });
+        return;
+      }
+      addUndoFieldUpdates(eventUpdates, group.target, group, "before");
+      restored.push(groupName);
+    });
+    const status = restored.length === groups.length ? "restored" : (restored.length ? "partial" : "skipped");
+    if (eventUpdates.length) transaction.update(eventRef, ...eventUpdates);
+    transaction.update(operationRef, { status, outcome: { restored, skipped }, restoredAt: Date.now() });
+    return { ok: true, operationId, status, restored, skipped };
+  });
 });
 
 exports.projectQuickMessage = functions.https.onCall(async (data, context) => {

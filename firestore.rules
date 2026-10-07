@@ -803,10 +803,11 @@ service cloud.firestore {
       return state is map
         && state.keys().hasOnly([
           'active', 'presentationId', 'title', 'sourceUrl', 'embedUrl',
-          'page', 'pageCount', 'updatedAt', 'updatedBy'
+          'projectionOperationId', 'page', 'pageCount', 'updatedAt', 'updatedBy'
         ])
         && state.active == true
         && state.presentationId is string
+        && (!('projectionOperationId' in state) || state.projectionOperationId is string)
         && state.title is string
         && state.sourceUrl is string
         && state.embedUrl is string
@@ -826,6 +827,121 @@ service cloud.firestore {
         && (!('musicians' in outputs) || validCanvaOutputState(outputs.musicians));
     }
 
+    function hasCanonicalTemporaryCanvaIdentity(state) {
+      return state is map
+        && state.presentationId == ''
+        && !('projectionOperationId' in state)
+        && state.embedUrl.matches('^https://([A-Za-z0-9-]+\\.)*canva\\.com/design/[^?#]+/view\\?embed#(page=)?[1-9][0-9]*$');
+    }
+
+    function preservesSavedCanvaRoute(previous, next) {
+      return next.presentationId == previous.presentationId
+        && next.sourceUrl == previous.sourceUrl
+        && next.title == previous.title
+        && next.pageCount == previous.pageCount;
+    }
+
+    function preservesCanvaProjectionIdentity(next, previous, target) {
+      return !(target in next)
+        || (!(target in previous)
+          ? hasCanonicalTemporaryCanvaIdentity(next[target])
+          : (('projectionOperationId' in previous[target])
+            ? (('projectionOperationId' in next[target])
+              ? (next[target].projectionOperationId == previous[target].projectionOperationId
+                && preservesSavedCanvaRoute(previous[target], next[target]))
+              : hasCanonicalTemporaryCanvaIdentity(next[target]))
+            : (!('projectionOperationId' in next[target])
+              && (previous[target].presentationId == ''
+                ? hasCanonicalTemporaryCanvaIdentity(next[target])
+                : (hasCanonicalTemporaryCanvaIdentity(next[target])
+                  || preservesSavedCanvaRoute(previous[target], next[target]))))));
+    }
+
+    function validCanvaOutputWithProjectionIdentity(next, previous, target) {
+      return !(target in next)
+        || (target in previous && next[target] == previous[target])
+        || (validCanvaOutputState(next[target])
+          && (!(target in previous)
+            ? hasCanonicalTemporaryCanvaIdentity(next[target])
+            : preservesCanvaProjectionIdentity(next, previous, target)));
+    }
+
+    function validCanvaOutputsWithProjectionIdentities() {
+      let next = request.resource.data.canvaOutputs;
+      let previous = ('canvaOutputs' in resource.data && resource.data.canvaOutputs is map)
+        ? resource.data.canvaOutputs
+        : {};
+      return next is map
+        && next.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && validCanvaOutputWithProjectionIdentity(next, previous, 'projector')
+        && validCanvaOutputWithProjectionIdentity(next, previous, 'singers')
+        && validCanvaOutputWithProjectionIdentity(next, previous, 'musicians');
+    }
+
+    function mediaOutputRemovedOnlyForCanvaTarget(nextMedia, previousMedia, nextCanva, previousCanva, target) {
+      return target in nextMedia
+        ? (target in previousMedia && nextMedia[target] == previousMedia[target])
+        : (!(target in previousMedia)
+          || (target in nextCanva && (!(target in previousCanva) || nextCanva[target] != previousCanva[target])));
+    }
+
+    // A Canva write that also removes Media is only allowed to install a canonical
+    // temporary route. Saved Canva routes are server-authoritative.
+    function validTemporaryCanvaOutputShape(state) {
+      return state is map
+        && state.keys().hasOnly([
+          'active', 'presentationId', 'title', 'sourceUrl', 'embedUrl',
+          'projectionOperationId', 'page', 'pageCount', 'updatedAt', 'updatedBy'
+        ])
+        && state.active == true
+        && state.presentationId == ''
+        && !('projectionOperationId' in state)
+        && state.title is string
+        && state.sourceUrl is string
+        && state.embedUrl is string
+        && state.page is int && state.page >= 1 && state.page <= 500
+        && state.pageCount is int && state.pageCount >= 1 && state.pageCount <= 500
+        && state.page <= state.pageCount
+        && state.updatedAt is int
+        && state.updatedBy is string
+        && state.sourceUrl.matches('^https://([A-Za-z0-9-]+\\.)*canva\\.com/design/[^?#]+/view$')
+        && state.embedUrl.matches('^https://([A-Za-z0-9-]+\\.)*canva\\.com/design/[^?#]+/view\\?embed#(page=)?[1-9][0-9]*$');
+    }
+
+    function validTemporaryCanvaOutputForMediaRemoval(next, previous, target) {
+      return !(target in next)
+        || ((target in previous && next[target] == previous[target])
+          || validTemporaryCanvaOutputShape(next[target]));
+    }
+
+    function validTemporaryCanvaOutputsForMediaRemoval() {
+      let next = request.resource.data.canvaOutputs;
+      let previous = ('canvaOutputs' in resource.data && resource.data.canvaOutputs is map)
+        ? resource.data.canvaOutputs
+        : {};
+      return next is map
+        && next.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && validTemporaryCanvaOutputForMediaRemoval(next, previous, 'projector')
+        && validTemporaryCanvaOutputForMediaRemoval(next, previous, 'singers')
+        && validTemporaryCanvaOutputForMediaRemoval(next, previous, 'musicians');
+    }
+
+    function mediaOutputsOnlyRemoveForCanvaChanges() {
+      let nextMedia = request.resource.data.mediaOutputs;
+      let previousMedia = ('mediaOutputs' in resource.data && resource.data.mediaOutputs is map)
+        ? resource.data.mediaOutputs
+        : {};
+      let nextCanva = request.resource.data.canvaOutputs;
+      let previousCanva = ('canvaOutputs' in resource.data && resource.data.canvaOutputs is map)
+        ? resource.data.canvaOutputs
+        : {};
+      return nextMedia is map
+        && nextMedia.keys().hasOnly(['projector', 'singers', 'musicians'])
+        && mediaOutputRemovedOnlyForCanvaTarget(nextMedia, previousMedia, nextCanva, previousCanva, 'projector')
+        && mediaOutputRemovedOnlyForCanvaTarget(nextMedia, previousMedia, nextCanva, previousCanva, 'singers')
+        && mediaOutputRemovedOnlyForCanvaTarget(nextMedia, previousMedia, nextCanva, previousCanva, 'musicians');
+    }
+
     function validCanvaPageMemory() {
       let memory = request.resource.data.canvaPageMemory;
       return memory is map
@@ -835,18 +951,22 @@ service cloud.firestore {
         && (!('musicians' in memory) || (memory.musicians is map && memory.musicians.size() <= 500));
     }
 
-    function canUpdateEventCanvaOutputs() {
+    // Route/page-only writes reach this branch before the general event disjunction.
+    function canUpdateEventCanvaOutputs(changed) {
       return hasPermission('canva.project')
-        && onlyEventKeys(['canvaOutputs', 'mediaOutputs', 'canvaPageMemory'])
-        && validCanvaOutputsMap()
+        && changed.hasOnly(['canvaOutputs', 'canvaPageMemory'])
+        && validCanvaOutputsWithProjectionIdentities()
         && (
-          !changedEventKeys().hasAny(['mediaOutputs'])
-          || (validMediaOutputsMap() && mediaOutputsOnlyRemove())
-        )
-        && (
-          !changedEventKeys().hasAny(['canvaPageMemory'])
+          !changed.hasAny(['canvaPageMemory'])
           || validCanvaPageMemory()
         );
+    }
+
+    function canUpdateEventCanvaOutputsWithMediaRemoval() {
+      return hasPermission('canva.project')
+        && validTemporaryCanvaOutputsForMediaRemoval()
+        && mediaOutputsOnlyRemoveForCanvaChanges()
+        && (!('canvaPageMemory' in request.resource.data) || validCanvaPageMemory());
     }
 
     function canUpdateEventBibleOutline() {
@@ -999,9 +1119,16 @@ service cloud.firestore {
     }
 
     function canUpdateEvent(eventoId) {
-      let projectionChange = changedEventKeys().hasAny(['projectorState']);
-      let controlChange = changedEventKeys().hasAny(projectorControlFields());
-      return controlChange
+      let changed = changedEventKeys();
+      let canvaRouteWithMediaRemoval = changed.hasOnly(['canvaOutputs', 'canvaPageMemory', 'mediaOutputs'])
+        && changed.hasAny(['canvaOutputs'])
+        && changed.hasAny(['mediaOutputs']);
+      let projectionChange = changed.hasAny(['projectorState']);
+      let controlChange = changed.hasAny(projectorControlFields());
+      let canvaRouteOnlyChange = changed.hasOnly(['canvaOutputs', 'canvaPageMemory']);
+      return canvaRouteWithMediaRemoval
+        ? canUpdateEventCanvaOutputsWithMediaRemoval()
+        : (controlChange
         ? canUpdateProjectorControls()
         : (projectionChange
         ? (isExactBlackoutRestore()
@@ -1011,13 +1138,15 @@ service cloud.firestore {
           && !isExactBibleRestore()
           ? false
           : canUpdateEventProjection(eventoId)))
+        : (canvaRouteOnlyChange
+          ? canUpdateEventCanvaOutputs(changed)
         : (canUpdateEventAsAdmin()
           || canUpdateEventSetlist()
           || canUpdateEventBibleOutline()
-          || canUpdateEventCanvaOutputs()
+          || canUpdateEventCanvaOutputs(changed)
           || canUpdateEventMediaOutputs()
           || canUpdateEventAsParticipant()
-          || canUpdateEventAsMedia()));
+          || canUpdateEventAsMedia()))));
     }
 
     function canUpdateEventAsPastorProjection(eventoId) {
@@ -1095,6 +1224,10 @@ service cloud.firestore {
           && request.resource.data.pastorUid == request.auth.uid
           && request.resource.data.predicaId == predicaId;
         allow delete: if false;
+      }
+
+      match /undoOperations/{operationId} {
+        allow read, write: if false;
       }
 
       match /private/preacher {

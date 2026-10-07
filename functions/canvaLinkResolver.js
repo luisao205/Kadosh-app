@@ -5,6 +5,13 @@ const allowedCanvaHost = (hostname) => {
   return host === 'canva.link' || host === 'canva.com' || host.endsWith('.canva.com');
 };
 
+const extractCanvaUrlCandidate = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const iframeMatch = raw.match(/<iframe[^>]*\bsrc=(['"])(.*?)\1/i);
+  return String(iframeMatch?.[2] || raw).replace(/&amp;/g, '&').trim();
+};
+
 const normalizeCanvaDesignViewUrl = (value) => {
   try {
     const url = new URL(value);
@@ -132,7 +139,35 @@ const resolveCanvaShortLink = async (initialUrl) => {
   throw new Error('El enlace corto no expuso una vista pública de diseño Canva.');
 };
 
-module.exports = ({ functions }) => functions.https.onCall(async (data, context) => {
+const resolveCanvaInput = async (value, { resolveShortLink = resolveCanvaShortLink } = {}) => {
+  const candidate = extractCanvaUrlCandidate(value);
+  if (!candidate || candidate.length > 2048) throw new Error('Invalid Canva URL.');
+
+  let input;
+  try {
+    input = new URL(candidate);
+  } catch {
+    throw new Error('Invalid Canva URL.');
+  }
+
+  const direct = normalizeCanvaDesignViewUrl(input.toString());
+  if (direct) {
+    const directUrl = new URL(direct);
+    if (!directUrl.pathname.endsWith('/view')) throw new Error('Canva URL must be a public view.');
+    return { sourceUrl: direct, embedUrl: toEmbedUrl(direct) };
+  }
+
+  if (input.hostname.toLowerCase() !== 'canva.link') {
+    throw new Error('Only Canva public views and canva.link URLs are allowed.');
+  }
+
+  const sourceUrl = await resolveShortLink(input.toString());
+  const embedUrl = toEmbedUrl(sourceUrl);
+  if (!embedUrl) throw new Error('Canva URL is not embeddable.');
+  return { sourceUrl, embedUrl };
+};
+
+const createCanvaLinkResolver = ({ functions }) => functions.https.onCall(async (data, context) => {
   if (!context.auth || !context.auth.uid) {
     throw new functions.https.HttpsError('unauthenticated', 'Debes iniciar sesión.');
   }
@@ -163,3 +198,7 @@ module.exports = ({ functions }) => functions.https.onCall(async (data, context)
     throw new functions.https.HttpsError('failed-precondition', 'No se pudo convertir este enlace corto de Canva a una presentación incrustable.');
   }
 });
+
+module.exports = createCanvaLinkResolver;
+module.exports.resolveCanvaInput = resolveCanvaInput;
+module.exports.normalizeCanvaDesignViewUrl = normalizeCanvaDesignViewUrl;
