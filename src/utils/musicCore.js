@@ -49,9 +49,16 @@ const MINOR_SCALE_STEPS = [0, 2, 3, 5, 7, 8, 10];
 const MINOR_DIATONIC_QUALITIES = ['m', 'dim', '', 'm', 'm', '', ''];
 
 export const normalizarNota = (nota) => {
-  const match = String(nota || '').trim().match(/^[A-G][#b]?/);
+  const match = String(nota || '').trim().match(/^([A-G])([#b]?)/i);
   if (!match) return '';
-  return EQUIVALENCIAS[match[0]] || match[0];
+  const visible = `${match[1].toUpperCase()}${match[2] === 'B' ? 'b' : match[2]}`;
+  return EQUIVALENCIAS[visible] || visible;
+};
+
+export const normalizarTonoVisual = (nota) => {
+  const match = String(nota || '').trim().match(/^([A-G])([#b]?)(.*)$/i);
+  if (!match) return '';
+  return `${match[1].toUpperCase()}${match[2] === 'B' ? 'b' : match[2]}${match[3]}`;
 };
 
 export const isValidChordToken = (chord) => {
@@ -161,9 +168,9 @@ export const traducirAcorde = (acorde, formato = 'american', notacion = 'sharps'
 
   const partes = String(acorde).split('/');
   const traducirParte = (parte) => {
-    const rootMatch = parte.match(/^[A-G][#b]?/);
+    const rootMatch = parte.match(/^[A-G][#b]?/i);
     if (!rootMatch) return parte;
-    let root = rootMatch[0];
+    let root = normalizarTonoVisual(rootMatch[0]);
     const adorno = parte.substring(root.length);
 
     if (notacion === 'sharps' && EQUIVALENCIAS[root]) {

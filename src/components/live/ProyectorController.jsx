@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { doc, getDoc, getDocs, setDoc, onSnapshot, query, collection, where, orderBy, limit, updateDoc, deleteDoc, deleteField, runTransaction, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../config/firebase';
-import { getSectionKey, parsearCancion } from '../../utils/songParser';
+import { getSectionKey, getSectionPages, parsearCancion } from '../../utils/songParser';
 import { Monitor, Play, Pause, PowerOff, X, ArrowLeft, Layers, Type, Eye, Image as ImageIcon, Upload, Loader2, Eraser, AlertCircle, Send, Tv, Star, Megaphone, ChevronRight, Zap, Film, RotateCcw, Rewind, FastForward, Volume2, Folder, FolderPlus, ChevronLeft, Trash2, Edit2, Plus, Fingerprint, Send as SendIcon, Search, SearchCode, Settings2, Clock, ShieldCheck, MessageSquare, Music, BookOpen } from 'lucide-react';
 import { calcularOffsetSemitonos, traducirAcorde } from '../../utils/musicCore';
 import { getEventSingerForSong, getSingerTone, getSongBaseKey } from '../../utils/songAssignments';
@@ -20,7 +20,9 @@ import { resolveSectionMediaForKey, resolveSongBackground } from '../../utils/me
 import { createInactiveSongLiveState } from '../../utils/liveState';
 import { buildPanicProjectorPayload, buildProjectorMediaPayload, buildStoppedProjectorMediaPayload, createProjectionWriteQueue, resolveProjectorBackground, selectSongProjectionBackground } from '../../utils/projectorMediaState';
 import { agregarCancionEnVivo, quitarCancionEnVivo } from '../../utils/liveSetlistFunctions';
-import { updateSongMetadata } from '../../utils/songFunctions';
+import { setEventSongProjectionStyle, updateSongMetadata } from '../../utils/songFunctions';
+import { PROJECTION_STYLE_MOTIONS, PROJECTION_STYLE_PRESETS, getProjectionStyleLabel, normalizeProjectionStyle, resolveProjectionStyle } from '../../utils/projectionStyle';
+import { buildLyricProjectionIdentityModel, createResolvedLyricProjectionPayload, isSameProjectedLyricSlide } from '../../utils/lyricProjectionFormatting';
 import { buildInactiveAnnouncementState } from '../../utils/announcementState';
 import { useFeedback } from '../ui/FeedbackProvider';
 import { PREACHER_REQUEST_STATUS, PREACHER_REQUEST_TYPES, MULTIMEDIA_TO_PASTOR_PRESETS, buildPreachingProjectorState } from '../../utils/preachingLive';
@@ -30,8 +32,6 @@ import { assertBibleOutlineSize, buildBibleOutlineUpdate, createBibleOutlineItem
 import { buildCanonicalBibleProjectorState, buildStoppedBibleProjectionPayload, capturePreviousProjectionFields, isMatchingBibleProjection } from '../../utils/bibleProjectionState';
 import { getPreachingBiblePreview, normalizePreachingBiblePreviewIndex } from '../../utils/preachingProjectionState';
 import { hasPermission } from '../../utils/permissions';
-import { shouldUseLegacyCanvaFallback } from '../../utils/canvaProjectionStrategy';
-import { createProjectionUndoOperation, matchingCanvaMemoryDeltas, matchingFieldDeltas, matchingRouteDeltas, restoreCanvaMemoryDeltas, restoreFieldDeltas, restoreRouteDeltas } from '../../utils/projectionUndoState';
 import { createQuickMessage, isMatchingQuickMessageProjection } from '../../utils/quickMessageProjectionState';
 import { clearQuickMessageProjection as requestQuickMessageClear, projectQuickMessage as requestQuickMessageProjection, updateQuickMessageHistory as requestQuickMessageHistoryUpdate } from '../../utils/quickMessageFunctions';
 import QuickMessagePanel from './QuickMessagePanel';
@@ -70,25 +70,6 @@ const isCanvaShortLink = (value) => {
 };
 
 const resolveCanvaEmbedLink = httpsCallable(functions, 'resolveCanvaEmbedLink');
-const projectSavedCanvaCallable = httpsCallable(functions, 'projectSavedCanva');
-const projectTemporaryCanvaCallable = httpsCallable(functions, 'projectTemporaryCanva');
-const restoreProjectionUndoCallable = httpsCallable(functions, 'restoreProjectionUndo');
-
-const createProjectionRequestId = () => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID().replace(/-/g, '');
-  }
-  return `${Date.now()}${Math.random().toString(36).slice(2, 18)}`;
-};
-
-const isTerminalCanvaProjectionError = (error) => new Set([
-  'functions/unauthenticated',
-  'functions/permission-denied',
-  'functions/not-found',
-  'functions/failed-precondition',
-  'functions/invalid-argument',
-  'functions/already-exists',
-]).has(error?.code);
 
 const ProyectorController = ({ user }) => {
   const { notify } = useFeedback();
@@ -159,13 +140,14 @@ const ProyectorController = ({ user }) => {
   const liveVideoRef = useRef(null); // Ref para el video en la vista "En Vivo"
   const livePreviewMediaRef = useRef(null); // Ref para el video en la vista "Pre-proyección"
   const undoSnapshotRef = useRef(null);
-  const savedCanvaRequestIdsRef = useRef(new Map());
-  const temporaryCanvaRequestIdsRef = useRef(new Map());
   const preBibleVisualStateRef = useRef(null);
   const bibleProjectionActiveRef = useRef(false);
   const [enqueueProjectionWrite] = useState(() => createProjectionWriteQueue());
   const [canUndoLastSend, setCanUndoLastSend] = useState(false);
   const [isUndoingLastSend, setIsUndoingLastSend] = useState(false);
+  const [projectionStyleDraft, setProjectionStyleDraft] = useState(null);
+  const projectionStyleDraftRef = useRef(new Map());
+  const projectionStyleWriteQueuesRef = useRef(new Map());
   const [countdownMinutes, setCountdownMinutes] = useState(5);
   const [countdownTimeLeft, setCountdownTimeLeft] = useState('');
   const [preacherDraft, setPreacherDraft] = useState({
@@ -207,7 +189,6 @@ const ProyectorController = ({ user }) => {
   const [canvaPageSyncMode, setCanvaPageSyncMode] = useState(false);
   // KADOSH_CANVA_RESPONSIVE_WORKSPACE_V1
   const [showMobileCanvaEditor, setShowMobileCanvaEditor] = useState(false);
-  const [desktopCanvaProjectionItem, setDesktopCanvaProjectionItem] = useState(null);
   const [showMobileCanvaPreview, setShowMobileCanvaPreview] = useState(false);
   const [showMobileCanvaPages, setShowMobileCanvaPages] = useState(false);
   const [showScreensMenu, setShowScreensMenu] = useState(false);
@@ -249,6 +230,7 @@ const ProyectorController = ({ user }) => {
   const canReadPastorRequests = canViewPreaching || canEditPreaching || canProjectPreaching;
   const canManageBibleOutline = canProjectBible;
   const canControlSongs = hasPermission(user, 'setlists.control') || canProjectMedia;
+  const canEditEvent = hasPermission(user, 'events.edit');
   const canAccessCanva = canViewCanva || canCreateCanva || canEditCanva || canDeleteCanva || canProjectCanva;
   const canAccessBibleController = canViewBible || canProjectBible || canQuickProject;
   const canAccessPreachingController = canViewPreaching || canCreatePreaching || canEditPreaching || canProjectPreaching;
@@ -415,29 +397,6 @@ const ProyectorController = ({ user }) => {
     setShowMobileCanvaPreview(false);
     setShowMobileCanvaPages(false);
     setShowMobileCanvaEditor(true);
-  };
-
-  const openDesktopCanvaProjectTargets = (item) => {
-    if (!item?.id || !canProjectCanva) return;
-    if (item.setlistId !== eventoId) {
-      notify('Esta presentación Canva no pertenece a este setlist.', { type: 'error' });
-      return;
-    }
-    const pageForControlTarget = readRememberedCanvaPage(
-      evento,
-      canvaControlTarget,
-      item.id,
-      item.sourceUrl || item.inputUrl || item.embedUrl || '',
-      1
-    );
-    selectCanvaPresentation(item, canvaControlTarget, pageForControlTarget);
-    setCanvaUrlError('');
-    setDesktopCanvaProjectionItem(item);
-  };
-
-  const closeDesktopCanvaProjectTargets = () => {
-    setCanvaUrlError('');
-    setDesktopCanvaProjectionItem(null);
   };
 
   const closeMobileCanvaEditor = () => {
@@ -763,8 +722,6 @@ const ProyectorController = ({ user }) => {
     const safeFallbackPage = Math.max(1, Math.floor(Number(page) || 1));
     const safePageCount = Number(pageCount) >= 1 ? Math.max(1, Math.min(500, Math.floor(Number(pageCount)))) : 0;
     const memoryKey = getCanvaMemoryKey(presentationId, resolved.sourceUrl || resolved.embedUrl || '');
-    const targetIds = ['projector', 'singers', 'musicians'].filter((targetId) => safeTargets[targetId]);
-    let undoOperation = null;
 
     await runTransaction(db, async (transaction) => {
       const snapshot = await transaction.get(eventRef);
@@ -807,124 +764,7 @@ const ProyectorController = ({ user }) => {
         mediaOutputs: nextMediaOutputs,
         canvaPageMemory: nextMemory,
       });
-      undoOperation = createProjectionUndoOperation({
-        action: 'canva',
-        beforeEvent: data,
-        afterEvent: {
-          ...data,
-          canvaOutputs: nextOutputs,
-          mediaOutputs: nextMediaOutputs,
-          canvaPageMemory: nextMemory,
-        },
-        targetIds,
-        canvaMemoryKeys: Object.fromEntries(targetIds.map((targetId) => [targetId, memoryKey])),
-      });
     });
-    rememberProjectionUndoOperation(undoOperation);
-  };
-
-  const projectCanvaAndCloseDesktop = async () => {
-    const projected = await projectCanva();
-    if (projected) closeDesktopCanvaProjectTargets();
-  };
-
-  const projectStoredCanvaWithServer = async ({ item, targets, page }) => {
-    const destinations = ['projector', 'singers', 'musicians'].filter((targetId) => targets[targetId]);
-    const requestFingerprint = JSON.stringify({ canvaId: item.id, page, destinations });
-    const requestId = savedCanvaRequestIdsRef.current.get(requestFingerprint) || createProjectionRequestId();
-    savedCanvaRequestIdsRef.current.set(requestFingerprint, requestId);
-    try {
-      const result = await projectSavedCanvaCallable({
-        eventId: eventoId,
-        canvaId: item.id,
-        page,
-        destinations,
-        requestId,
-      });
-      const response = result.data;
-      if (shouldUseLegacyCanvaFallback(response)) return response;
-      if (!response?.ok || !response.operationId) {
-        throw new Error('La proyección Canva no devolvió una operación válida.');
-      }
-      savedCanvaRequestIdsRef.current.delete(requestFingerprint);
-      rememberProjectionUndoOperation({
-        kind: 'server-authoritative',
-        action: 'canva',
-        operationId: response.operationId,
-      });
-      return response;
-    } catch (error) {
-      if (isTerminalCanvaProjectionError(error)) {
-        savedCanvaRequestIdsRef.current.delete(requestFingerprint);
-      }
-      throw error;
-    }
-  };
-
-  const projectStoredCanvaOrLegacy = async ({ item, targets, page }) => {
-    const response = await projectStoredCanvaWithServer({ item, targets, page });
-    if (!shouldUseLegacyCanvaFallback(response)) return response;
-
-    await clearLegacyCanvaProjection();
-    const retryResponse = await projectStoredCanvaWithServer({ item, targets, page });
-    if (shouldUseLegacyCanvaFallback(retryResponse)) {
-      throw new Error('La proyección Canva legacy sigue activa. Intenta nuevamente.');
-    }
-    return retryResponse;
-  };
-
-  const projectTemporaryCanvaWithServer = async ({ rawUrl, title, targets, page, pageCount }) => {
-    const destinations = ['projector', 'singers', 'musicians'].filter((targetId) => targets[targetId]);
-    const requestFingerprint = JSON.stringify({
-      kind: 'temporary',
-      rawUrl: String(rawUrl || '').trim(),
-      title,
-      page,
-      pageCount,
-      destinations,
-    });
-    const requestId = temporaryCanvaRequestIdsRef.current.get(requestFingerprint) || createProjectionRequestId();
-    temporaryCanvaRequestIdsRef.current.set(requestFingerprint, requestId);
-    try {
-      const result = await projectTemporaryCanvaCallable({
-        eventId: eventoId,
-        rawUrl,
-        title,
-        page,
-        pageCount,
-        destinations,
-        requestId,
-      });
-      const response = result.data;
-      if (shouldUseLegacyCanvaFallback(response)) return response;
-      if (!response?.ok || !response.operationId) {
-        throw new Error('La proyección temporal no devolvió una operación válida.');
-      }
-      temporaryCanvaRequestIdsRef.current.delete(requestFingerprint);
-      rememberProjectionUndoOperation({
-        kind: 'server-authoritative',
-        action: 'canva',
-        operationId: response.operationId,
-      });
-      return response;
-    } catch (error) {
-      if (isTerminalCanvaProjectionError(error)) {
-        temporaryCanvaRequestIdsRef.current.delete(requestFingerprint);
-      }
-      throw error;
-    }
-  };
-
-  const projectTemporaryCanvaOrLegacy = async (request) => {
-    const response = await projectTemporaryCanvaWithServer(request);
-    if (!shouldUseLegacyCanvaFallback(response)) return response;
-
-    await clearLegacyCanvaProjection();
-    const retryResponse = await projectTemporaryCanvaWithServer(request);
-    if (shouldUseLegacyCanvaFallback(retryResponse)) {
-      throw new Error('La proyección Canva legacy sigue activa. Intenta nuevamente.');
-    }
-    return retryResponse;
   };
 
   const projectCanva = async () => {
@@ -935,27 +775,6 @@ const ProyectorController = ({ user }) => {
     if (!hasSelectedCanvaTarget()) {
       setCanvaUrlError('Selecciona al menos un destino antes de proyectar.');
       return;
-    }
-
-    const selectedPresentation = selectedCanvaId
-      ? canvaLibrary.find((item) => item.id === selectedCanvaId && item.setlistId === eventoId)
-      : null;
-    if (selectedPresentation) {
-      try {
-        await projectStoredCanvaOrLegacy({
-          item: selectedPresentation,
-          targets: canvaTargets,
-          page: canvaPage,
-        });
-        setCanvaPreviewUrl(withCanvaPage(selectedPresentation.embedUrl, canvaPage));
-        setCanvaUrlError('');
-        notify('Canva enviado a las pantallas seleccionadas.', { type: 'success' });
-        return true;
-      } catch (error) {
-        console.error('Error proyectando Canva guardado:', error);
-        notify('No se pudo enviar Canva a las pantallas seleccionadas.', { type: 'error' });
-        return false;
-      }
     }
 
     let resolved;
@@ -973,22 +792,69 @@ const ProyectorController = ({ user }) => {
     }
 
     try {
-      const temporaryPageCount = Math.max(1, Math.min(500, Math.floor(Number(canvaPageCount) || 1)));
-      const temporaryPage = Math.min(temporaryPageCount, Math.max(1, Math.floor(Number(canvaPage) || 1)));
-      await projectTemporaryCanvaOrLegacy({
-        rawUrl: canvaDraft.url,
+      await applyCanvaTargets({
+        resolved,
         title: String(canvaDraft.title || '').trim() || 'Presentación Canva',
+        presentationId: selectedCanvaId || '',
         targets: canvaTargets,
-        page: temporaryPage,
-        pageCount: temporaryPageCount,
+        page: canvaPage,
+        pageCount: canvaPageCount,
       });
-      setCanvaPreviewUrl(withCanvaPage(resolved.embedUrl, temporaryPage));
+      setCanvaPreviewUrl(withCanvaPage(resolved.embedUrl, canvaPage));
       setCanvaUrlError('');
       notify('Canva enviado a las pantallas seleccionadas.', { type: 'success' });
       return true;
     } catch (error) {
       console.error('Error proyectando Canva por destinos:', error);
       notify('No se pudo enviar Canva a las pantallas seleccionadas.', { type: 'error' });
+    }
+  };
+
+  const projectSavedCanva = async (item) => {
+    if (!item?.id || !canProjectCanva) return;
+    if (item.setlistId !== eventoId) {
+      notify('Esta presentación Canva no pertenece a este setlist.', { type: 'error' });
+      return;
+    }
+    const targets = normalizeCanvaTargets(item.defaultTargets);
+    if (!hasTargets(targets)) {
+      notify('Esta presentación no tiene destinos guardados.', { type: 'error' });
+      return;
+    }
+
+    const resolved = {
+      inputUrl: item.inputUrl || item.sourceUrl || '',
+      sourceUrl: item.sourceUrl || item.inputUrl || '',
+      embedUrl: item.embedUrl || '',
+    };
+    if (!resolved.sourceUrl || !normalizeCanvaEmbedUrl(resolved.embedUrl)) {
+      notify('El enlace guardado de esta presentación ya no es válido.', { type: 'error' });
+      selectCanvaPresentation(item);
+      return;
+    }
+
+    const pageForControlTarget = readRememberedCanvaPage(
+      evento,
+      canvaControlTarget,
+      item.id,
+      item.sourceUrl || item.inputUrl || item.embedUrl || '',
+      1
+    );
+    selectCanvaPresentation(item, canvaControlTarget, pageForControlTarget);
+
+    try {
+      await applyCanvaTargets({
+        resolved,
+        title: item.title || 'Presentación Canva',
+        presentationId: item.id,
+        targets,
+        page: pageForControlTarget,
+        pageCount: item.pageCount,
+      });
+      notify('"' + (item.title || 'Canva') + '" proyectado retomando sus páginas guardadas.', { type: 'success' });
+    } catch (error) {
+      console.error('Error proyectando Canva guardado:', error);
+      notify('No se pudo proyectar la presentación guardada.', { type: 'error' });
     }
   };
 
@@ -1751,7 +1617,88 @@ const ProyectorController = ({ user }) => {
   }, [songSearchTerm]);
 
   const activeSong = canciones.find(c => c.id === activeSongId);
+  const resolvedProjectionStyle = useMemo(
+    () => resolveProjectionStyle({ song: activeSong, event: evento }),
+    [activeSong, evento]
+  );
+  const projectionStyleContextKey = activeSong && eventoId !== 'global'
+    ? `${eventoId}:${activeSong.id}:event`
+    : null;
+  const defaultProjectionStyle = useMemo(() => {
+    if (!activeSong) return null;
+    const overrides = { ...(evento?.songProjectionStyleOverrides || {}) };
+    delete overrides[activeSong.id];
+    return resolveProjectionStyle({
+      song: activeSong,
+      event: { ...evento, songProjectionStyleOverrides: overrides }
+    }).style;
+  }, [activeSong, evento]);
+  const editableProjectionStyle = projectionStyleDraft?.key === projectionStyleContextKey
+    ? { style: projectionStyleDraft.style, source: projectionStyleDraft.isOverride ? 'event' : resolvedProjectionStyle.source }
+    : resolvedProjectionStyle;
+
+  useEffect(() => {
+    if (!projectionStyleContextKey) {
+      setProjectionStyleDraft(null);
+      return;
+    }
+    const draft = projectionStyleDraftRef.current.get(projectionStyleContextKey);
+    if (!draft || draft.pending > 0) return;
+    const serverStyle = normalizeProjectionStyle(resolvedProjectionStyle.style);
+    const serverIsOverride = resolvedProjectionStyle.source === 'event';
+    if (draft.isOverride !== serverIsOverride || JSON.stringify(draft.style) !== JSON.stringify(serverStyle)) return;
+    projectionStyleDraftRef.current.delete(projectionStyleContextKey);
+    setProjectionStyleDraft(current => current?.key === projectionStyleContextKey ? null : current);
+  }, [projectionStyleContextKey, resolvedProjectionStyle]);
+
+  const queueProjectionStyleUpdate = (nextOverride) => {
+    if (!projectionStyleContextKey || !activeSong || eventoId === 'global') return;
+    const contextKey = projectionStyleContextKey;
+    const fallbackStyle = defaultProjectionStyle || resolvedProjectionStyle.style;
+    const nextStyle = normalizeProjectionStyle(nextOverride === null ? fallbackStyle : nextOverride);
+    const existingDraft = projectionStyleDraftRef.current.get(contextKey);
+    const draft = {
+      style: nextStyle,
+      isOverride: nextOverride !== null,
+      pending: (existingDraft?.pending || 0) + 1
+    };
+    projectionStyleDraftRef.current.set(contextKey, draft);
+    setProjectionStyleDraft({ key: contextKey, style: draft.style, isOverride: draft.isOverride });
+
+    const previousWrite = projectionStyleWriteQueuesRef.current.get(contextKey) || Promise.resolve();
+    const queuedWrite = previousWrite
+      .catch(() => undefined)
+      .then(() => setEventSongProjectionStyle(eventoId, activeSong.id, nextOverride));
+    const trackedWrite = queuedWrite.then(
+      () => {
+        const current = projectionStyleDraftRef.current.get(contextKey);
+        if (current) current.pending = Math.max(0, current.pending - 1);
+      },
+      (error) => {
+        const current = projectionStyleDraftRef.current.get(contextKey);
+        if (current) {
+          current.pending = Math.max(0, current.pending - 1);
+          if (current.pending === 0) {
+            projectionStyleDraftRef.current.delete(contextKey);
+            setProjectionStyleDraft(state => state?.key === contextKey ? null : state);
+          }
+        }
+        console.error('No se pudo guardar el estilo del evento:', error);
+        notify('No se pudo guardar el estilo del evento.', { type: 'error' });
+      }
+    ).finally(() => {
+      if (projectionStyleWriteQueuesRef.current.get(contextKey) === trackedWrite) {
+        projectionStyleWriteQueuesRef.current.delete(contextKey);
+      }
+    });
+    projectionStyleWriteQueuesRef.current.set(contextKey, trackedWrite);
+  };
   const secciones = activeSong ? parsearCancion(activeSong.letraRaw) : [];
+  const lyricProjectionIdentityModel = activeSong ? buildLyricProjectionIdentityModel({
+    lyricsRaw: activeSong.letraRaw,
+    sections: secciones,
+    lyricFormatting: activeSong.lyricFormatting,
+  }) : null;
 
   const getSetlistSongItems = () => {
     const setlistItems = getEventSetlistItems(evento);
@@ -1810,26 +1757,6 @@ const ProyectorController = ({ user }) => {
     'proyectorTicker'
   ];
 
-  const songProjectionFields = [
-    'announcementState', 'proyectorSlide', 'projectorState', 'proyectorFondo',
-    'proyectorFondoMedia', 'proyectorSongId', 'proyectorSlideIndex',
-    'proyectorNextSlide', 'proyectorNextSong', 'proyectorOffset', 'liveState',
-    'currentSongId', 'proyectorLogo', 'proyectorApagado', 'proyectorMedia'
-  ];
-  const bibleProjectionFields = [
-    'announcementState', 'projectionTargets', 'projectorState', 'proyectorSlide',
-    'proyectorMedia', 'proyectorLogo', 'proyectorApagado', 'proyectorFondo',
-    'proyectorFondoMedia', 'proyectorSongId', 'proyectorSlideIndex',
-    'proyectorNextSlide', 'proyectorNextSong', 'liveState', 'currentSongId'
-  ];
-  const quickMessageProjectionFields = [...bibleProjectionFields, 'quickMessageHistory'];
-  const preachingProjectionFields = [
-    'announcementState', 'projectorState', 'proyectorSlide', 'proyectorMedia',
-    'proyectorLogo', 'proyectorApagado', 'proyectorFondo', 'proyectorFondoMedia',
-    'proyectorSongId', 'proyectorSlideIndex', 'proyectorNextSlide',
-    'proyectorNextSong', 'liveState', 'currentSongId'
-  ];
-
   const captureVisualStateSnapshot = () => {
     if (!evento) return null;
     return visualStateFields.reduce((snapshot, field) => {
@@ -1850,54 +1777,6 @@ const ProyectorController = ({ user }) => {
     return true;
   };
 
-  const rememberProjectionUndoOperation = (operation) => {
-    if (!operation) return false;
-    undoSnapshotRef.current = operation;
-    setCanUndoLastSend(true);
-    return true;
-  };
-
-  const writeContentProjectionWithUndo = async ({ action, updates, targetIds, changedFields }) => {
-    let undoOperation = null;
-    await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
-      const eventRef = doc(db, 'eventos', eventoId);
-      const eventSnapshot = await transaction.get(eventRef);
-      if (!eventSnapshot.exists()) throw new Error('El evento ya no esta disponible.');
-      const eventData = eventSnapshot.data();
-      const nextCanvaOutputs = { ...(eventData.canvaOutputs || {}) };
-      const nextMediaOutputs = { ...(eventData.mediaOutputs || {}) };
-      targetIds.forEach((targetId) => {
-        delete nextCanvaOutputs[targetId];
-        delete nextMediaOutputs[targetId];
-      });
-      const visualUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => (
-        key !== 'canvaOutputs'
-        && key !== 'mediaOutputs'
-        && !key.startsWith('canvaOutputs.')
-        && !key.startsWith('mediaOutputs.')
-      )));
-      const afterEvent = {
-        ...eventData,
-        ...visualUpdates,
-        canvaOutputs: nextCanvaOutputs,
-        mediaOutputs: nextMediaOutputs,
-      };
-      undoOperation = createProjectionUndoOperation({
-        action,
-        beforeEvent: eventData,
-        afterEvent,
-        targetIds,
-        changedFields,
-      });
-      transaction.update(eventRef, {
-        ...visualUpdates,
-        canvaOutputs: nextCanvaOutputs,
-        mediaOutputs: nextMediaOutputs,
-      });
-    }));
-    rememberProjectionUndoOperation(undoOperation);
-  };
-
   const buildRestorePayload = (snapshot) => {
     const payload = {};
     visualStateFields.forEach(field => {
@@ -1914,88 +1793,14 @@ const ProyectorController = ({ user }) => {
 
     setIsUndoingLastSend(true);
     try {
-      if (snapshot.kind === 'server-authoritative' && snapshot.operationId) {
-        const result = await restoreProjectionUndoCallable({
-          eventId: eventoId,
-          operationId: snapshot.operationId,
-        });
-        const outcome = result.data;
-        if (!outcome?.ok) throw new Error('El servidor no pudo restaurar la proyección.');
-        const skipped = Array.isArray(outcome.skipped) ? outcome.skipped : [];
-        if (outcome.status === 'restored') {
-          notify('\u00daltimo env\u00edo deshecho.', { type: 'success' });
-        } else if (outcome.status === 'partial') {
-          notify('Se deshizo en algunas pantallas; otras cambiaron despu\u00e9s.', { type: 'warning' });
-        } else if (outcome.status === 'skipped') {
-          if (skipped.length && skipped.every((item) => item.reason === 'unsupported_legacy_operation')) {
-            notify('No se pudo deshacer esta proyecci\u00f3n porque pertenece a una versi\u00f3n anterior.', { type: 'warning' });
-          } else {
-            notify(
-              skipped.length > 1
-                ? 'No se deshizo porque esas pantallas ya cambiaron.'
-                : 'No se deshizo porque esa pantalla ya cambi\u00f3.',
-              { type: 'warning' }
-            );
-          }
-        } else if (outcome.status === 'already_restored') {
-          notify('Esta acci\u00f3n ya fue deshecha.', { type: 'warning' });
-        } else {
-          throw new Error('El servidor devolvi\u00f3 un resultado de deshacer inv\u00e1lido.');
-        }
-      } else if (snapshot.kind === 'projection-delta' && snapshot.quickMessageActionId) {
-        await enqueueProjectionWrite(async () => {
-          await requestQuickMessageClear({ eventoId, projectionActionId: snapshot.quickMessageActionId });
-          await runTransaction(db, async (transaction) => {
-            const eventRef = doc(db, 'eventos', eventoId);
-            const eventSnapshot = await transaction.get(eventRef);
-            if (!eventSnapshot.exists()) throw new Error('El evento ya no existe.');
-            const data = eventSnapshot.data();
-            const routesToRestore = matchingRouteDeltas(data, snapshot.routes);
-            const skipped = Object.keys(snapshot.routes).filter((targetId) => !Object.prototype.hasOwnProperty.call(routesToRestore, targetId));
-            if (Object.keys(routesToRestore).length) {
-              transaction.update(eventRef, restoreRouteDeltas(data, routesToRestore));
-            }
-            if (skipped.length) notify(`No se restauraron ${skipped.join(', ')} porque otra operacion cambió esas salidas.`, { type: 'warning' });
-          });
-        });
-      } else if (snapshot.kind === 'projection-delta') {
-        await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
-          const eventRef = doc(db, 'eventos', eventoId);
-          const eventSnapshot = await transaction.get(eventRef);
-          if (!eventSnapshot.exists()) throw new Error('El evento ya no existe.');
-          const data = eventSnapshot.data();
-          const fieldsToRestore = matchingFieldDeltas(data, snapshot.fields);
-          const routesToRestore = matchingRouteDeltas(data, snapshot.routes);
-          const memoryToRestore = matchingCanvaMemoryDeltas(data, snapshot.canvaMemory);
-          const skippedFields = Object.keys(snapshot.fields).filter((field) => !Object.prototype.hasOwnProperty.call(fieldsToRestore, field));
-          const skippedRoutes = Object.keys(snapshot.routes).filter((targetId) => !Object.prototype.hasOwnProperty.call(routesToRestore, targetId));
-          const skippedMemory = Object.keys(snapshot.canvaMemory).filter((targetId) => !Object.prototype.hasOwnProperty.call(memoryToRestore, targetId));
-          const updates = restoreFieldDeltas(fieldsToRestore, deleteField);
-          if (Object.keys(routesToRestore).length) Object.assign(updates, restoreRouteDeltas(data, routesToRestore));
-          if (Object.keys(memoryToRestore).length) updates.canvaPageMemory = restoreCanvaMemoryDeltas(data, memoryToRestore);
-          if (!Object.keys(updates).length) throw new Error('La proyección ya fue reemplazada.');
-          transaction.update(eventRef, updates);
-          if (skippedFields.length) notify(`No se restauraron ${skippedFields.join(', ')} porque otra operación los cambió.`, { type: 'warning' });
-          if (skippedRoutes.length) notify(`No se restauraron ${skippedRoutes.join(', ')} porque otra operación cambió esas salidas.`, { type: 'warning' });
-          if (skippedMemory.length) notify(`No se restauró la memoria Canva de ${skippedMemory.join(', ')} porque fue actualizada.`, { type: 'warning' });
-        }));
-      } else {
-        await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), buildRestorePayload(snapshot)));
-      }
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), buildRestorePayload(snapshot)));
       undoSnapshotRef.current = null;
       setCanUndoLastSend(false);
       setPreviewMedia(null);
-      if (snapshot.kind !== 'server-authoritative') notify('\u00daltimo env\u00edo deshecho.', { type: 'success' });
+      notify('Ultimo envío deshecho.', { type: 'success' });
     } catch (e) {
       console.error('Error restaurando el estado anterior:', e);
-      const expiredUndo = e?.code === 'functions/failed-precondition'
-        && String(e?.message || '').toLowerCase().includes('expiro');
-      notify(
-        expiredUndo
-          ? 'Esta acción ya no se puede deshacer porque expiró.'
-          : 'No se pudo restaurar el estado anterior.',
-        { type: expiredUndo ? 'warning' : 'error' }
-      );
+      notify('No se pudo restaurar el estado anterior.', { type: 'error' });
     } finally {
       setIsUndoingLastSend(false);
     }
@@ -2007,21 +1812,41 @@ const ProyectorController = ({ user }) => {
     setPreviewSlide(null);
   };
 
-  // Convertir las secciones en Diapositivas (Slides)
+  // Preserve intentional blank-line page boundaries and stable V2.1 identities.
   const slides = [];
   secciones.forEach((sec, index) => {
-    let texto = sec.lineas.map(linea => 
-      linea.map(palabra => palabra.map(silaba => silaba.texto === '\u00A0' ? '' : silaba.texto).join('')).join(' ')
-    ).join('\n');
     const sectionKey = getSectionKey(sec, index);
-    slides.push({
-      titulo: sec.titulo,
-      texto: texto.trim() || ' ',
-      lineas: sec.lineas,
-      cues: (sec.items || []).filter(item => item.type === 'cue').map(item => item.text),
-      sectionKey,
-      media: resolveSectionMediaForKey(activeSong?.sectionMedia, sectionKey, mediaLibraryItems),
-      originalIndex: slides.length
+    getSectionPages(sec).forEach((page) => {
+      const texto = page.lineas.map(linea =>
+        linea.map(palabra => palabra.map(silaba => silaba.texto === '\u00A0' ? '' : silaba.texto).join('')).join(' ')
+      ).join('\n');
+      const identitySection = lyricProjectionIdentityModel?.[index] || null;
+      const identitySlide = identitySection?.slides?.[page.pageIndex] || null;
+      const richLyrics = createResolvedLyricProjectionPayload({
+        lyricsRaw: activeSong?.letraRaw || '',
+        lyricFormatting: activeSong?.lyricFormatting,
+        identitySection,
+        identitySlide,
+        text: texto.trim() || ' ',
+        generalStyle: editableProjectionStyle.style,
+      });
+      slides.push({
+        titulo: sec.titulo,
+        texto: texto.trim() || ' ',
+        lineas: page.lineas,
+        cues: page.cues || [],
+        sectionKey,
+        sectionIndex: index,
+        pageIndex: page.pageIndex,
+        pageCount: page.pageCount,
+        repetition: page.repetition,
+        repeatCount: page.repeatCount,
+        sectionId: identitySection?.reconciliation === 'resolved' ? identitySection.id : null,
+        slideId: identitySlide?.reconciliation === 'resolved' ? identitySlide.id : null,
+        richLyrics,
+        media: resolveSectionMediaForKey(activeSong?.sectionMedia, sectionKey, mediaLibraryItems),
+        originalIndex: slides.length
+      });
     });
   });
 
@@ -2111,33 +1936,29 @@ const ProyectorController = ({ user }) => {
     if (!canHandlePastorRequests || !request?.id || handlingPreacherRequestId) return;
     setHandlingPreacherRequestId(request.id);
     try {
+      rememberUndoSnapshot();
       const projectorState = buildPreachingProjectorState(request, user, {
         sourceActor: 'multimedia',
         previousProjectorState: evento?.projectorState || null
       });
-      await writeContentProjectionWithUndo({
-        action: 'preacher-request',
-        targetIds: ['projector'],
-        changedFields: preachingProjectionFields,
-        updates: {
-          'canvaOutputs.projector': deleteField(),
-          'mediaOutputs.projector': deleteField(),
-          announcementState: buildInactiveAnnouncementState(),
-          projectorState,
-          proyectorSlide: null,
-          proyectorMedia: null,
-          proyectorLogo: false,
-          proyectorApagado: false,
-          proyectorFondo: null,
-          proyectorFondoMedia: null,
-          proyectorSongId: null,
-          proyectorSlideIndex: -1,
-          proyectorNextSlide: null,
-          proyectorNextSong: null,
-          liveState: buildInactiveSongLiveState('preaching', request.title || request.reference || 'Predica'),
-          currentSongId: null
-        }
-      });
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
+        'canvaOutputs.projector': deleteField(),
+        'mediaOutputs.projector': deleteField(),
+        announcementState: buildInactiveAnnouncementState(),
+        projectorState,
+        proyectorSlide: null,
+        proyectorMedia: null,
+        proyectorLogo: false,
+        proyectorApagado: false,
+        proyectorFondo: null,
+        proyectorFondoMedia: null,
+        proyectorSongId: null,
+        proyectorSlideIndex: -1,
+        proyectorNextSlide: null,
+        proyectorNextSong: null,
+        liveState: buildInactiveSongLiveState('preaching', request.title || request.reference || 'Predica'),
+        currentSongId: null
+      }));
       await updateDoc(doc(db, 'eventos', eventoId, 'preacherRequests', request.id), {
         status: PREACHER_REQUEST_STATUS.PROJECTED,
         handledAt: serverTimestamp(),
@@ -2169,6 +1990,7 @@ const ProyectorController = ({ user }) => {
       return;
     }
     try {
+      rememberUndoSnapshot();
       const requestLike = block.type === PREACHER_REQUEST_TYPES.VERSE || block.type === 'verse'
         ? {
           type: PREACHER_REQUEST_TYPES.VERSE,
@@ -2190,29 +2012,24 @@ const ProyectorController = ({ user }) => {
         sourceActor: 'multimedia',
         previousProjectorState: evento?.projectorState || null
       });
-      await writeContentProjectionWithUndo({
-        action: 'preaching-block',
-        targetIds: ['projector'],
-        changedFields: preachingProjectionFields,
-        updates: {
-          'canvaOutputs.projector': deleteField(),
-          'mediaOutputs.projector': deleteField(),
-          announcementState: buildInactiveAnnouncementState(),
-          projectorState,
-          proyectorSlide: null,
-          proyectorMedia: null,
-          proyectorLogo: false,
-          proyectorApagado: false,
-          proyectorFondo: null,
-          proyectorFondoMedia: null,
-          proyectorSongId: null,
-          proyectorSlideIndex: -1,
-          proyectorNextSlide: null,
-          proyectorNextSong: null,
-          liveState: buildInactiveSongLiveState('preaching', requestLike.title || requestLike.reference || 'Predica'),
-          currentSongId: null
-        }
-      });
+      await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), {
+        'canvaOutputs.projector': deleteField(),
+        'mediaOutputs.projector': deleteField(),
+        announcementState: buildInactiveAnnouncementState(),
+        projectorState,
+        proyectorSlide: null,
+        proyectorMedia: null,
+        proyectorLogo: false,
+        proyectorApagado: false,
+        proyectorFondo: null,
+        proyectorFondoMedia: null,
+        proyectorSongId: null,
+        proyectorSlideIndex: -1,
+        proyectorNextSlide: null,
+        proyectorNextSong: null,
+        liveState: buildInactiveSongLiveState('preaching', requestLike.title || requestLike.reference || 'Predica'),
+        currentSongId: null
+      }));
       notify('Contenido de predica proyectado.', { type: 'success' });
     } catch (error) {
       console.error('Error proyectando bloque de predica:', error);
@@ -2240,10 +2057,9 @@ const ProyectorController = ({ user }) => {
     const safeIndex = Math.max(0, Math.min(selectedIndex, safeSlides.length - 1));
     const slide = safeSlides[safeIndex];
     try {
+      rememberUndoSnapshot();
       const now = Date.now();
       const projectionActionId = `${now}-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
-      const targetIds = ['projector', 'singers', 'musicians'].filter((targetId) => safeContentTargets[targetId]);
-      let undoOperation = null;
       await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
         const eventRef = doc(db, 'eventos', eventoId);
         const eventSnapshot = await transaction.get(eventRef);
@@ -2257,7 +2073,12 @@ const ProyectorController = ({ user }) => {
           delete nextMediaOutputs[targetId];
         });
         const previousProjectionFields = capturePreviousProjectionFields(eventData);
-        const projectorState = buildCanonicalBibleProjectorState({
+        transaction.update(eventRef, {
+        canvaOutputs: nextCanvaOutputs,
+        mediaOutputs: nextMediaOutputs,
+        projectionTargets: safeContentTargets,
+        announcementState: buildInactiveAnnouncementState(),
+        projectorState: buildCanonicalBibleProjectorState({
           type: 'preaching',
           preachingType: 'verse',
           contentType: 'bible',
@@ -2294,13 +2115,7 @@ const ProyectorController = ({ user }) => {
           updatedAt: now,
           projectionVersion: now,
           projectionActionId
-        });
-        const updates = {
-        canvaOutputs: nextCanvaOutputs,
-        mediaOutputs: nextMediaOutputs,
-        projectionTargets: safeContentTargets,
-        announcementState: buildInactiveAnnouncementState(),
-        projectorState,
+        }),
         proyectorSlide: null,
         proyectorMedia: null,
         proyectorLogo: false,
@@ -2313,18 +2128,8 @@ const ProyectorController = ({ user }) => {
         proyectorNextSong: null,
         liveState: buildInactiveSongLiveState('bible', slide.reference || 'Biblia'),
         currentSongId: null
-        };
-        const afterEvent = { ...eventData, ...updates };
-        undoOperation = createProjectionUndoOperation({
-          action: 'bible',
-          beforeEvent: eventData,
-          afterEvent,
-          targetIds,
-          changedFields: bibleProjectionFields,
         });
-        transaction.update(eventRef, updates);
       }));
-      rememberProjectionUndoOperation(undoOperation);
       bibleProjectionActiveRef.current = true;
       setLastBiblePassage(passage);
       notify('Pasaje proyectado.', { type: 'success' });
@@ -2445,9 +2250,7 @@ const ProyectorController = ({ user }) => {
       return null;
     }
     try {
-      const eventRef = doc(db, 'eventos', eventoId);
-      const beforeSnapshot = await getDoc(eventRef);
-      if (!beforeSnapshot.exists()) throw new Error('El evento ya no esta disponible.');
+      rememberUndoSnapshot();
       const result = await enqueueProjectionWrite(() => requestQuickMessageProjection({
         eventoId,
         presentationType: message.presentationType,
@@ -2455,17 +2258,6 @@ const ProyectorController = ({ user }) => {
         historyEntryId,
         targets: safeContentTargets
       }));
-      const afterSnapshot = await getDoc(eventRef);
-      if (afterSnapshot.exists() && isMatchingQuickMessageProjection(afterSnapshot.data()?.projectorState, result?.projectionActionId)) {
-        rememberProjectionUndoOperation(createProjectionUndoOperation({
-          action: 'quick-message',
-          beforeEvent: beforeSnapshot.data(),
-          afterEvent: afterSnapshot.data(),
-          targetIds: ['projector', 'singers', 'musicians'].filter((targetId) => safeContentTargets[targetId]),
-          changedFields: quickMessageProjectionFields,
-          quickMessageActionId: result.projectionActionId,
-        }));
-      }
       notify('Punto del mensaje proyectado.', { type: 'success' });
       return result;
     } catch (error) {
@@ -2618,6 +2410,8 @@ const ProyectorController = ({ user }) => {
       return;
     }
     if (!slide) { console.warn("No slide provided to projectSlide"); return; }
+    rememberUndoSnapshot();
+    const transitionId = `lyrics-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     
     let nextSlide = null;
     if (slide.originalIndex !== undefined && slide.originalIndex < slides.length - 1) {
@@ -2667,8 +2461,22 @@ const ProyectorController = ({ user }) => {
     }
 
     const updates = {
+      'canvaOutputs.projector': deleteField(),
+      'mediaOutputs.projector': deleteField(),
       announcementState: buildInactiveAnnouncementState(),
-      proyectorSlide: { titulo: slide.titulo, texto: slide.texto, lineas: slide.lineas ? JSON.stringify(slide.lineas) : null },
+      proyectorSlide: {
+        titulo: slide.titulo,
+        texto: slide.texto,
+        lineas: slide.lineas ? JSON.stringify(slide.lineas) : null,
+        sectionIndex: slide.sectionIndex ?? null,
+        pageIndex: slide.pageIndex ?? 0,
+        pageCount: slide.pageCount ?? 1,
+        repetition: slide.repetition === true,
+        repeatCount: slide.repeatCount ?? 1,
+        sectionId: slide.sectionId || null,
+        slideId: slide.slideId || null,
+        richLyrics: slide.richLyrics || null,
+      },
       projectorState: {
         type: 'lyrics',
         contentType: 'lyrics',
@@ -2686,6 +2494,9 @@ const ProyectorController = ({ user }) => {
         copyright: '',
         previousProjectorState: null,
         timer: evento?.proyectorCountdown || null,
+        projectionStyle: editableProjectionStyle.style,
+        transitionId,
+        transitionStartedAt: Date.now(),
         background: slideBackground,
         backgroundMedia: slideBackgroundMedia,
         updatedAt: Date.now()
@@ -2694,47 +2505,28 @@ const ProyectorController = ({ user }) => {
       proyectorFondoMedia: slideBackgroundMedia,
       proyectorSongId: activeSongId,
       proyectorSlideIndex: slide.originalIndex ?? -1,
-      proyectorNextSlide: nextSlide ? { titulo: nextSlide.titulo, texto: nextSlide.texto, lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null } : null,
+      proyectorNextSlide: nextSlide ? {
+        titulo: nextSlide.titulo,
+        texto: nextSlide.texto,
+        lineas: nextSlide.lineas ? JSON.stringify(nextSlide.lineas) : null,
+        sectionIndex: nextSlide.sectionIndex ?? null,
+        pageIndex: nextSlide.pageIndex ?? 0,
+        pageCount: nextSlide.pageCount ?? 1,
+        repetition: nextSlide.repetition === true,
+        repeatCount: nextSlide.repeatCount ?? 1,
+        sectionId: nextSlide.sectionId || null,
+        slideId: nextSlide.slideId || null,
+        richLyrics: nextSlide.richLyrics || null,
+      } : null,
       proyectorNextSong: nextSongInfo,
       proyectorOffset: offset,
-      liveState: buildLiveState(activeSongId, slide.originalIndex ?? -1, slide.titulo || ''),
+      liveState: buildLiveState(activeSongId, slide.sectionIndex ?? slide.originalIndex ?? -1, slide.titulo || ''),
       currentSongId: activeSongId || null,
       proyectorLogo: false,
       proyectorApagado: false,
       proyectorMedia: null, // Limpiar cualquier media activa al proyectar una diapositiva
     };
-    try {
-      let undoOperation = null;
-      await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
-        const eventRef = doc(db, 'eventos', eventoId);
-        const eventSnapshot = await transaction.get(eventRef);
-        if (!eventSnapshot.exists()) throw new Error('El evento ya no esta disponible.');
-        const eventData = eventSnapshot.data();
-        const nextCanvaOutputs = { ...(eventData.canvaOutputs || {}) };
-        const nextMediaOutputs = { ...(eventData.mediaOutputs || {}) };
-        delete nextCanvaOutputs.projector;
-        delete nextMediaOutputs.projector;
-        const afterEvent = {
-          ...eventData,
-          ...updates,
-          canvaOutputs: nextCanvaOutputs,
-          mediaOutputs: nextMediaOutputs,
-        };
-        undoOperation = createProjectionUndoOperation({
-          action: 'song',
-          beforeEvent: eventData,
-          afterEvent,
-          targetIds: ['projector'],
-          changedFields: songProjectionFields,
-        });
-        transaction.update(eventRef, {
-          ...updates,
-          canvaOutputs: nextCanvaOutputs,
-          mediaOutputs: nextMediaOutputs,
-        });
-      }));
-      rememberProjectionUndoOperation(undoOperation);
-    }
+    try { await enqueueProjectionWrite(() => updateDoc(doc(db, 'eventos', eventoId), updates)); }
     catch (e) { console.error("Error al proyectar diapositiva:", e); }
   };
 
@@ -2846,8 +2638,6 @@ const ProyectorController = ({ user }) => {
     const outputState = buildRoutedMediaState(mediaObj);
     if (!outputState) return;
     const eventRef = doc(db, 'eventos', eventoId);
-    const targetIds = ['projector', 'singers', 'musicians'].filter((targetId) => safeTargets[targetId]);
-    let undoOperation = null;
 
     try {
       await enqueueProjectionWrite(() => runTransaction(db, async (transaction) => {
@@ -2872,18 +2662,7 @@ const ProyectorController = ({ user }) => {
           mediaOutputs: nextMediaOutputs,
           canvaOutputs: nextCanvaOutputs,
         });
-        undoOperation = createProjectionUndoOperation({
-          action: 'multimedia',
-          beforeEvent: data,
-          afterEvent: {
-            ...data,
-            mediaOutputs: nextMediaOutputs,
-            canvaOutputs: nextCanvaOutputs,
-          },
-          targetIds,
-        });
       }));
-      rememberProjectionUndoOperation(undoOperation);
       setMediaActive(outputState);
       notify('Multimedia enviada a las pantallas seleccionadas.', { type: 'success' });
     } catch (error) {
@@ -4562,7 +4341,7 @@ const ProyectorController = ({ user }) => {
                               </button>
                               <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
                                 <button type="button" onClick={() => (canEditCanva ? openMobileCanvaEdit(item) : selectCanvaPresentation(item))} className="min-h-10 rounded-lg border border-white/10 bg-white/5 px-2 text-[9px] font-black uppercase text-zinc-300 hover:bg-white/10">{canEditCanva ? <Edit2 size={12} className="mr-1 inline" /> : <Eye size={12} className="mr-1 inline" />}{canEditCanva ? 'Editar' : 'Abrir'}</button>
-                                <button type="button" disabled={!canProjectCanva} onClick={() => openDesktopCanvaProjectTargets(item)} className="min-h-10 rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-2 text-[9px] font-black uppercase text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-30"><Monitor size={12} className="mr-1 inline" />Proyectar</button>
+                                <button type="button" disabled={!canProjectCanva} onClick={() => projectSavedCanva(item)} className="min-h-10 rounded-lg border border-cyan-400/25 bg-cyan-500/10 px-2 text-[9px] font-black uppercase text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-30"><Monitor size={12} className="mr-1 inline" />Proyectar</button>
                                 {canDeleteCanva && <button type="button" onClick={() => deleteCanvaPresentation(item)} className="min-h-10 rounded-lg border border-red-400/20 bg-red-500/10 px-2 text-[9px] font-black uppercase text-red-200 hover:bg-red-500/20"><Trash2 size={12} className="mr-1 inline" />Eliminar</button>}
                               </div>
                             </div>
@@ -4851,6 +4630,37 @@ const ProyectorController = ({ user }) => {
                   <Star size={18} className={isLogoActive ? "text-amber-100" : "text-amber-500"}/> {isLogoActive ? 'Quitar Logo' : 'Mostrar Logo'}
                 </button>
               </div>
+              <div className="mb-4 rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-violet-300">Estilo: {getProjectionStyleLabel(editableProjectionStyle.style)}</p>
+                    <p className="text-xs font-bold text-zinc-400">Fuente: {editableProjectionStyle.source === 'event' ? 'Personalizado para este evento' : editableProjectionStyle.source === 'song' ? 'Predeterminado de cancion' : 'Fallback global'}</p>
+                  </div>
+                  {canEditEvent && eventoId !== 'global' && (
+                    <button type="button" onClick={() => queueProjectionStyleUpdate(null)} disabled={editableProjectionStyle.source !== 'event'} className="rounded-xl border border-white/10 px-3 py-2 text-[10px] font-black uppercase text-zinc-200 disabled:opacity-40">Restaurar predeterminado</button>
+                  )}
+                </div>
+                {canEditEvent && eventoId !== 'global' && (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Preset
+                      <select value={editableProjectionStyle.style.preset} onChange={(event) => {
+                        const currentDraft = projectionStyleDraftRef.current.get(projectionStyleContextKey);
+                        queueProjectionStyleUpdate({ ...(currentDraft?.style || editableProjectionStyle.style), preset: event.target.value });
+                      }} className="kp-input mt-1 w-full rounded-xl p-2 text-xs">
+                        {Object.entries(PROJECTION_STYLE_PRESETS).map(([key, preset]) => <option key={key} value={key}>{preset.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Movimiento
+                      <select value={editableProjectionStyle.style.motion} onChange={(event) => {
+                        const currentDraft = projectionStyleDraftRef.current.get(projectionStyleContextKey);
+                        queueProjectionStyleUpdate({ ...(currentDraft?.style || editableProjectionStyle.style), motion: event.target.value });
+                      }} className="kp-input mt-1 w-full rounded-xl p-2 text-xs">
+                        {PROJECTION_STYLE_MOTIONS.map((motion) => <option key={motion} value={motion}>{motion === 'none' ? 'Ninguno' : motion === 'soft' ? 'Suave' : 'Dinamico'}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                )}
+              </div>
               
               <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden grid grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
                 {slides.map((s, idx) => (
@@ -4858,7 +4668,7 @@ const ProyectorController = ({ user }) => {
                     key={s.titulo + idx} // Usar una key más robusta
                     onClick={() => setPreviewSlide(s)}
                     onDoubleClick={() => projectSlide(s)}
-                    className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-36 transition-all transform active:scale-95 ${previewSlide?.texto === s.texto ? 'border-violet-400 ring-2 ring-violet-500/30' : 'border-white/10 hover:border-zinc-500'} ${liveSlide?.texto === s.texto && !isBlackout ? 'bg-violet-500/12 shadow-[0_0_28px_rgba(139,92,246,0.16)]' : 'bg-zinc-900/82'}`}
+                    className={`relative cursor-pointer border rounded-2xl overflow-hidden flex flex-col h-36 transition-all transform active:scale-95 ${isSameProjectedLyricSlide(previewSlide, s) ? 'border-violet-400 ring-2 ring-violet-500/30' : 'border-white/10 hover:border-zinc-500'} ${isSameProjectedLyricSlide(liveSlide, s) && !isBlackout ? 'bg-violet-500/12 shadow-[0_0_28px_rgba(139,92,246,0.16)]' : 'bg-zinc-900/82'}`}
                   >
                     <div className="px-3 py-2 bg-zinc-950/80 border-b border-zinc-800 flex justify-between items-center shrink-0">
                       <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest truncate">
@@ -4870,7 +4680,7 @@ const ProyectorController = ({ user }) => {
                             <ImageIcon size={10} /> {s.media.length}
                           </span>
                         )}
-                        {liveSlide?.texto === s.texto && !isBlackout && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]" title="En vivo"></span>}
+                        {isSameProjectedLyricSlide(liveSlide, s) && !isBlackout && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.8)]" title="En vivo"></span>}
                       </div>
                     </div>
                     <div className="p-3 flex-1 flex items-center justify-center text-center overflow-hidden">
@@ -5390,29 +5200,6 @@ const ProyectorController = ({ user }) => {
               </div>
             )}
           </div>
-        )}
-
-        {desktopCanvaProjectionItem && createPortal(
-          <div className="fixed inset-0 z-[210] hidden items-center justify-center bg-black/70 p-4 backdrop-blur-sm md:flex">
-            <section className="w-full max-w-md rounded-2xl border border-white/10 bg-zinc-950 p-4 shadow-2xl">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-black text-white">Proyectar Canva</h3>
-                  <p className="mt-1 text-[10px] font-bold text-zinc-400">{desktopCanvaProjectionItem.title || 'Presentación Canva'}</p>
-                </div>
-                <button type="button" onClick={closeDesktopCanvaProjectTargets} className="rounded-lg p-2 text-zinc-400 hover:bg-white/10 hover:text-white" aria-label="Cerrar selector de destinos Canva"><X size={16} /></button>
-              </div>
-              <div className="mt-4">
-                {renderCanvaTargetSelectorCompact()}
-              </div>
-              {canvaUrlError && <p className="mt-3 rounded-xl border border-red-400/20 bg-red-500/10 p-3 text-[10px] font-bold text-red-100">{canvaUrlError}</p>}
-              <div className="mt-4 flex justify-end gap-2">
-                <button type="button" onClick={closeDesktopCanvaProjectTargets} className="min-h-10 rounded-lg border border-white/10 px-4 text-[10px] font-black uppercase text-zinc-300 hover:bg-white/10">Cancelar</button>
-                <button type="button" disabled={!hasSelectedCanvaTarget()} onClick={projectCanvaAndCloseDesktop} className="min-h-10 rounded-lg bg-cyan-400 px-4 text-[10px] font-black uppercase text-zinc-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-40">Proyectar</button>
-              </div>
-            </section>
-          </div>,
-          document.body
         )}
 
         {showMobileCanvaEditor && createPortal(
@@ -6187,14 +5974,14 @@ const ProyectorController = ({ user }) => {
           <div className="relative max-w-4xl w-full flex flex-col items-center">
             <button 
               onClick={() => setLargePreview(null)}
-              className="absolute -top-12 right-0 z-10 p-2 text-zinc-400 hover:text-white flex items-center gap-2 font-bold"
+              className="absolute -top-12 right-0 p-2 text-zinc-400 hover:text-white flex items-center gap-2 font-bold"
             > {/* Botón para cerrar la vista previa grande */}
               <X size={24}/> CERRAR
             </button>
             <button 
               disabled={!canProjectMedia || !hasMediaTargets(mediaTargets)}
               onClick={() => { projectMedia(largePreview); setLargePreview(null); }}
-              className="absolute -top-12 left-0 z-10 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-40"
+              className="absolute -top-12 left-0 p-2 bg-violet-600 text-white hover:bg-violet-500 rounded-xl px-6 font-black flex items-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-40"
             >
               <Send size={18}/> PROYECTAR EN SELECCIONADAS
             </button>

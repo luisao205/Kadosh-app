@@ -1,15 +1,55 @@
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
-const { FieldPath, FieldValue, Timestamp } = require("firebase-admin/firestore");
-const { createHash, randomUUID } = require("crypto");
-const { resolveCanvaInput } = require("./canvaLinkResolver");
+const { FieldValue } = require("firebase-admin/firestore");
+const { randomUUID } = require("crypto");
 const {
   canEditChordsOnly,
   canEditLyricsOnly
 } = require("./songContent");
 const { validateQuickMessagePayload } = require("./quickMessagePayload");
+const {
+  LegacySongFormattingGuardError,
+  assertLegacySongContentWriteCompatible
+} = require("./legacySongFormattingGuard");
+const { createLyricFormattingService } = require("./lyricFormattingService");
+const { createFirestoreLyricFormattingRepository } = require("./firestoreLyricFormattingRepository");
+const { createSongDuplicationService } = require("./songDuplicationService");
+const { createFirestoreSongDuplicationRepository } = require("./firestoreSongDuplicationRepository");
+const { createV21CallableHandlers } = require("./v21CallableIntegration");
 
 admin.initializeApp();
+
+const v21CallableHandlers = createV21CallableHandlers({
+  functions,
+  env: process.env,
+  dynamicGateReader: async () => {
+    const snapshot = await admin.firestore().collection("sistema").doc("v21RuntimeControl").get();
+    return snapshot.exists ? snapshot.data() : null;
+  },
+  capabilityReader: async ({ uid }) => {
+    const actor = await loadActor(uid);
+    const status = actor.user.accountStatus === undefined
+      ? "active"
+      : String(actor.user.accountStatus).toLowerCase();
+    return {
+      active: status === "active" || status === "activa",
+      canEditFormatting: hasPermission(actor.user, actor.roleDefaults, "songs.editLyrics"),
+      canEditProjectionStyle: hasPermission(actor.user, actor.roleDefaults, "songs.editMetadata"),
+      canDuplicate: hasPermission(actor.user, actor.roleDefaults, "songs.create")
+    };
+  },
+  lyricServiceFactory: () => createLyricFormattingService({
+    repository: createFirestoreLyricFormattingRepository(admin.firestore())
+  }),
+  duplicationServiceFactory: () => createSongDuplicationService({
+    repository: createFirestoreSongDuplicationRepository(admin.firestore())
+  })
+});
+
+exports.saveLyricFormattingV21 = functions.https.onCall(v21CallableHandlers.saveLyricFormatting);
+exports.saveLyricsAndFormattingV21 = functions.https.onCall(v21CallableHandlers.saveLyricsAndFormatting);
+exports.duplicateSongV21 = functions.https.onCall(v21CallableHandlers.duplicateSong);
+exports.getV21Capability = functions.https.onCall(v21CallableHandlers.getCapability);
 
 const LIVE_SETLIST_ROLES = new Set(["due\u00f1o", "dueno", "admin", "multimedia"]);
 const LIVE_SETLIST_PERMISSIONS = new Set([
@@ -19,7 +59,7 @@ const LIVE_SETLIST_PERMISSIONS = new Set([
   "setlists.manage"
 ]);
 const SONG_METADATA_FIELDS = new Set([
-  "titulo", "artista", "tonoOriginal", "tonosAlternativos", "etiquetas", "bpm", "youtubeUrl"
+  "titulo", "artista", "tonoOriginal", "tonosAlternativos", "etiquetas", "bpm", "youtubeUrl", "projectionStyle"
 ]);
 const SONG_MEDIA_FIELDS = new Set([
   "recursos", "multitracks", "sectionMedia", "audioUrl", "fondoUrl", "fondoMediaId"
@@ -63,6 +103,24 @@ const hasLiveSetlistPermission = (user = {}, roleDefaults = {}, permission) => {
 const isPlainObject = (value) => (
   value !== null && typeof value === "object" && !Array.isArray(value)
 );
+
+const PROJECTION_STYLE_PRESETS = new Set(["clean", "cinematic", "worship", "impact", "minimal"]);
+const PROJECTION_STYLE_MOTIONS = new Set(["none", "soft", "dynamic"]);
+const PROJECTION_STYLE_ALIGNMENTS = new Set(["left", "center", "right"]);
+const PROJECTION_STYLE_BACKGROUND_TREATMENTS = new Set(["auto", "normal"]);
+
+const assertProjectionStyle = (value) => {
+  if (!isPlainObject(value) || Object.keys(value).some((key) => !["preset", "motion", "alignment", "backgroundTreatment"].includes(key))) {
+    throw new functions.https.HttpsError("invalid-argument", "Estilo de proyeccion invalido.");
+  }
+  if (!PROJECTION_STYLE_PRESETS.has(value.preset)
+    || !PROJECTION_STYLE_MOTIONS.has(value.motion)
+    || !PROJECTION_STYLE_ALIGNMENTS.has(value.alignment)
+    || !PROJECTION_STYLE_BACKGROUND_TREATMENTS.has(value.backgroundTreatment)) {
+    throw new functions.https.HttpsError("invalid-argument", "Estilo de proyeccion invalido.");
+  }
+  return value;
+};
 
 const assertExactPayload = (data, expectedKeys) => {
   if (!isPlainObject(data)) {
@@ -146,6 +204,19 @@ const assertSongText = (value) => {
     throw new functions.https.HttpsError("invalid-argument", "Contenido de cancion invalido.");
   }
   return value;
+};
+
+const assertLegacySongFormattingCompatible = (songSnap, letraRaw) => {
+  try {
+    assertLegacySongContentWriteCompatible(songSnap.data() || {}, letraRaw);
+  } catch (error) {
+    if (!(error instanceof LegacySongFormattingGuardError)) throw error;
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Esta cancion tiene formato enriquecido. Usa el guardado V2.1 para conservarlo.",
+      { code: error.code }
+    );
+  }
 };
 
 const assertQuickMessageHistoryEntryId = (value, { optional = false } = {}) => {
@@ -277,6 +348,7 @@ const assertMetadataChanges = (changes) => {
         resources.forEach((resource) => assertSongResource(resource, ["id", "mediaId", "title", "name", "type", "url", "thumbnailUrl", "provider", "source", "usageCount", "usedBy", "sectionTitle", "pendingLibraryResource"]));
       });
     }
+    if (key === "projectionStyle") assertProjectionStyle(value);
   });
   return keys;
 };
@@ -307,7 +379,7 @@ const songAuditData = (actor, action, fields) => ({
   actorRole: actor.role,
   action,
   fields,
-  timestamp: admin.firestore.FieldValue.serverTimestamp()
+  timestamp: FieldValue.serverTimestamp()
 });
 
 const readActorInTransaction = async (transaction, uid) => {
@@ -323,182 +395,6 @@ const readActorInTransaction = async (transaction, uid) => {
     role: normalizeRoleKey(user.rol),
     roleDefaults: permissionSnap.exists ? permissionSnap.get("roleDefaults") || {} : {}
   };
-};
-
-const CANVA_OUTPUT_TARGETS = new Set(["projector", "singers", "musicians"]);
-const CANVA_UNDO_WINDOW_MS = 10 * 60 * 1000;
-
-const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
-
-const assertProjectionId = (value, field) => {
-  const id = assertNonEmptyString(value, field);
-  if (id.length > 256) throw new functions.https.HttpsError("invalid-argument", `${field} invalido.`);
-  return id;
-};
-
-const assertCanvaProjectionRequest = (data) => {
-  assertExactPayload(data, ["eventId", "canvaId", "page", "destinations", "requestId"]);
-  const eventId = assertProjectionId(data.eventId, "eventId");
-  const canvaId = assertProjectionId(data.canvaId, "canvaId");
-  const requestId = assertProjectionId(data.requestId, "requestId");
-  if (!/^[A-Za-z0-9_-]{16,128}$/.test(requestId)) {
-    throw new functions.https.HttpsError("invalid-argument", "requestId invalido.");
-  }
-  if (!Number.isInteger(data.page) || data.page < 1 || data.page > 500) {
-    throw new functions.https.HttpsError("invalid-argument", "page invalida.");
-  }
-  if (!Array.isArray(data.destinations) || !data.destinations.length || data.destinations.length > CANVA_OUTPUT_TARGETS.size
-    || data.destinations.some((target) => typeof target !== "string" || !CANVA_OUTPUT_TARGETS.has(target))
-    || new Set(data.destinations).size !== data.destinations.length) {
-    throw new functions.https.HttpsError("invalid-argument", "Destinos invalidos.");
-  }
-  return {
-    eventId,
-    canvaId,
-    page: data.page,
-    destinations: [...data.destinations].sort(),
-    requestId
-  };
-};
-
-const assertTemporaryCanvaProjectionRequest = (data) => {
-  assertExactPayload(data, ["eventId", "rawUrl", "title", "page", "pageCount", "destinations", "requestId"]);
-  const eventId = assertProjectionId(data.eventId, "eventId");
-  const requestId = assertProjectionId(data.requestId, "requestId");
-  const rawUrl = typeof data.rawUrl === "string" ? data.rawUrl.trim() : "";
-  const title = typeof data.title === "string" ? data.title.trim() : "";
-  if (!rawUrl || rawUrl.length > 2048 || !title || title.length > 160) {
-    throw new functions.https.HttpsError("invalid-argument", "Datos temporales de Canva invalidos.");
-  }
-  if (!/^[A-Za-z0-9_-]{16,128}$/.test(requestId)) {
-    throw new functions.https.HttpsError("invalid-argument", "requestId invalido.");
-  }
-  if (!Number.isInteger(data.pageCount) || data.pageCount < 1 || data.pageCount > 500
-    || !Number.isInteger(data.page) || data.page < 1 || data.page > data.pageCount) {
-    throw new functions.https.HttpsError("invalid-argument", "Pagina temporal invalida.");
-  }
-  if (!Array.isArray(data.destinations) || !data.destinations.length || data.destinations.length > CANVA_OUTPUT_TARGETS.size
-    || data.destinations.some((target) => typeof target !== "string" || !CANVA_OUTPUT_TARGETS.has(target))
-    || new Set(data.destinations).size !== data.destinations.length) {
-    throw new functions.https.HttpsError("invalid-argument", "Destinos invalidos.");
-  }
-  return {
-    eventId,
-    rawUrl,
-    title,
-    page: data.page,
-    pageCount: data.pageCount,
-    destinations: [...data.destinations].sort(),
-    requestId
-  };
-};
-
-const projectionFingerprint = (payload) => createHash("sha256")
-  .update(JSON.stringify({
-    action: "canva",
-    eventId: payload.eventId,
-    canvaId: payload.canvaId,
-    page: payload.page,
-    destinations: payload.destinations
-  }))
-  .digest("hex");
-
-const temporaryCanvaProjectionFingerprint = (payload) => createHash("sha256")
-  .update(JSON.stringify({
-    action: "canva-temporary",
-    eventId: payload.eventId,
-    sourceUrl: payload.sourceUrl,
-    title: payload.title,
-    page: payload.page,
-    pageCount: payload.pageCount,
-    destinations: payload.destinations
-  }))
-  .digest("hex");
-
-const deterministicUndoOperationId = (uid, eventId, requestId) => createHash("sha256")
-  .update(`${uid}\u0000${eventId}\u0000${requestId}`)
-  .digest("hex");
-
-const undoValue = (map, key) => hasOwn(map, key)
-  ? { exists: true, value: map[key] }
-  : { exists: false };
-
-const stableUndoValue = (value) => {
-  if (value == null || typeof value !== "object") return value;
-  if (value instanceof Timestamp) {
-    return { __timestamp: [value.seconds, value.nanoseconds] };
-  }
-  if (Array.isArray(value)) return value.map(stableUndoValue);
-  return Object.keys(value).sort().reduce((result, key) => {
-    result[key] = stableUndoValue(value[key]);
-    return result;
-  }, {});
-};
-
-const sameUndoValue = (left, right) => JSON.stringify(stableUndoValue(left)) === JSON.stringify(stableUndoValue(right));
-
-const isValidSavedCanva = (presentation) => {
-  if (!isPlainObject(presentation)
-    || typeof presentation.title !== "string" || !presentation.title.trim()
-    || typeof presentation.sourceUrl !== "string" || !presentation.sourceUrl
-    || typeof presentation.embedUrl !== "string" || !presentation.embedUrl
-    || !Number.isInteger(presentation.pageCount) || presentation.pageCount < 1 || presentation.pageCount > 500) {
-    return false;
-  }
-  try {
-    const url = new URL(presentation.embedUrl);
-    const host = url.hostname.toLowerCase();
-    return (host === "canva.com" || host.endsWith(".canva.com"))
-      && url.protocol === "https:"
-      && url.pathname.includes("/design/")
-      && url.pathname.includes("/view");
-  } catch {
-    return false;
-  }
-};
-
-const canvaEmbedPageUrl = (embedUrl, page) => {
-  const url = new URL(embedUrl);
-  url.hash = String(page);
-  return url.toString();
-};
-
-const groupRequiresMediaRestore = (group) => group?.before?.mediaOutput?.exists === true;
-
-const groupHasModernCanvaIdentity = (group) => (
-  typeof group?.expectedAfter?.canvaOutput?.value?.projectionOperationId === "string"
-  && group.expectedAfter.canvaOutput.value.projectionOperationId.length > 0
-);
-
-const groupMatchesExpectedAfter = (eventData, group) => {
-  const target = group.target;
-  const currentCanva = undoValue(eventData.canvaOutputs || {}, target);
-  const currentMedia = undoValue(eventData.mediaOutputs || {}, target);
-  const expectedCanva = group.expectedAfter.canvaOutput;
-  if (groupHasModernCanvaIdentity(group)) {
-    return currentCanva.exists === true
-      && currentCanva.value?.active === true
-      && currentCanva.value?.presentationId === expectedCanva.value.presentationId
-      && currentCanva.value?.projectionOperationId === expectedCanva.value.projectionOperationId
-      && sameUndoValue(currentMedia, group.expectedAfter.mediaOutput);
-  }
-  const currentMemory = undoValue(eventData.canvaPageMemory?.[target] || {}, group.memoryKey);
-  return sameUndoValue(currentCanva, group.expectedAfter.canvaOutput)
-    && sameUndoValue(currentMedia, group.expectedAfter.mediaOutput)
-    && sameUndoValue(currentMemory, group.expectedAfter.canvaPageMemory);
-};
-
-const addUndoFieldUpdates = (updates, target, group, stage) => {
-  const values = group[stage];
-  const deleteValue = FieldValue.delete();
-  updates.push(new FieldPath("canvaOutputs", target), values.canvaOutput.exists ? values.canvaOutput.value : deleteValue);
-  updates.push(new FieldPath("mediaOutputs", target), values.mediaOutput.exists ? values.mediaOutput.value : deleteValue);
-  if (!(stage === "before" && group.preserveCanvaPageMemory)) {
-    updates.push(
-      new FieldPath("canvaPageMemory", target, group.memoryKey),
-      values.canvaPageMemory.exists ? values.canvaPageMemory.value : deleteValue
-    );
-  }
 };
 
 const requireOwner = async (uid) => {
@@ -554,7 +450,7 @@ exports.updateUserPermissionOverrides = functions.https.onCall(async (data, cont
     transaction.set(auditRef, {
       actorUid: actor.uid, targetUid, oldValue: targetSnap.get("permissionOverrides") || {},
       newValue: permissionOverrides, action: "overrides",
-      timestamp: admin.firestore.FieldValue.serverTimestamp()
+      timestamp: FieldValue.serverTimestamp()
     });
   });
   return { ok: true };
@@ -594,7 +490,7 @@ exports.bulkUpdateUserPermissionOverrides = functions.https.onCall(async (data, 
         newValue: nextOverrides,
         changes,
         action: "bulk-overrides",
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
+        timestamp: FieldValue.serverTimestamp()
       });
     });
   });
@@ -617,11 +513,11 @@ exports.updateRolePermissionDefaults = functions.https.onCall(async (data, conte
     const currentDefaults = configSnap.exists ? configSnap.get("roleDefaults") || {} : {};
     const nextDefaults = { ...currentDefaults, [role]: roleDefaults };
     transaction.set(configRef, {
-      version: 1, roleDefaults: nextDefaults, updatedAt: admin.firestore.FieldValue.serverTimestamp(), updatedBy: actor.uid
+      version: 1, roleDefaults: nextDefaults, updatedAt: FieldValue.serverTimestamp(), updatedBy: actor.uid
     }, { merge: true });
     transaction.set(auditRef, {
       actorUid: actor.uid, role, oldValue: currentDefaults[role] || {}, newValue: roleDefaults,
-      action: "role-defaults", timestamp: admin.firestore.FieldValue.serverTimestamp()
+      action: "role-defaults", timestamp: FieldValue.serverTimestamp()
     });
   });
   return { ok: true };
@@ -637,6 +533,7 @@ exports.updateSongChords = functions.https.onCall(async (data, context) => {
     const [actor, songSnap] = await Promise.all([readActorInTransaction(transaction, context.auth.uid), transaction.get(ref)]);
     if (!hasPermission(actor.user, actor.roleDefaults, "songs.editChords")) throw new functions.https.HttpsError("permission-denied", "No tienes permiso para esta operacion.");
     if (!songSnap.exists) throw new functions.https.HttpsError("not-found", "La cancion no existe.");
+    assertLegacySongFormattingCompatible(songSnap, letraRaw);
     if (!canEditChordsOnly(songSnap.get("letraRaw") || "", letraRaw)) throw new functions.https.HttpsError("permission-denied", "La edicion de acordes no puede cambiar letra o estructura.");
     transaction.update(ref, { letraRaw, fechaActualizacion: new Date().toISOString() });
     transaction.set(ref.collection("permissionAudit").doc(), songAuditData(actor, "songs.editChords", ["letraRaw"]));
@@ -653,274 +550,12 @@ exports.updateSongLyrics = functions.https.onCall(async (data, context) => {
     const [actor, songSnap] = await Promise.all([readActorInTransaction(transaction, context.auth.uid), transaction.get(ref)]);
     if (!hasPermission(actor.user, actor.roleDefaults, "songs.editLyrics")) throw new functions.https.HttpsError("permission-denied", "No tienes permiso para esta operacion.");
     if (!songSnap.exists) throw new functions.https.HttpsError("not-found", "La cancion no existe.");
+    assertLegacySongFormattingCompatible(songSnap, letraRaw);
     if (!canEditLyricsOnly(songSnap.get("letraRaw") || "", letraRaw)) throw new functions.https.HttpsError("permission-denied", "La edicion de letra no puede cambiar acordes o estructura.");
     transaction.update(ref, { letraRaw, fechaActualizacion: new Date().toISOString() });
     transaction.set(ref.collection("permissionAudit").doc(), songAuditData(actor, "songs.editLyrics", ["letraRaw"]));
   });
   return { ok: true };
-});
-
-exports.projectSavedCanva = functions.https.onCall(async (data, context) => {
-  if (!context.auth?.uid) throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesion.");
-  const request = assertCanvaProjectionRequest(data);
-  const db = admin.firestore();
-  const eventRef = db.collection("eventos").doc(request.eventId);
-  const presentationRef = db.collection("canvaPresentations").doc(request.canvaId);
-  const operationId = deterministicUndoOperationId(context.auth.uid, request.eventId, request.requestId);
-  const operationRef = eventRef.collection("undoOperations").doc(operationId);
-  const fingerprint = projectionFingerprint(request);
-
-  return db.runTransaction(async (transaction) => {
-    const [actor, eventSnap, operationSnap, presentationSnap] = await Promise.all([
-      readActorInTransaction(transaction, context.auth.uid),
-      transaction.get(eventRef),
-      transaction.get(operationRef),
-      transaction.get(presentationRef)
-    ]);
-    if (!hasPermission(actor.user, actor.roleDefaults, "canva.project")) {
-      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para proyectar Canva.");
-    }
-    if (!eventSnap.exists) throw new functions.https.HttpsError("not-found", "El evento ya no esta disponible.");
-    if (operationSnap.exists) {
-      if (operationSnap.get("fingerprint") !== fingerprint || operationSnap.get("action") !== "canva") {
-        throw new functions.https.HttpsError("already-exists", "requestId ya fue usado para otra operacion.");
-      }
-      return { ok: true, operationId, status: operationSnap.get("status"), idempotent: true };
-    }
-
-    const eventData = eventSnap.data() || {};
-    if (eventData.projectorState?.contentType === "canva") {
-      return { ok: false, code: "LEGACY_CANVA_ACTIVE" };
-    }
-    if (!presentationSnap.exists) throw new functions.https.HttpsError("not-found", "La presentacion Canva no existe.");
-    const presentation = presentationSnap.data() || {};
-    if (presentation.setlistId !== request.eventId) {
-      throw new functions.https.HttpsError("permission-denied", "La presentacion Canva no pertenece a este evento.");
-    }
-    if (!isValidSavedCanva(presentation)) {
-      throw new functions.https.HttpsError("failed-precondition", "La presentacion Canva guardada no es valida.");
-    }
-    if (request.page > presentation.pageCount) {
-      throw new functions.https.HttpsError("invalid-argument", "page invalida.");
-    }
-
-    const now = Date.now();
-    const memoryKey = `id:${request.canvaId}`;
-    const actorName = actor.user.nombre || actor.user.email || "Multimedia";
-    const groups = {};
-    const eventUpdates = [];
-
-    request.destinations.forEach((target) => {
-      const rememberedPage = eventData.canvaPageMemory?.[target]?.[memoryKey];
-      const targetPage = Number.isInteger(rememberedPage)
-        ? Math.max(1, Math.min(presentation.pageCount, rememberedPage))
-        : request.page;
-      const before = {
-        canvaOutput: undoValue(eventData.canvaOutputs || {}, target),
-        mediaOutput: undoValue(eventData.mediaOutputs || {}, target),
-        canvaPageMemory: undoValue(eventData.canvaPageMemory?.[target] || {}, memoryKey)
-      };
-      const expectedAfter = {
-        canvaOutput: {
-          exists: true,
-          value: {
-            active: true,
-            presentationId: request.canvaId,
-            projectionOperationId: operationId,
-            title: presentation.title,
-            sourceUrl: presentation.sourceUrl,
-            embedUrl: canvaEmbedPageUrl(presentation.embedUrl, targetPage),
-            page: targetPage,
-            pageCount: presentation.pageCount,
-            updatedAt: now,
-            updatedBy: actorName
-          }
-        },
-        mediaOutput: { exists: false },
-        canvaPageMemory: { exists: true, value: targetPage }
-      };
-      const group = { target, memoryKey, before, expectedAfter, preserveCanvaPageMemory: true };
-      groups[`route_${target}`] = group;
-      addUndoFieldUpdates(eventUpdates, target, group, "expectedAfter");
-    });
-
-    transaction.create(operationRef, {
-      version: 1,
-      action: "canva",
-      actorUid: actor.uid,
-      requestId: request.requestId,
-      fingerprint,
-      createdAt: now,
-      expiresAt: now + CANVA_UNDO_WINDOW_MS,
-      status: "applied",
-      groups,
-      outcome: { projected: Object.keys(groups) }
-    });
-    transaction.update(eventRef, ...eventUpdates);
-    return { ok: true, operationId, status: "applied", idempotent: false };
-  });
-});
-
-exports.projectTemporaryCanva = functions.https.onCall(async (data, context) => {
-  if (!context.auth?.uid) throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesion.");
-  const request = assertTemporaryCanvaProjectionRequest(data);
-  let resolved;
-  try {
-    resolved = await resolveCanvaInput(request.rawUrl);
-  } catch (error) {
-    console.error("Error resolviendo Canva temporal:", error);
-    throw new functions.https.HttpsError("invalid-argument", "El enlace temporal de Canva no es valido.");
-  }
-
-  const db = admin.firestore();
-  const eventRef = db.collection("eventos").doc(request.eventId);
-  const operationId = deterministicUndoOperationId(context.auth.uid, request.eventId, request.requestId);
-  const operationRef = eventRef.collection("undoOperations").doc(operationId);
-  const fingerprint = temporaryCanvaProjectionFingerprint({ ...request, sourceUrl: resolved.sourceUrl });
-
-  return db.runTransaction(async (transaction) => {
-    const [actor, eventSnap, operationSnap] = await Promise.all([
-      readActorInTransaction(transaction, context.auth.uid),
-      transaction.get(eventRef),
-      transaction.get(operationRef)
-    ]);
-    if (!hasPermission(actor.user, actor.roleDefaults, "canva.project")) {
-      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para proyectar Canva.");
-    }
-    if (!eventSnap.exists) throw new functions.https.HttpsError("not-found", "El evento ya no esta disponible.");
-    if (operationSnap.exists) {
-      if (operationSnap.get("fingerprint") !== fingerprint || operationSnap.get("action") !== "canva" || operationSnap.get("canvaKind") !== "temporary") {
-        throw new functions.https.HttpsError("already-exists", "requestId ya fue usado para otra operacion.");
-      }
-      return { ok: true, operationId, status: operationSnap.get("status"), idempotent: true };
-    }
-
-    const eventData = eventSnap.data() || {};
-    if (eventData.projectorState?.contentType === "canva") {
-      return { ok: false, code: "LEGACY_CANVA_ACTIVE" };
-    }
-
-    const now = Date.now();
-    const actorName = actor.user.nombre || actor.user.email || "Multimedia";
-    const memoryKey = `url:${resolved.sourceUrl}`;
-    const groups = {};
-    const eventUpdates = [];
-    request.destinations.forEach((target) => {
-      const rememberedPage = eventData.canvaPageMemory?.[target]?.[memoryKey];
-      const targetPage = Number.isInteger(rememberedPage)
-        ? Math.max(1, Math.min(request.pageCount, rememberedPage))
-        : request.page;
-      const before = {
-        canvaOutput: undoValue(eventData.canvaOutputs || {}, target),
-        mediaOutput: undoValue(eventData.mediaOutputs || {}, target),
-        canvaPageMemory: undoValue(eventData.canvaPageMemory?.[target] || {}, memoryKey)
-      };
-      const expectedAfter = {
-        canvaOutput: {
-          exists: true,
-          value: {
-            active: true,
-            presentationId: "",
-            projectionOperationId: operationId,
-            title: request.title,
-            sourceUrl: resolved.sourceUrl,
-            embedUrl: canvaEmbedPageUrl(resolved.embedUrl, targetPage),
-            page: targetPage,
-            pageCount: request.pageCount,
-            updatedAt: now,
-            updatedBy: actorName
-          }
-        },
-        mediaOutput: { exists: false },
-        canvaPageMemory: { exists: true, value: targetPage }
-      };
-      const group = { target, memoryKey, before, expectedAfter, preserveCanvaPageMemory: true };
-      groups[`route_${target}`] = group;
-      addUndoFieldUpdates(eventUpdates, target, group, "expectedAfter");
-    });
-
-    transaction.create(operationRef, {
-      version: 1,
-      action: "canva",
-      canvaKind: "temporary",
-      actorUid: actor.uid,
-      requestId: request.requestId,
-      fingerprint,
-      createdAt: now,
-      expiresAt: now + CANVA_UNDO_WINDOW_MS,
-      status: "applied",
-      groups,
-      outcome: { projected: Object.keys(groups) }
-    });
-    transaction.update(eventRef, ...eventUpdates);
-    return { ok: true, operationId, status: "applied", idempotent: false };
-  });
-});
-
-exports.restoreProjectionUndo = functions.https.onCall(async (data, context) => {
-  if (!context.auth?.uid) throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesion.");
-  assertExactPayload(data, ["eventId", "operationId"]);
-  const eventId = assertProjectionId(data.eventId, "eventId");
-  const operationId = assertProjectionId(data.operationId, "operationId");
-  const db = admin.firestore();
-  const eventRef = db.collection("eventos").doc(eventId);
-  const operationRef = eventRef.collection("undoOperations").doc(operationId);
-
-  return db.runTransaction(async (transaction) => {
-    const [actor, eventSnap, operationSnap] = await Promise.all([
-      readActorInTransaction(transaction, context.auth.uid),
-      transaction.get(eventRef),
-      transaction.get(operationRef)
-    ]);
-    if (!eventSnap.exists) throw new functions.https.HttpsError("not-found", "El evento ya no esta disponible.");
-    if (!operationSnap.exists) throw new functions.https.HttpsError("not-found", "La operacion de deshacer no existe.");
-    const operation = operationSnap.data() || {};
-    if (operation.action !== "canva" || !isPlainObject(operation.groups)) {
-      throw new functions.https.HttpsError("failed-precondition", "La operacion no se puede restaurar.");
-    }
-    if (!hasPermission(actor.user, actor.roleDefaults, "canva.project")) {
-      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para restaurar Canva.");
-    }
-    if (Date.now() > Number(operation.expiresAt || 0)) {
-      throw new functions.https.HttpsError("failed-precondition", "La operacion de deshacer expiro.");
-    }
-    if (operation.status !== "applied") {
-      return { ok: true, operationId, status: "already_restored", restored: [], skipped: [] };
-    }
-    const groups = Object.entries(operation.groups);
-    const isOwnTemporaryCanvaUndo = operation.canvaKind === "temporary"
-      && operation.actorUid === context.auth.uid;
-    if (groups.some(([, group]) => groupRequiresMediaRestore(group))
-      && !isOwnTemporaryCanvaUndo
-      && !hasPermission(actor.user, actor.roleDefaults, "multimedia.project")) {
-      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para restaurar Multimedia.");
-    }
-
-    const eventData = eventSnap.data() || {};
-    const restored = [];
-    const skipped = [];
-    const eventUpdates = [];
-    groups.forEach(([groupName, group]) => {
-      if (!isPlainObject(group) || !CANVA_OUTPUT_TARGETS.has(group.target) || typeof group.memoryKey !== "string"
-        || !isPlainObject(group.before) || !isPlainObject(group.expectedAfter)) {
-        throw new functions.https.HttpsError("failed-precondition", "La operacion almacenada es invalida.");
-      }
-      if (!groupHasModernCanvaIdentity(group)) {
-        skipped.push({ group: groupName, reason: "unsupported_legacy_operation" });
-        return;
-      }
-      if (!groupMatchesExpectedAfter(eventData, group)) {
-        skipped.push({ group: groupName, reason: "expected_after_mismatch" });
-        return;
-      }
-      addUndoFieldUpdates(eventUpdates, group.target, group, "before");
-      restored.push(groupName);
-    });
-    const status = restored.length === groups.length ? "restored" : (restored.length ? "partial" : "skipped");
-    if (eventUpdates.length) transaction.update(eventRef, ...eventUpdates);
-    transaction.update(operationRef, { status, outcome: { restored, skipped }, restoredAt: Date.now() });
-    return { ok: true, operationId, status, restored, skipped };
-  });
 });
 
 exports.projectQuickMessage = functions.https.onCall(async (data, context) => {
@@ -1059,14 +694,21 @@ exports.updateSongContent = functions.https.onCall(async (data, context) => {
   return db.runTransaction(async (transaction) => {
     const [actor, songSnap] = await Promise.all([readActorInTransaction(transaction, context.auth.uid), transaction.get(ref)]);
     if (!songSnap.exists) throw new functions.https.HttpsError("not-found", "La cancion no existe.");
+    assertLegacySongFormattingCompatible(songSnap, letraRaw);
     const previous = songSnap.get("letraRaw") || "";
     const chordsOnly = canEditChordsOnly(previous, letraRaw);
     const lyricsOnly = canEditLyricsOnly(previous, letraRaw);
-    const permission = chordsOnly && !lyricsOnly ? "songs.editChords" : lyricsOnly && !chordsOnly ? "songs.editLyrics" : null;
-    if (!permission || !hasPermission(actor.user, actor.roleDefaults, permission)) throw new functions.https.HttpsError("permission-denied", "El cambio debe limitarse a letra o acordes con el permiso correspondiente.");
+    const permissions = chordsOnly && !lyricsOnly
+      ? ["songs.editChords"]
+      : (lyricsOnly && !chordsOnly
+        ? ["songs.editLyrics"]
+        : ["songs.editLyrics", "songs.editChords"]);
+    if (!permissions.every((permission) => hasPermission(actor.user, actor.roleDefaults, permission))) {
+      throw new functions.https.HttpsError("permission-denied", "No tienes todos los permisos requeridos para cambiar letra y acordes.");
+    }
     transaction.update(ref, { letraRaw, fechaActualizacion: new Date().toISOString() });
-    transaction.set(ref.collection("permissionAudit").doc(), songAuditData(actor, permission, ["letraRaw"]));
-    return { ok: true, operation: permission };
+    transaction.set(ref.collection("permissionAudit").doc(), songAuditData(actor, permissions.join("+"), ["letraRaw"]));
+    return { ok: true, operation: permissions.join("+") };
   });
 });
 
@@ -1074,6 +716,7 @@ exports.updateSongMetadata = functions.https.onCall(async (data, context) => {
   if (!context.auth?.uid) throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesion.");
   const songId = assertSongPayload(data, ["songId", "changes"]);
   const fields = assertMetadataChanges(data.changes);
+  if (fields.includes("projectionStyle")) await v21CallableHandlers.assertAuthorized(context);
   const db = admin.firestore(); const ref = db.collection("canciones").doc(songId);
   await db.runTransaction(async (transaction) => {
     const [actor, songSnap] = await Promise.all([readActorInTransaction(transaction, context.auth.uid), transaction.get(ref)]);
@@ -1084,6 +727,40 @@ exports.updateSongMetadata = functions.https.onCall(async (data, context) => {
     transaction.set(ref.collection("permissionAudit").doc(), songAuditData(actor, "songs.editMetadata", fields));
   });
   return { ok: true };
+});
+
+exports.setEventSongProjectionStyle = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) throw new functions.https.HttpsError("unauthenticated", "Debes iniciar sesion.");
+  assertExactPayload(data, ["eventId", "songId", "projectionStyle"]);
+  const eventId = assertNonEmptyString(data.eventId, "eventId");
+  const songId = assertNonEmptyString(data.songId, "songId");
+  const projectionStyle = data.projectionStyle === null ? null : assertProjectionStyle(data.projectionStyle);
+  await v21CallableHandlers.assertAuthorized(context);
+  if (eventId.length > 256 || songId.length > 256) throw new functions.https.HttpsError("invalid-argument", "Identificador invalido.");
+  const db = admin.firestore();
+  const eventRef = db.collection("eventos").doc(eventId);
+  const songRef = db.collection("canciones").doc(songId);
+  await db.runTransaction(async (transaction) => {
+    const [actor, eventSnap, songSnap] = await Promise.all([
+      readActorInTransaction(transaction, context.auth.uid),
+      transaction.get(eventRef),
+      transaction.get(songRef)
+    ]);
+    if (!hasPermission(actor.user, actor.roleDefaults, "events.edit")) {
+      throw new functions.https.HttpsError("permission-denied", "No tienes permiso para personalizar este evento.");
+    }
+    if (!eventSnap.exists || !songSnap.exists) throw new functions.https.HttpsError("not-found", "El evento o la cancion no existe.");
+    const overrides = isPlainObject(eventSnap.get("songProjectionStyleOverrides"))
+      ? { ...eventSnap.get("songProjectionStyleOverrides") }
+      : {};
+    if (projectionStyle) overrides[songId] = projectionStyle;
+    else delete overrides[songId];
+    transaction.update(eventRef, {
+      songProjectionStyleOverrides: overrides,
+      fechaActualizacion: new Date().toISOString()
+    });
+  });
+  return { ok: true, hasOverride: projectionStyle !== null };
 });
 
 exports.setSongArchiveState = functions.https.onCall(async (data, context) => {

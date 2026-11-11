@@ -28,12 +28,12 @@ const AutoFitText = ({
       const availableWidth = container.clientWidth;
       const availableHeight = container.clientHeight;
       if (!availableWidth || !availableHeight) return;
-      const last = lastSizeRef.current;
-      const containerUnchanged = last.width === availableWidth && last.height === availableHeight;
 
-      textEl.style.fontSize = `${minFontSize}px`;
+      const prevTransition = textEl.style.transition;
+      textEl.style.transition = 'none';
       textEl.style.lineHeight = String(lineHeight);
-      textEl.style.width = `${availableWidth}px`;
+      textEl.style.maxWidth = `${availableWidth}px`;
+      textEl.style.width = 'fit-content';
 
       let low = minFontSize;
       let high = maxFontSize;
@@ -43,11 +43,18 @@ const AutoFitText = ({
         const mid = Math.floor((low + high) / 2);
         textEl.style.fontSize = `${mid}px`;
 
-        const fits =
-          textEl.scrollWidth <= availableWidth + 1 &&
-          textEl.scrollHeight <= availableHeight + 1;
+        const textRect = textEl.getBoundingClientRect();
+        const fitsWidth = textRect.width <= availableWidth + 2 && textEl.scrollWidth <= availableWidth + 2;
+        const fitsHeight = textRect.height <= availableHeight + 2 && textEl.scrollHeight <= availableHeight + 2;
+        const fitsWindow = (
+          typeof window === 'undefined' ||
+          (textRect.bottom <= (window.innerHeight || Infinity) + 1 &&
+           textRect.right <= (window.innerWidth || Infinity) + 1 &&
+           textRect.top >= -1 &&
+           textRect.left >= -1)
+        );
 
-        if (fits) {
+        if (fitsWidth && fitsHeight && fitsWindow) {
           best = mid;
           low = mid + 1;
         } else {
@@ -56,12 +63,9 @@ const AutoFitText = ({
       }
 
       const nextSize = variant === 'preview' ? Math.round(best / 2) * 2 : best;
-      if (variant !== 'preview' || !containerUnchanged || last.fontSize === null || Math.abs(nextSize - last.fontSize) >= 4) {
-        textEl.style.fontSize = `${nextSize}px`;
-        lastSizeRef.current = { width: availableWidth, height: availableHeight, fontSize: nextSize };
-      } else {
-        textEl.style.fontSize = `${last.fontSize}px`;
-      }
+      textEl.style.fontSize = `${nextSize}px`;
+      textEl.style.transition = prevTransition;
+      lastSizeRef.current = { width: availableWidth, height: availableHeight, fontSize: nextSize };
     };
 
     const scheduleFit = () => {
@@ -72,17 +76,30 @@ const AutoFitText = ({
       else run();
     };
 
+    // 1. Inmediato y sincrónico en fase de layout para primer render sin saltos ni texto gigante
+    fit();
+
+    // 2. Pasada diferida en animación de frame para estabilización tras montaje
     scheduleFit();
 
+    // 3. Listener de fuentes web asíncronas
+    document.fonts?.ready?.then(fit);
+    const handleFontsDone = () => fit();
+    document.fonts?.addEventListener?.('loadingdone', handleFontsDone);
+
+    // 4. Observadores de tamaño y eventos de pantalla
     const resizeObserver = new ResizeObserver(scheduleFit);
     resizeObserver.observe(container);
+    window.addEventListener('resize', scheduleFit);
     window.addEventListener('orientationchange', scheduleFit);
     document.addEventListener('fullscreenchange', scheduleFit);
 
     return () => {
       cancelAnimationFrame(frameId);
       clearTimeout(debounceId);
+      document.fonts?.removeEventListener?.('loadingdone', handleFontsDone);
       resizeObserver.disconnect();
+      window.removeEventListener('resize', scheduleFit);
       window.removeEventListener('orientationchange', scheduleFit);
       document.removeEventListener('fullscreenchange', scheduleFit);
     };
@@ -90,13 +107,13 @@ const AutoFitText = ({
 
   return (
     <div
-      className={`flex items-center justify-center text-center overflow-hidden ${containerClassName}`}
+      className={`flex items-center justify-center text-center ${containerClassName}`}
       style={{ width: '100%', height: '100%', maxWidth: safeMaxWidth, maxHeight: safeMaxHeight }}
       ref={containerRef}
     >
       <div
         ref={textRef}
-        className={`whitespace-pre-wrap break-words overflow-hidden ${className}`}
+        className={`whitespace-pre-wrap break-words ${className}`}
         translate="no"
       >
         {text}

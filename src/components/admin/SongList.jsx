@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { collection, onSnapshot, deleteDoc, doc, updateDoc, addDoc, getDocs, getDoc, query, where, orderBy, limit, writeBatch } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { Music, Search, Trash2, Edit, Mic2, Play, Heart, Layers, Plus, X, ChevronUp, ChevronDown, Download, Copy, Archive, RotateCcw, MoreVertical, ListPlus, Eye } from 'lucide-react';
@@ -16,11 +16,13 @@ import useMediaLibrary from '../../hooks/useMediaLibrary';
 import { useFeedback } from '../ui/FeedbackProvider';
 import { PERMISSIONS, hasAnyPermission, hasPermission } from '../../utils/permissions';
 import { setSongArchiveState } from '../../utils/songFunctions';
+import { createV21RequestId, describeV21CallableError, duplicateSongV21, useV21Capability } from '../../utils/v21CallableClient';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 
 const SongList = ({ user }) => {
   const { confirm: askConfirm, notify } = useFeedback();
+  const v21Capability = useV21Capability();
   const [canciones, setCanciones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filtro, setFiltro] = useState('');
@@ -33,6 +35,8 @@ const SongList = ({ user }) => {
   const [deleteUsage, setDeleteUsage] = useState([]);
   const [isDeletingSong, setIsDeletingSong] = useState(false);
   const [duplicatingSongId, setDuplicatingSongId] = useState(null);
+  const duplicateRequestRef = useRef(null);
+  const duplicateInFlightRef = useRef(false);
   const [openActionsSongId, setOpenActionsSongId] = useState(null);
   const navigate = useNavigate();
   const formatoAcordes = user?.preferencias?.formatoAcordes || 'american';
@@ -300,7 +304,8 @@ const SongList = ({ user }) => {
   };
 
   const handleDuplicateSong = async (song) => {
-    if (!song || duplicatingSongId) return;
+    if (!song || duplicatingSongId || duplicateInFlightRef.current) return;
+    duplicateInFlightRef.current = true;
     setDuplicatingSongId(song.id);
     try {
       const songSnap = await getDoc(doc(db, 'canciones', song.id));
@@ -310,6 +315,23 @@ const SongList = ({ user }) => {
       }
 
       const original = songSnap.data();
+      if (v21Capability.canDuplicate) {
+        const fingerprint = `duplicate:${song.id}`;
+        const requestId = duplicateRequestRef.current?.fingerprint === fingerprint
+          ? duplicateRequestRef.current.requestId
+          : createV21RequestId('duplicate');
+        duplicateRequestRef.current = { fingerprint, requestId };
+        const result = await duplicateSongV21({ songId: song.id, requestId });
+        duplicateRequestRef.current = null;
+        showToast('Cancion duplicada correctamente.', 'success');
+        navigate(`/editar/${result.songId}`, { state: { returnTo: '/canciones' } });
+        return;
+      }
+
+      if (original.lyricFormatting !== undefined && original.lyricFormatting !== null) {
+        showToast('La duplicacion de canciones con formato V2.1 solo esta disponible en el entorno de prueba seguro.', 'error');
+        return;
+      }
       const now = new Date().toISOString();
       const copiedSectionMedia = cloneSectionMedia(original.sectionMedia);
       const copiedRecursos = regenerateLocalResourceIds(original.recursos);
@@ -343,8 +365,9 @@ const SongList = ({ user }) => {
       navigate(`/editar/${newSongRef.id}`, { state: { returnTo: '/canciones' } });
     } catch (error) {
       console.error('Error duplicando cancion:', error);
-      showToast('No se pudo duplicar la cancion.', 'error');
+      showToast(describeV21CallableError(error).message || 'No se pudo duplicar la cancion.', 'error');
     } finally {
+      duplicateInFlightRef.current = false;
       setDuplicatingSongId(null);
     }
   };

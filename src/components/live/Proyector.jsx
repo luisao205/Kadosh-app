@@ -4,6 +4,7 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { Minimize, RefreshCw } from 'lucide-react';
 import AutoFitText from './AutoFitText';
+import RichLyricText from './RichLyricText';
 import BibleAmbientBackground from './BibleAmbientBackground';
 import ProjectorMediaBackground from './ProjectorMediaBackground';
 import { resolveProjectorBackground } from '../../utils/projectorMediaState';
@@ -15,6 +16,8 @@ import { PreachingPresentation } from './InternalScreenPreaching';
 import QuickMessagePresentation from './QuickMessagePresentation';
 import InternalScreenCanva from './InternalScreenCanva';
 import { resolveActiveQuickMessageProjectorState } from '../../utils/quickMessageProjectionState';
+import { normalizeProjectionStyle, normalizeProjectionTransition } from '../../utils/projectionStyle';
+import { normalizeResolvedLyricProjectionPayload } from '../../utils/lyricProjectionFormatting';
 
 const Proyector = ({ eventoIdOverride, user }) => {
   const { eventoId: routeEventoId } = useParams();
@@ -41,9 +44,7 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const videoPlaybackRef = useRef({ key: null, element: null, fallbackMuted: false, inFlight: false });
   const lastFondoRef = useRef(null);
 
-  // Nuevos estados para la transici?n secuencial (Desvanecer viejo -> Aparecer nuevo)
-  const [displaySlide, setDisplaySlide] = useState(null);
-  const [fadeState, setFadeState] = useState('in'); // 'in' | 'out'
+  const slideIdentity = slide ? JSON.stringify(slide) : '';
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'eventos', eventoId), (snap) => {
@@ -163,34 +164,6 @@ const Proyector = ({ eventoIdOverride, user }) => {
     };
   }, [media?.url]);
 
-  // Efecto maestro para controlar la salida y entrada de la letra de forma sincronizada
-  useEffect(() => {
-    if (!slide) {
-      setDisplaySlide(null);
-      return;
-    }
-
-    if (!displaySlide || transicion === 'none') {
-      setDisplaySlide(slide);
-      setFadeState('in');
-      return;
-    }
-
-    if (slide.texto !== displaySlide.texto) {
-      // 1. Iniciar desvanecimiento de la letra vieja
-      setFadeState('out');
-      
-      // 2. Esperar a que se desvanezca por completo (250ms para m?s rapidez)
-      const timeout = setTimeout(() => {
-        // 3. Cambiar la letra silenciosamente mientras est? invisible y volver a aparecer (Fade In)
-        setDisplaySlide(slide);
-        setFadeState('in');
-      }, transicion === 'fade' ? 250 : 150);
-
-      return () => clearTimeout(timeout);
-    }
-  }, [slide, transicion, displaySlide]);
-
   // L?gica de cuenta regresiva (Countdown)
   const [timeLeft, setTimeLeft] = useState("");
   useEffect(() => {
@@ -295,7 +268,7 @@ const Proyector = ({ eventoIdOverride, user }) => {
   const bibleHeading = activeBibleSlide?.heading || null;
   const hasProjectedTextContent = isBibleContent || isPreachingContent || isQuickMessageContent;
 
-  if (!displaySlide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !hasProjectedTextContent && !activeCanvaEmbedUrl) {
+  if (!slide && !media?.url && !showLogo && !countdown?.active && !fondoUrl && !hasProjectedTextContent && !activeCanvaEmbedUrl) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="text-zinc-900 font-black text-8xl tracking-tighter select-none opacity-20 text-center px-4">
@@ -305,23 +278,19 @@ const Proyector = ({ eventoIdOverride, user }) => {
     );
   }
 
-  // Clases din?micas basadas en el estado de transici?n (fadeState)
-  let animationClass = '';
-  if (transicion !== 'none') {
-    const baseTransition = transicion === 'fade' 
-      ? 'transition-all duration-[250ms] ease-in-out' 
-      : 'transition-all duration-[150ms] ease-in-out';
-      
-    if (fadeState === 'out') {
-      if (transicion === 'slide') animationClass = `${baseTransition} opacity-0 translate-y-8`;
-      else if (transicion === 'zoom') animationClass = `${baseTransition} opacity-0 scale-95`;
-      else animationClass = `${baseTransition} opacity-0`;
-    } else {
-      if (transicion === 'slide') animationClass = `${baseTransition} opacity-100 translate-y-0`;
-      else if (transicion === 'zoom') animationClass = `${baseTransition} opacity-100 scale-100`;
-      else animationClass = `${baseTransition} opacity-100`;
-    }
-  }
+  const projectionStyle = normalizeProjectionStyle(projectorState?.projectionStyle);
+  const projectionTransition = normalizeProjectionTransition(transicion);
+  const slidePresetClass = `projection-preset-${projectionStyle.preset}`;
+  const slideMotionClass = `projection-motion-${projectionStyle.motion}`;
+  const projectionLineHeight = {
+    clean: 1.08,
+    cinematic: 1.17,
+    worship: 1.24,
+    impact: 1.02,
+    minimal: 1.3,
+  }[projectionStyle.preset] || 1.08;
+  const resolvedRichLyrics = normalizeResolvedLyricProjectionPayload(slide?.richLyrics, slide?.texto);
+  const slidePresentationKey = projectorState?.transitionId || slideIdentity;
 
   return (
     <div className={`fixed inset-0 text-white flex flex-col font-sans selection:bg-transparent overflow-hidden transition-colors duration-500 ${modoTransmision ? 'bg-[#00FF00] justify-end items-start pb-12 md:pb-20' : 'bg-black items-center justify-center p-8 md:p-16'} ${!showControls ? 'cursor-none' : ''}`}>
@@ -350,6 +319,10 @@ const Proyector = ({ eventoIdOverride, user }) => {
         disabled={modoTransmision || apagar}
         suspended={Boolean(media?.url && media.mode === 'foreground')}
       />
+
+      {slide && projectionStyle.backgroundTreatment === 'auto' && !modoTransmision && (
+        <div className="pointer-events-none absolute inset-0 z-[5] bg-black/30" aria-hidden="true" />
+      )}
 
       {activeCanvaEmbedUrl && (
         <div className="absolute inset-0 z-[70] bg-black">
@@ -438,25 +411,40 @@ const Proyector = ({ eventoIdOverride, user }) => {
         </div>
       ) : isPreachingContent ? (
         <PreachingPresentation content={preachingContent} layerClassName="z-20" />
-      ) : displaySlide ? (
+      ) : slide ? (
         <div className={`relative z-10 w-full max-w-none flex flex-col ${modoTransmision ? 'justify-end items-start pl-8 md:pl-16' : 'justify-center items-center h-full mx-auto text-center'}`}>
           <div 
-            // Eliminamos la prop 'key' para que React no destruya el elemento, sino que aplique las clases de transici?n de CSS puro
-            className={`font-black tracking-tight whitespace-pre-wrap break-words text-outline ${animationClass} ${modoTransmision ? 'bg-black/80 border-l-[12px] border-violet-600 py-4 md:py-6 pr-8 pl-6 md:pl-8 rounded-r-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] inline-block text-left text-[min(6vw,6vh)] sm:text-[min(5vw,5vh)] md:text-[min(4vw,4vh)] leading-[1.2] max-w-[90vw] lg:max-w-5xl' : 'w-full h-full flex items-center justify-center overflow-hidden drop-shadow-[0_0_60px_rgba(0,0,0,1)]'}`}
+            key={slidePresentationKey}
+            data-projection-transition-id={projectorState?.transitionId || ''}
+            data-projection-transition={projectionTransition}
+            className={`projection-transition-${projectionTransition} ${slidePresetClass} font-black tracking-tight whitespace-pre-wrap break-words text-outline ${modoTransmision ? 'bg-black/80 border-l-[12px] border-violet-600 py-4 md:py-6 pr-8 pl-6 md:pl-8 rounded-r-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] inline-block text-left text-[min(6vw,6vh)] sm:text-[min(5vw,5vh)] md:text-[min(4vw,4vh)] leading-[1.2] max-w-[90vw] lg:max-w-5xl' : 'w-full h-full flex items-center justify-center overflow-hidden drop-shadow-[0_0_60px_rgba(0,0,0,1)]'}`}
           >
-            {modoTransmision ? (
-              <span translate="no">{displaySlide.texto}</span>
-            ) : (
-              <AutoFitText
-                text={displaySlide.texto}
-                minFontSize={36}
-                maxFontSize={240}
-                safeMaxWidth="90vw"
-                safeMaxHeight="78vh"
-                variant="projector"
-                className="font-black tracking-tight text-outline"
-              />
-            )}
+            <div className={`${slideMotionClass} ${modoTransmision ? '' : 'flex h-full w-full items-center justify-center'}`}>
+              {modoTransmision ? (
+                <span translate="no">{slide.texto}</span>
+              ) : resolvedRichLyrics ? (
+                <RichLyricText
+                  runs={resolvedRichLyrics.segments}
+                  minBaseFontSize={36}
+                  maxBaseFontSize={240}
+                  safeMaxWidth="90vw"
+                  safeMaxHeight="78vh"
+                  lineHeight={projectionLineHeight}
+                  className="projection-lyric-text font-black tracking-tight text-outline"
+                />
+              ) : (
+                <AutoFitText
+                  text={slide.texto}
+                  minFontSize={36}
+                  maxFontSize={240}
+                  safeMaxWidth="90vw"
+                  safeMaxHeight="78vh"
+                  variant="projector"
+                  lineHeight={projectionLineHeight}
+                  className="projection-lyric-text font-black tracking-tight text-outline"
+                />
+              )}
+            </div>
           </div>
         </div>
       ) : null}

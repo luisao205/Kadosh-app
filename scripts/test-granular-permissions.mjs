@@ -43,7 +43,8 @@ const [rules, functionsSource, teamSource, permissionPanel, announcementPermissi
   readFile(new URL('../src/utils/announcementPermissions.js', import.meta.url), 'utf8')
 ]);
 assert.match(rules, /function hasPermissionOverride\(profile, permission\)/);
-assert.match(rules, /function hasConfiguredRolePermission\(role, permission\)/);
+assert.match(rules, /function hasConfiguredRolePermissionOrLegacy\(role, permission\)/);
+assert.match(rules, /hasConfiguredRolePermissionOrLegacyFromDocument[\s\S]*hasLegacyPermission/);
 assert.match(rules, /match \/sistema\/permissionRoles \{[\s\S]*allow write: if false/);
 assert.match(rules, /permissionOverrides/);
 assert.match(rules, /preservesOwnOwnerRole/);
