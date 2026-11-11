@@ -2,13 +2,14 @@
 
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, Menu, ipcMain, net, protocol, screen } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, net, protocol, screen, shell } = require('electron');
 const {
   APP_ORIGIN,
   APP_SCHEME,
   resolveProductionRendererRequest
 } = require('./productionRouting.cjs');
-const { attachNativeWindowBehavior } = require('./nativeWindowBehavior.cjs');
+const { attachNativeWindowBehavior, validateOfficialChatExternalUrl } = require('./nativeWindowBehavior.cjs');
+const { createRendererTrustPolicy } = require('./rendererTrust.cjs');
 const { initializeWindowsStartup } = require('./windowsStartup.cjs');
 const { createUpdateManager } = require('./updateManager.cjs');
 const { createOutputWindowManager } = require('./outputWindowManager.cjs');
@@ -110,10 +111,30 @@ if (!hasSingleInstanceLock) {
     Menu.setApplicationMenu(null);
     registerRendererProtocol();
     initializeWindowsStartup({ app });
+    const { isTrustedRendererUrl } = createRendererTrustPolicy({ isDevelopment, developmentServerUrl });
+    ipcMain.handle('kadosh-desktop:open-external-chat', async (event, targetUrl) => {
+      if (!isTrustedRendererUrl(event?.sender?.getURL?.() || '')) {
+        return { opened: false, reason: 'untrusted-sender' };
+      }
+      const safeUrl = validateOfficialChatExternalUrl(targetUrl);
+      if (!safeUrl) {
+        return { opened: false, reason: 'invalid-url' };
+      }
+      await shell.openExternal(safeUrl);
+      return { opened: true, url: safeUrl };
+    });
+
     app.on('web-contents-created', (_event, webContents) => {
       attachNativeWindowBehavior(webContents, BrowserWindow);
       webContents.setWindowOpenHandler(({ url }) => {
         if (outputWindowManager?.handleWindowOpen({ openerUrl: webContents.getURL(), targetUrl: url })) return { action: 'deny' };
+        const safeExternalChat = validateOfficialChatExternalUrl(url);
+        if (safeExternalChat && isTrustedRendererUrl(webContents.getURL())) {
+          shell.openExternal(safeExternalChat).catch((err) => {
+            console.warn('No se pudo abrir chat oficial en navegador externo:', err?.message || err);
+          });
+          return { action: 'deny' };
+        }
         return { action: 'allow' };
       });
     });

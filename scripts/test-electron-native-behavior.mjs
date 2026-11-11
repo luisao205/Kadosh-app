@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
   ELECTRON_SCROLLBAR_CSS,
+  validateOfficialChatExternalUrl,
   attachNativeWindowBehavior,
   isInternalKadoshUrl
 } = require('../desktop/nativeWindowBehavior.cjs');
@@ -106,5 +107,12 @@ try {
 } finally {
   await rm(startupDirectory, { recursive: true, force: true });
 }
+
+assert.equal(validateOfficialChatExternalUrl('https://gemini.google.com/app'), 'https://gemini.google.com/app');
+assert.equal(validateOfficialChatExternalUrl('https://chatgpt.com/c/123'), 'https://chatgpt.com/c/123');
+assert.equal(validateOfficialChatExternalUrl('https://chat.openai.com/'), 'https://chat.openai.com/');
+assert.equal(validateOfficialChatExternalUrl('http://gemini.google.com/app'), null);
+assert.equal(validateOfficialChatExternalUrl('https://evil.example.com/'), null);
+assert.equal(validateOfficialChatExternalUrl('https://user:pass@gemini.google.com/app'), null);
 
 console.log('electron native behavior: OK');

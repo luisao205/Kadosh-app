@@ -3,6 +3,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('kadoshDesktop', {
+  openExternalChat: (url) => ipcRenderer.invoke('kadosh-desktop:open-external-chat', url),
   updater: {
     getVersion: () => ipcRenderer.invoke('kadosh-updater:get-version'),
     getUpdateState: () => ipcRenderer.invoke('kadosh-updater:get-state'),

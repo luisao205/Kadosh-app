@@ -26,7 +26,8 @@ import {
   loadUserFavoriteChats,
   saveUserFavoriteChats,
   buildOfficialChatPackage,
-  copyAndOpenOfficialChat
+  copyAndOpenOfficialChat,
+  openExternalOfficialUrl
 } from '../../utils/officialMusicChats';
 
 /**
@@ -99,20 +100,19 @@ const OfficialChatsWorkspace = ({
   };
 
   // Abrir directamente enlace oficial (o favorito seleccionado) sin paquete
-  const handleDirectOpen = (provider) => {
+  const handleDirectOpen = async (provider) => {
     const targetUrl = resolveProviderTargetUrl(provider);
-    const check = validateOfficialChatUrl(targetUrl, provider);
-    if (!check.valid) {
-      notify(check.error, { type: 'error' });
+    const outcome = await openExternalOfficialUrl(targetUrl, provider);
+    if (!outcome.ok) {
+      notify(outcome.error || 'Enlace oficial inválido.', { type: 'error' });
       return;
     }
 
-    const win = window.open(check.url, '_blank', 'noopener,noreferrer');
     setLastUsedProvider(provider);
-    if (!win) {
+    if (!outcome.windowOpened) {
       setManualPackageModal({
         provider,
-        targetUrl: check.url,
+        targetUrl: outcome.targetUrl,
         clipboardCopied: true,
         windowOpened: false,
         text: '',

@@ -2,6 +2,24 @@
 
 const { APP_HOST, APP_SCHEME } = require('./productionRouting.cjs');
 
+const OFFICIAL_CHAT_EXTERNAL_HOSTS = new Set([
+  'gemini.google.com',
+  'chatgpt.com',
+  'chat.openai.com'
+]);
+
+const validateOfficialChatExternalUrl = (rawUrl) => {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    if (parsed.protocol !== 'https:') return null;
+    if (parsed.username || parsed.password) return null;
+    if (!OFFICIAL_CHAT_EXTERNAL_HOSTS.has(parsed.hostname.toLowerCase())) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
 const ELECTRON_SCROLLBAR_CSS = `
   html::-webkit-scrollbar,
   body::-webkit-scrollbar,
@@ -51,6 +69,8 @@ const attachNativeWindowBehavior = (webContents, BrowserWindow) => {
 
 module.exports = {
   ELECTRON_SCROLLBAR_CSS,
+  OFFICIAL_CHAT_EXTERNAL_HOSTS,
+  validateOfficialChatExternalUrl,
   attachNativeWindowBehavior,
   isInternalKadoshUrl
 };

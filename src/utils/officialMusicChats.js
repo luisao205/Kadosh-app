@@ -290,6 +290,42 @@ export const buildOfficialChatPackage = ({
 };
 
 /**
+ * Abre un enlace oficial validado en el navegador predeterminado (Electron/Android) o nueva pestaña Web.
+ */
+export const openExternalOfficialUrl = async (targetUrl, expectedProvider = null) => {
+  const urlCheck = validateOfficialChatUrl(targetUrl, expectedProvider);
+  if (!urlCheck.valid) {
+    return {
+      ok: false,
+      windowOpened: false,
+      error: urlCheck.error,
+      targetUrl,
+    };
+  }
+
+  let windowOpened = false;
+  try {
+    if (typeof window !== 'undefined' && typeof window.kadoshDesktop?.openExternalChat === 'function') {
+      const outcome = await window.kadoshDesktop.openExternalChat(urlCheck.url);
+      windowOpened = Boolean(outcome?.opened);
+    } else if (typeof window !== 'undefined' && typeof window.open === 'function') {
+      const win = window.open(urlCheck.url, '_blank', 'noopener,noreferrer');
+      const isCapacitorNative = Boolean(window.Capacitor?.isNativePlatform?.());
+      windowOpened = Boolean(win) || isCapacitorNative;
+    }
+  } catch {
+    windowOpened = false;
+  }
+
+  return {
+    ok: true,
+    windowOpened,
+    targetUrl: urlCheck.url,
+    provider: urlCheck.provider,
+  };
+};
+
+/**
  * Copia el paquete de texto al portapapeles (si es posible) y abre el chat oficial en una pestaña nueva.
  * Nunca falsifica envíos automáticos ni evade bloqueos del navegador.
  */
@@ -316,22 +352,14 @@ export const copyAndOpenOfficialChat = async ({ text, targetUrl }) => {
     clipboardCopied = false;
   }
 
-  let windowOpened = false;
-  try {
-    if (typeof window !== 'undefined' && typeof window.open === 'function') {
-      const win = window.open(urlCheck.url, '_blank', 'noopener,noreferrer');
-      windowOpened = Boolean(win);
-    }
-  } catch {
-    windowOpened = false;
-  }
+  const openOutcome = await openExternalOfficialUrl(urlCheck.url);
 
   return {
-    ok: true,
+    ok: openOutcome.ok,
     clipboardCopied,
-    windowOpened,
-    targetUrl: urlCheck.url,
-    provider: urlCheck.provider,
+    windowOpened: openOutcome.windowOpened,
+    targetUrl: openOutcome.targetUrl,
+    provider: openOutcome.provider,
     text,
   };
 };
