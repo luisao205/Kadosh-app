@@ -24,6 +24,7 @@ import EventManagement from './components/admin/EventManagement';
 import SetlistViewer from './components/admin/SetlistViewer';
 import UserProfile from './components/admin/UserProfile';
 import AnnouncementManagement from './components/admin/AnnouncementManagement';
+import MusicAI from './components/admin/MusicAI';
 import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
@@ -33,7 +34,7 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { App as CapacitorApp } from '@capacitor/app';
 import { ACCOUNT_STATUSES, getAccountStatusLabel, isAccountAllowed, normalizeAccountStatus } from './utils/accountStatus';
 import { canAccessMediaLibrary } from './utils/mediaLibraryPermissions';
-import { canAccessController, canAccessMultimediaTools, canAccessPreachings, canManageAnnouncements, canManageSongs, canManageTeam, canViewEventsAndSetlists } from './utils/rolePermissions';
+import { canAccessController, canAccessMultimediaTools, canAccessMusicAI, canAccessPreachings, canManageAnnouncements, canManageSongs, canManageTeam, canViewEventsAndSetlists } from './utils/rolePermissions';
 import { PERMISSIONS, hasPermission } from './utils/permissions';
 import { clearTeamPinAccessState } from './utils/teamPinAccess';
 import { FeedbackProvider, notifyFeedback } from './components/ui/FeedbackProvider';
@@ -335,6 +336,7 @@ function App() {
         {/* Rutas de Administración (Envueltas en el Layout) */}
         <Route path="/" element={<AdminLayout user={user}><AdminDashboard user={user} /></AdminLayout>} />
         <Route path="/canciones" element={<AdminLayout user={user}><SongList user={user} /></AdminLayout>} />
+        <Route path="/music-ai" element={<ProtectedAdminRoute user={user} allowed={canAccessMusicAI(user)} message="KADOSH Music AI requiere autorización expresa del dueño."><MusicAI user={user} /></ProtectedAdminRoute>} />
         <Route path="/añadir" element={<ProtectedAdminRoute user={user} allowed={hasPermission(user, PERMISSIONS.SONGS_CREATE)} message="Solo el equipo autorizado puede agregar canciones."><AddSongAI user={user} /></ProtectedAdminRoute>} />
         <Route path="/editar/:id" element={<ProtectedAdminRoute user={user} allowed={canManageSongs(user)} message="Solo el equipo autorizado puede editar canciones."><EditSong user={user} /></ProtectedAdminRoute>} />
         <Route path="/equipo" element={<ProtectedAdminRoute user={user} allowed={canManageTeam(user)} message="Solo el dueno puede gestionar integrantes y roles."><TeamPinGate user={user}><UserManagement user={user} /></TeamPinGate></ProtectedAdminRoute>} />

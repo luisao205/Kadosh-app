@@ -24,6 +24,13 @@ export const hasAnyRole = (user = {}, roles = []) => {
 
 export const canManageTeam = (user = {}) => isOwner(user);
 
+export const canAccessMusicAI = (user = {}) => {
+  if (isOwner(user)) return true;
+  const status = String(user?.accountStatus || 'active').toLowerCase();
+  if (status === 'suspended' || status === 'disabled') return false;
+  return user?.musicAIAccess?.authorized === true;
+};
+
 export const canManageSongs = (user = {}) => hasAnyPermission(user, [
   PERMISSIONS.SONGS_CREATE,
   PERMISSIONS.SONGS_EDIT_LYRICS,

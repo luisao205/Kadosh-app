@@ -8,8 +8,11 @@ import {
 import { doc, getDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 const rules = await readFile(new URL('../firestore.rules', import.meta.url), 'utf8');
+if (!/^127\.0\.0\.1:\d+$/.test(process.env.FIRESTORE_EMULATOR_HOST || '')) {
+  throw new Error('Rules E2E requires a local Firestore Emulator.');
+}
 const testEnv = await initializeTestEnvironment({
-  projectId: 'kadosh-49600',
+  projectId: 'demo-kadosh-e2e',
   firestore: { rules }
 });
 
@@ -42,37 +45,33 @@ try {
         rol: 'multimedia', nombre: 'Media',
         permissionOverrides: { 'multimedia.project': true, 'bible.project': false }
       }),
-      setDoc(doc(firestore, 'usuarios', 'canva-projector'), {
-        rol: 'multimedia', nombre: 'Canva projector',
-      }),
-      setDoc(doc(firestore, 'sistema', 'permissionRoles'), {
-        roleDefaults: {
-          multimedia: {
-            'dashboard.view': true,
-            'events.view': true,
-            'setlists.view': true,
-            'setlists.control': true,
-            'multimedia.libraryView': true,
-            'multimedia.centralAccess': true,
-            'multimedia.project': true,
-            'multimedia.controlOutputs': true,
-            'canva.view': true,
-            'canva.create': true,
-            'canva.project': true
-          }
-        }
-      }),
       setDoc(doc(firestore, 'usuarios', 'sermon'), {
         rol: 'multimedia', nombre: 'Sermon',
         permissionOverrides: { 'sermons.project': true, 'multimedia.project': false }
+      }),
+      setDoc(doc(firestore, 'usuarios', 'control-user'), {
+        rol: 'musico', nombre: 'Control user',
+        permissionOverrides: { 'multimedia.controlOutputs': true }
+      }),
+      setDoc(doc(firestore, 'usuarios', 'suspended-control'), {
+        rol: 'multimedia', nombre: 'Suspended control', accountStatus: 'suspended'
       }),
       setDoc(doc(firestore, 'eventos', 'event-1'), baseEvent),
       setDoc(doc(firestore, 'eventos', 'event-2'), baseEvent),
       setDoc(doc(firestore, 'eventos', 'event-3'), baseEvent),
       setDoc(doc(firestore, 'eventos', 'event-4'), baseEvent),
       setDoc(doc(firestore, 'eventos', 'event-5'), baseEvent),
+      setDoc(doc(firestore, 'eventos', 'legacy-projection'), {
+        titulo: 'Evento legacy',
+        projectorState: { type: 'resume', contentType: 'none', media: null },
+        liveState: {}
+      }),
       setDoc(doc(firestore, 'anuncios', 'announcement-1'), { titulo: 'Anuncio' }),
       setDoc(doc(firestore, 'canciones', 'active'), { titulo: 'Activa', archived: false }),
+      setDoc(doc(firestore, 'canciones', 'formatted'), {
+        titulo: 'Con formato', archived: false, letraRaw: '# Coro\nOriginal',
+        lyricFormatting: { version: 1, sections: {} }
+      }),
       setDoc(doc(firestore, 'canciones', 'archived'), { titulo: 'Archivada', archived: true })
     ]);
   });
@@ -94,11 +93,35 @@ try {
 
   await assertFails(setDoc(doc(db('owner'), 'sistema', 'permissionRoles'), { roleDefaults: {} }));
   await assertFails(setDoc(doc(db('owner'), 'usuarios', 'editor', 'permissionAudit', 'forged'), { actorUid: 'other' }));
-  const undoOperationRef = doc(db('owner'), 'eventos', 'event-1', 'undoOperations', 'forged');
-  await assertFails(getDoc(undoOperationRef));
-  await assertFails(setDoc(undoOperationRef, { action: 'canva' }));
-  await assertFails(updateDoc(undoOperationRef, { status: 'restored' }));
-  await assertFails(deleteDoc(undoOperationRef));
+
+  // KADOSH Music AI security rules
+  await assertFails(updateDoc(user('editor'), { musicAIAccess: { authorized: true } }));
+  await assertFails(updateDoc(user('admin'), { musicAIAccess: { authorized: true } }));
+  await assertFails(updateDoc(doc(db('admin'), 'usuarios', 'editor'), { musicAIAccess: { authorized: true } }));
+  await assertFails(updateDoc(doc(db('team-editor'), 'usuarios', 'editor'), { musicAIAccess: { authorized: true } }));
+  await assertFails(setDoc(doc(db('admin'), 'usuarios', 'forged-music-ai'), {
+    rol: 'musico', nombre: 'Forged', musicAIAccess: { authorized: true }
+  }));
+  await assertSucceeds(updateDoc(user('editor'), { telefono: '0987654321', preferencias: { notacion: 'C' } }));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), 'usuarios', 'editor', 'musicAIAudit', 'audit-1'), {
+      actorUid: 'owner', targetUid: 'editor', authorized: true
+    });
+  });
+  await assertSucceeds(getDoc(doc(db('owner'), 'usuarios', 'editor', 'musicAIAudit', 'audit-1')));
+  await assertFails(getDoc(doc(db('admin'), 'usuarios', 'editor', 'musicAIAudit', 'audit-1')));
+  await assertFails(getDoc(doc(db('editor'), 'usuarios', 'editor', 'musicAIAudit', 'audit-1')));
+  await assertFails(setDoc(doc(db('owner'), 'usuarios', 'editor', 'musicAIAudit', 'forged'), { authorized: true }));
+  await assertFails(updateDoc(doc(db('owner'), 'usuarios', 'editor', 'musicAIAudit', 'audit-1'), { authorized: false }));
+
+  // Private per-user official chat favorites under usuarios/{uid}/notas
+  const editorFavRef = doc(db('editor'), 'usuarios', 'editor', 'notas', 'music_ai_official_chats');
+  await assertSucceeds(setDoc(editorFavRef, { ownerUid: 'editor', kind: 'music_ai_official_chats', favorites: [] }));
+  await assertSucceeds(getDoc(editorFavRef));
+  await assertFails(getDoc(doc(db('admin'), 'usuarios', 'editor', 'notas', 'music_ai_official_chats')));
+  await assertFails(getDoc(doc(db('owner'), 'usuarios', 'editor', 'notas', 'music_ai_official_chats')));
+  await assertFails(setDoc(doc(db('admin'), 'usuarios', 'editor', 'notas', 'music_ai_official_chats'), { favorites: [] }));
 
   const bibleState = {
     type: 'preaching', contentType: 'bible', preachingType: 'bible', title: 'Salmos 23:4', reference: 'Salmos 23:4',
@@ -118,6 +141,41 @@ try {
   const bibleProjectionPayload = { ...biblePayload, announcementState: inactiveAnnouncementState };
   await assertSucceeds(setDoc(doc(db('bible'), 'eventos', 'event-4'), bibleProjectionPayload));
   await assertSucceeds(setDoc(doc(db('owner'), 'eventos', 'event-5'), bibleProjectionPayload));
+
+  const legacySongProjection = {
+    projectorState: {
+      type: 'lyrics', contentType: 'lyrics', title: 'Coro', content: 'Texto', media: null,
+      projectionStyle: { preset: 'clean', motion: 'soft' }, transitionId: 'song-transition-1',
+      transitionStartedAt: 1, background: null, backgroundMedia: null, updatedAt: 1
+    },
+    proyectorSlide: { titulo: 'Coro', texto: 'Texto', sectionIndex: 0, pageIndex: 0, pageCount: 1 },
+    announcementState: inactiveAnnouncementState,
+    proyectorFondo: null, proyectorFondoMedia: null, proyectorSongId: 'song-1',
+    proyectorSlideIndex: 0, proyectorNextSlide: null, proyectorNextSong: null,
+    proyectorOffset: 0, liveState: { activeContentType: 'lyrics' }, currentSongId: 'song-1',
+    proyectorLogo: false, proyectorApagado: false, proyectorMedia: null
+  };
+  await assertSucceeds(updateDoc(doc(db('owner'), 'eventos', 'legacy-projection'), legacySongProjection));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), 'eventos', 'legacy-bible-projection'), {
+      titulo: 'Evento legacy',
+      projectorState: { type: 'resume', contentType: 'none', media: null },
+      liveState: {}
+    });
+  });
+  const legacyBiblePrevious = {
+    projectorState: { type: 'resume', contentType: 'none', media: null },
+    proyectorSlide: null, proyectorMedia: null, proyectorLogo: null, proyectorApagado: null,
+    proyectorFondo: null, proyectorFondoMedia: null, proyectorSongId: null,
+    proyectorSlideIndex: null, proyectorNextSlide: null, proyectorNextSong: null,
+    proyectorOffset: null, liveState: {}, currentSongId: null
+  };
+  await assertSucceeds(updateDoc(doc(db('owner'), 'eventos', 'legacy-bible-projection'), {
+    ...bibleProjectionPayload,
+    projectorState: { ...bibleState, previousProjectionFields: legacyBiblePrevious }
+  }));
+  await assertSucceeds(updateDoc(doc(db('owner'), 'eventos', 'legacy-bible-projection'), legacySongProjection));
   await assertFails(updateDoc(doc(db('bible'), 'eventos', 'event-1'), { proyectorMedia: { url: 'https://invalid.example/media.mp4' } }));
   await assertFails(updateDoc(doc(db('bible'), 'eventos', 'event-1'), { projectorState: { ...bibleState, type: 'media', contentType: 'media', media: { url: 'https://invalid.example/media.mp4' } } }));
 
@@ -215,7 +273,18 @@ try {
   }
 
   const bibleControls = doc(db('owner'), 'eventos', 'controls-bible');
-  await assertFails(updateDoc(doc(db('editor'), 'eventos', 'controls-bible'), { proyectorModoTransmision: true }));
+  await assertSucceeds(updateDoc(doc(db('control-user'), 'eventos', 'controls-bible'), {
+    proyectorModoTransmision: true,
+    proyectorTransicion: 'zoom',
+    proyectorCountdown: { active: true, endTimestamp: 2000000000000 }
+  }));
+  await assertFails(updateDoc(doc(db('suspended-control'), 'eventos', 'controls-bible'), {
+    proyectorModoTransmision: false
+  }));
+  await assertFails(updateDoc(doc(db('editor'), 'eventos', 'controls-bible'), { proyectorModoTransmision: false }));
+  await assertFails(updateDoc(doc(testEnv.unauthenticatedContext().firestore(), 'eventos', 'controls-bible'), {
+    proyectorModoTransmision: false
+  }));
   await assertFails(updateDoc(bibleControls, { proyectorModoTransmision: 'true' }));
   await assertFails(updateDoc(bibleControls, { proyectorTransicion: 'spin' }));
   await assertFails(updateDoc(bibleControls, {
@@ -225,300 +294,68 @@ try {
     proyectorCountdown: { active: false, endTimestamp: 2000000000000 }
   }));
   await assertFails(updateDoc(bibleControls, {
-    proyectorModoTransmision: true,
+    proyectorModoTransmision: false,
     titulo: 'Campo arbitrario'
   }));
   await assertFails(updateDoc(bibleControls, {
-    proyectorModoTransmision: true,
+    proyectorModoTransmision: false,
     projectorState: { ...bibleState, title: 'Estado manipulado' }
   }));
   await assertFails(updateDoc(bibleControls, {
-    proyectorModoTransmision: true,
+    proyectorModoTransmision: false,
     liveState: { activeContentType: 'forged' }
   }));
   await assertFails(updateDoc(bibleControls, {
-    proyectorModoTransmision: true,
+    proyectorModoTransmision: false,
     currentSongId: 'forged-song'
   }));
 
-  const modernCanvaRoute = {
-    active: true,
-    presentationId: 'canva-modern',
-    projectionOperationId: 'operation-modern-x',
-    title: 'Canva moderno',
-    sourceUrl: 'https://www.canva.com/design/modern/view',
-    embedUrl: 'https://www.canva.com/design/modern/view?embed#page=1',
-    page: 1,
-    pageCount: 8,
-    updatedAt: 1,
-    updatedBy: 'Owner'
-  };
-  const legacyCanvaRoute = {
-    ...modernCanvaRoute,
-    presentationId: 'canva-legacy',
-    title: 'Canva legacy',
-    sourceUrl: 'https://www.canva.com/design/legacy/view',
-    embedUrl: 'https://www.canva.com/design/legacy/view?embed#page=1'
-  };
-  delete legacyCanvaRoute.projectionOperationId;
-  const temporaryCanvaRoute = {
-    active: true,
-    presentationId: '',
-    title: 'Canva temporal',
-    sourceUrl: 'https://www.canva.com/design/temporary/view',
-    embedUrl: 'https://www.canva.com/design/temporary/view?embed#1',
-    page: 1,
-    pageCount: 3,
-    updatedAt: 1,
-    updatedBy: 'Owner'
-  };
-  const mediaRoute = (id) => ({
-    active: true,
-    mediaKey: id,
-    mediaId: id,
-    name: `Video ${id}`,
-    url: `https://example.test/${id}.mp4`,
-    type: 'video',
-    mode: 'foreground',
-    playing: true,
-    volume: 0.8,
-    loop: true,
-    updatedAt: 1,
-    updatedBy: 'Owner'
-  });
-  const mediaProjector = mediaRoute('projector-a');
-  const mediaSingers = mediaRoute('singers-b');
-  const mediaMusicians = mediaRoute('musicians-c');
-  await testEnv.withSecurityRulesDisabled(async (context) => {
-    const firestore = context.firestore();
-    await Promise.all([
-      setDoc(doc(firestore, 'eventos', 'canva-modern-identity'), {
-        ...baseEvent,
-        canvaOutputs: { projector: modernCanvaRoute },
-        mediaOutputs: {},
-        canvaPageMemory: { projector: { 'id:canva-modern': 1 } }
-      }),
-      setDoc(doc(firestore, 'eventos', 'canva-legacy-identity'), {
-        ...baseEvent,
-        canvaOutputs: { projector: legacyCanvaRoute },
-        mediaOutputs: {},
-        canvaPageMemory: { projector: { 'id:canva-legacy': 1 } }
-      }),
-      setDoc(doc(firestore, 'eventos', 'canva-empty-identity'), {
-        ...baseEvent,
-        canvaOutputs: {},
-        mediaOutputs: {},
-        canvaPageMemory: {}
-      }),
-      setDoc(doc(firestore, 'eventos', 'canva-modern-removal'), {
-        ...baseEvent,
-        canvaOutputs: { projector: modernCanvaRoute },
-        mediaOutputs: {},
-        canvaPageMemory: {}
-      }),
-      setDoc(doc(firestore, 'eventos', 'canva-budget-sync'), {
-        ...baseEvent,
-        canvaOutputs: {
-          projector: modernCanvaRoute,
-          singers: { ...modernCanvaRoute, updatedBy: 'Multimedia E2E' },
-          musicians: {
-            ...modernCanvaRoute,
-            presentationId: 'canva-b',
-            projectionOperationId: 'operation-modern-b',
-            title: 'Canva B',
-            sourceUrl: 'https://www.canva.com/design/canva-b/view',
-            embedUrl: 'https://www.canva.com/design/canva-b/view?embed#1'
-          }
-        },
-        canvaPageMemory: {
-          projector: { 'id:canva-modern': 1 },
-          singers: { 'id:canva-modern': 1 },
-          musicians: { 'id:canva-b': 1 }
-        }
-      }),
-      setDoc(doc(firestore, 'eventos', 'canva-budget-temporary-page'), {
-        ...baseEvent,
-        canvaOutputs: { projector: temporaryCanvaRoute },
-        mediaOutputs: { singers: mediaSingers },
-        canvaPageMemory: {
-          projector: { 'url:https://www.canva.com/design/temporary/view': 1 },
-          singers: {},
-          musicians: {}
-        }
-      }),
-      setDoc(doc(firestore, 'eventos', 'canva-budget-temporary-three'), {
-        ...baseEvent,
-        canvaOutputs: {},
-        mediaOutputs: { projector: mediaProjector, singers: mediaSingers, musicians: mediaMusicians },
-        canvaPageMemory: {}
-      }),
-      ...[
-        'projector',
-        'two-targets',
-        'invalid-removal',
-        'invalid-modify',
-        'invalid-create',
-        'invalid-replace',
-        'invalid-projection',
-        'invalid-live-state',
-        'invalid-permission'
-      ].map((id) => setDoc(
-        doc(firestore, 'eventos', `canva-media-${id}`),
-        {
-          ...baseEvent,
-          canvaOutputs: {},
-          mediaOutputs: { projector: mediaProjector, singers: mediaSingers },
-          canvaPageMemory: {}
-        }
-      ))
-    ]);
-  });
-  const temporarySingersRoute = {
-    ...temporaryCanvaRoute,
-    title: 'Canva temporal cantantes',
-    sourceUrl: 'https://www.canva.com/design/temporary-singers/view',
-    embedUrl: 'https://www.canva.com/design/temporary-singers/view?embed#1'
-  };
-  await assertSucceeds(updateDoc(doc(db('canva-projector'), 'eventos', 'canva-media-projector'), {
-    canvaOutputs: { projector: temporaryCanvaRoute },
-    mediaOutputs: { singers: mediaSingers },
-    canvaPageMemory: { projector: { 'url:https://www.canva.com/design/temporary/view': 1 } }
+  await assertSucceeds(updateDoc(doc(db('owner'), 'canciones', 'active'), {
+    letraRaw: '# Coro\nCambio legacy seguro',
+    fechaActualizacion: '2026-11-08T00:00:00.000Z'
   }));
-  await assertSucceeds(updateDoc(doc(db('canva-projector'), 'eventos', 'canva-media-two-targets'), {
-    canvaOutputs: { projector: temporaryCanvaRoute, singers: temporarySingersRoute },
-    mediaOutputs: {},
-    canvaPageMemory: {
-      projector: { 'url:https://www.canva.com/design/temporary/view': 1 },
-      singers: { 'url:https://www.canva.com/design/temporary-singers/view': 1 }
-    }
+  await assertFails(updateDoc(doc(db('admin'), 'canciones', 'active'), {
+    letraRaw: '# Coro\nCambio legacy sin rol owner'
   }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-media-invalid-removal'), {
-    canvaOutputs: { projector: temporaryCanvaRoute },
-    mediaOutputs: {}
+  await assertFails(updateDoc(doc(db('owner'), 'canciones', 'formatted'), {
+    letraRaw: '# Coro\nCambio directo inseguro'
   }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-media-invalid-modify'), {
-    canvaOutputs: { projector: temporaryCanvaRoute },
-    mediaOutputs: { singers: { ...mediaSingers, playing: false } }
+  await assertFails(updateDoc(doc(db('owner'), 'canciones', 'formatted'), {
+    lyricFormatting: null,
+    letraRaw: '# Coro\nIntento de borrar sidecar'
   }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-media-invalid-create'), {
-    canvaOutputs: { projector: temporaryCanvaRoute },
-    mediaOutputs: { projector: mediaProjector, singers: mediaSingers, musicians: mediaMusicians }
+  await assertSucceeds(updateDoc(doc(db('owner'), 'canciones', 'active'), {
+    letraRaw: '# Coro\nCambio legacy combinado',
+    titulo: 'Cambio combinado'
   }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-media-invalid-replace'), {
-    canvaOutputs: { projector: temporaryCanvaRoute },
-    mediaOutputs: { singers: mediaRoute('singers-replacement') }
+  for (const protectedField of ['lyricFormatting', 'letra', 'lyrics', 'contenido']) {
+    await assertFails(updateDoc(doc(db('owner'), 'canciones', 'active'), {
+      [protectedField]: protectedField === 'lyricFormatting' ? { version: 1 } : 'Cambio directo'
+    }));
+  }
+  await assertSucceeds(updateDoc(doc(db('owner'), 'canciones', 'active'), { titulo: 'Metadata permitida' }));
+  await assertSucceeds(setDoc(doc(db('owner'), 'canciones', 'legacy-create'), {
+    titulo: 'Legacy', letraRaw: '# Verso\nTexto', lyricFormatting: null
   }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-media-invalid-projection'), {
-    canvaOutputs: { projector: temporaryCanvaRoute },
-    mediaOutputs: { singers: mediaSingers },
-    projectorState: { ...baseEvent.projectorState, title: 'No permitido' }
+  await assertFails(setDoc(doc(db('owner'), 'canciones', 'forged-formatted-create'), {
+    titulo: 'Formato falsificado', lyricFormatting: { version: 1 }
   }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-media-invalid-live-state'), {
-    canvaOutputs: { projector: temporaryCanvaRoute },
-    mediaOutputs: { singers: mediaSingers },
-    liveState: { ...baseEvent.liveState, activeContentTitle: 'No permitido' }
+  await assertFails(setDoc(doc(db('owner'), 'lyricFormattingOperations', 'forged-operation'), {
+    actorUid: 'owner'
   }));
-  await assertFails(updateDoc(doc(db('editor'), 'eventos', 'canva-media-invalid-permission'), {
-    canvaOutputs: { projector: temporaryCanvaRoute },
-    mediaOutputs: { singers: mediaSingers }
+  await assertFails(setDoc(doc(db('owner'), 'songDuplicationOperations', 'forged-operation'), {
+    actorUid: 'owner'
   }));
-  const modernCanvaRef = doc(db('owner'), 'eventos', 'canva-modern-identity');
-  const modernCanvaPageTwo = {
-    ...modernCanvaRoute,
-    embedUrl: 'https://www.canva.com/design/modern/view?embed#page=2',
-    page: 2,
-    updatedAt: 2,
-    updatedBy: 'Otro operador'
-  };
-  await assertSucceeds(updateDoc(modernCanvaRef, {
-    canvaOutputs: { projector: modernCanvaPageTwo },
-    canvaPageMemory: { projector: { 'id:canva-modern': 2 } }
-  }));
-  await assertFails(updateDoc(modernCanvaRef, {
-    canvaOutputs: { projector: { ...modernCanvaPageTwo, projectionOperationId: 'operation-forged-y' } }
-  }));
-  const modernCanvaWithoutIdentity = { ...modernCanvaPageTwo };
-  delete modernCanvaWithoutIdentity.projectionOperationId;
-  await assertFails(updateDoc(modernCanvaRef, { canvaOutputs: { projector: modernCanvaWithoutIdentity } }));
-  await assertFails(updateDoc(modernCanvaRef, {
-    canvaOutputs: { projector: { ...legacyCanvaRoute, presentationId: 'canva-other' } }
-  }));
-  await assertSucceeds(updateDoc(modernCanvaRef, {
-    canvaOutputs: { projector: temporaryCanvaRoute }
-  }));
-  await assertSucceeds(updateDoc(modernCanvaRef, {
-    canvaOutputs: {
-      projector: {
-        ...temporaryCanvaRoute,
-        sourceUrl: 'https://www.canva.com/design/temporary-next/view',
-        embedUrl: 'https://www.canva.com/design/temporary-next/view?embed#2',
-        title: 'Canva temporal siguiente',
-        page: 2,
-        updatedAt: 2
-      }
-    }
-  }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-legacy-identity'), {
-    canvaOutputs: { projector: { ...legacyCanvaRoute, projectionOperationId: 'operation-forged-y' } }
-  }));
-  await assertSucceeds(updateDoc(doc(db('owner'), 'eventos', 'canva-legacy-identity'), {
-    canvaOutputs: { projector: { ...legacyCanvaRoute, page: 2, updatedAt: 2, updatedBy: 'Otro operador' } },
-    canvaPageMemory: { projector: { 'id:canva-legacy': 2 } }
-  }));
-  await assertSucceeds(updateDoc(doc(db('owner'), 'eventos', 'canva-legacy-identity'), {
-    canvaOutputs: {}
-  }));
-  await assertSucceeds(updateDoc(doc(db('owner'), 'eventos', 'canva-empty-identity'), {
-    canvaOutputs: { projector: temporaryCanvaRoute }
-  }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-empty-identity'), {
-    canvaOutputs: { projector: modernCanvaRoute }
-  }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-empty-identity'), {
-    canvaOutputs: { projector: legacyCanvaRoute }
-  }));
-  await assertFails(updateDoc(doc(db('editor'), 'eventos', 'canva-empty-identity'), {
-    canvaOutputs: { projector: temporaryCanvaRoute }
-  }));
-  // Reproducciones E2E de presupuesto: Multimedia obtiene canva.project sólo desde roleDefaults.
-  const multimediaCanva = db('canva-projector');
-  const syncPageTwo = { ...modernCanvaRoute, embedUrl: 'https://www.canva.com/design/modern/view?embed#page=2', page: 2, updatedAt: 2, updatedBy: 'Multimedia E2E' };
-  await assertSucceeds(updateDoc(doc(multimediaCanva, 'eventos', 'canva-budget-sync'), {
-    canvaOutputs: { projector: syncPageTwo, singers: syncPageTwo },
-    canvaPageMemory: { projector: { 'id:canva-modern': 2 }, singers: { 'id:canva-modern': 2 } }
-  }));
-  const temporaryPageTwo = { ...temporaryCanvaRoute, embedUrl: 'https://www.canva.com/design/temporary/view?embed#2', page: 2, updatedAt: 2, updatedBy: 'Multimedia E2E' };
-  await assertSucceeds(updateDoc(doc(multimediaCanva, 'eventos', 'canva-budget-temporary-page'), {
-    canvaOutputs: { projector: temporaryPageTwo },
-    canvaPageMemory: { projector: { 'url:https://www.canva.com/design/temporary/view': 2 } }
-  }));
-  const temporaryMusiciansRoute = { ...temporaryCanvaRoute, title: 'Canva temporal músicos', updatedBy: 'Multimedia E2E' };
-  await assertSucceeds(updateDoc(doc(multimediaCanva, 'eventos', 'canva-budget-temporary-three'), {
-    canvaOutputs: { projector: temporaryCanvaRoute, singers: temporarySingersRoute, musicians: temporaryMusiciansRoute },
-    mediaOutputs: {},
-    canvaPageMemory: {
-      projector: { 'url:https://www.canva.com/design/temporary/view': 1 },
-      singers: { 'url:https://www.canva.com/design/temporary-singers/view': 1 },
-      musicians: { 'url:https://www.canva.com/design/temporary/view': 1 }
-    }
-  }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-empty-identity'), {
-    canvaOutputs: { projector: { ...temporaryCanvaRoute, embedUrl: 'https://example.test/not-canva#1' } }
-  }));
-  await assertFails(updateDoc(doc(db('owner'), 'eventos', 'canva-empty-identity'), {
-    canvaOutputs: {
-      projector: {
-        ...temporaryCanvaRoute,
-        embedUrl: 'https://www.canva.com/design/temporary/view?embed#2',
-        page: 2,
-        updatedAt: 2
-      }
-    },
-    projectorState: { ...baseEvent.projectorState, title: 'Fuera de ruta temprana' }
-  }));
-  await assertSucceeds(updateDoc(doc(db('media'), 'eventos', 'canva-modern-removal'), {
-    canvaOutputs: {}
-  }));
+  await assertFails(getDoc(doc(db('owner'), 'sistema', 'v21RuntimeControl')));
+  await assertFails(setDoc(doc(db('owner'), 'sistema', 'v21RuntimeControl'), { enabled: true }));
+  for (const actor of ['owner', 'admin', 'media', 'editor']) {
+    await assertFails(getDoc(doc(db(actor), 'sistema', 'v21RuntimeControl')));
+    await assertFails(setDoc(doc(db(actor), 'sistema', 'v21RuntimeControl'), { enabled: true }));
+    await assertFails(getDoc(doc(db(actor), 'sistema', 'v21RuntimeControl', 'audit', 'entry-1')));
+    await assertFails(setDoc(doc(db(actor), 'sistema', 'v21RuntimeControl', 'audit', 'entry-1'), {
+      enabled: true
+    }));
+  }
 
   const restoreFields = [
     'projectorState', 'proyectorSlide', 'proyectorMedia', 'proyectorLogo',

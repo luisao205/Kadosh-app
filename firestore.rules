@@ -14,12 +14,20 @@ service cloud.firestore {
       return signedIn() && exists(userPath(request.auth.uid));
     }
 
+    function accountStatusAllowsWrites(profile) {
+      return !('accountStatus' in profile)
+        || profile.accountStatus in ['active', 'Activa'];
+    }
+
     function currentRole() {
       return hasUserDoc() ? get(userPath(request.auth.uid)).data.rol : null;
     }
 
     function hasAnyRole(roles) {
-      return signedIn() && currentRole() in roles;
+      let profile = get(userPath(request.auth.uid)).data;
+      return hasUserDoc()
+        && accountStatusAllowsWrites(profile)
+        && profile.rol in roles;
     }
 
     function permissionConfigPath() {
@@ -33,16 +41,16 @@ service cloud.firestore {
     // Built-in fallbacks mirror the client defaults only when a permission has not been configured explicitly.
     function hasLegacyPermission(permission, role) {
       let roleKey = normalizedRoleKey(role);
-      return roleKey == 'dueno'
-        || (roleKey == 'admin' && permission in [
+      return roleKey == 'dueno' ? true
+        : (roleKey == 'admin' ? permission in [
           'dashboard.view', 'events.view', 'events.create', 'events.edit', 'events.delete',
           'setlists.view', 'setlists.addSong', 'setlists.removeSong', 'setlists.reorder', 'setlists.control', 'setlists.manage',
           'songs.view', 'songs.create', 'songs.editLyrics', 'songs.editChords', 'songs.editMetadata', 'songs.manageMedia', 'songs.archive', 'songs.delete',
           'rehearsal.access', 'rehearsal.control', 'bible.view', 'bible.project', 'bible.quickProjection',
           'sermons.view', 'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.delete', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
           'canva.view', 'canva.create', 'canva.edit', 'canva.delete', 'canva.project', 'profile.editOwn'
-        ])
-        || (roleKey == 'multimedia' && permission in [
+        ]
+        : (roleKey == 'multimedia' ? permission in [
           'dashboard.view', 'events.view',
           'setlists.view', 'setlists.addSong', 'setlists.removeSong', 'setlists.reorder', 'setlists.control', 'setlists.manage',
           'songs.view', 'songs.create', 'songs.editLyrics', 'songs.editChords', 'songs.editMetadata', 'songs.manageMedia', 'songs.archive',
@@ -50,14 +58,15 @@ service cloud.firestore {
           'sermons.view', 'sermons.create', 'sermons.edit', 'sermons.createPoint', 'sermons.createBiblePassage', 'sermons.project',
           'multimedia.libraryView', 'multimedia.upload', 'multimedia.edit', 'multimedia.delete', 'multimedia.centralAccess', 'multimedia.controlOutputs', 'multimedia.project',
           'canva.view', 'canva.create', 'canva.edit', 'canva.delete', 'canva.project', 'profile.editOwn'
-        ])
-        || (roleKey == 'musico' && permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view'])
-        || (roleKey == 'cantante' && permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn'])
-        || (roleKey == 'pastor' && permission in [
+        ]
+        : (roleKey == 'musico' ? permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view']
+        : (roleKey == 'cantante' ? permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn']
+        : (roleKey == 'pastor' ? permission in [
           'dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view', 'bible.project',
           'sermons.view', 'sermons.create', 'sermons.edit', 'sermons.createPoint', 'sermons.createBiblePassage', 'sermons.project'
-        ])
-        || (roleKey == 'predicador' && permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view', 'sermons.view']);
+        ]
+        : (roleKey == 'predicador' ? permission in ['dashboard.view', 'songs.view', 'rehearsal.access', 'bible.view', 'profile.editOwn', 'events.view', 'setlists.view', 'sermons.view']
+        : false))))));
     }
 
     function hasPermissionOverride(profile, permission) {
@@ -70,58 +79,38 @@ service cloud.firestore {
       return profile.permissionOverrides[permission] == true;
     }
 
-    function hasConfiguredRolePermission(role, permission) {
+    function hasConfiguredRolePermissionOrLegacy(role, permission) {
       return exists(permissionConfigPath())
-        ? hasConfiguredRolePermissionFromDocument(role, permission)
-        : false;
+        ? hasConfiguredRolePermissionOrLegacyFromDocument(role, permission)
+        : hasLegacyPermission(permission, role);
     }
 
-    function hasConfiguredRolePermissionFromDocument(role, permission) {
-      let config = get(permissionConfigPath()).data;
-      return 'roleDefaults' in config
-        ? hasConfiguredRoleDefault(config.roleDefaults, role, permission)
-        : false;
-    }
-
-    function hasConfiguredRoleDefault(defaults, role, permission) {
-      let roleKey = normalizedRoleKey(role);
-      return roleKey in defaults
-        ? hasConfiguredPermissionValue(defaults[roleKey], permission)
-        : false;
-    }
-
-    function hasConfiguredPermissionValue(permissions, permission) {
-      return permission in permissions
-        ? permissions[permission] == true
-        : false;
-    }
-
-    function hasConfiguredRolePermissionEntry(role, permission) {
-      return exists(permissionConfigPath())
-        && hasConfiguredRolePermissionEntryFromDocument(role, permission);
-    }
-
-    function hasConfiguredRolePermissionEntryFromDocument(role, permission) {
+    function hasConfiguredRolePermissionOrLegacyFromDocument(role, permission) {
       let config = get(permissionConfigPath()).data;
       let roleKey = normalizedRoleKey(role);
-      return 'roleDefaults' in config
-        && roleKey in config.roleDefaults
-        && permission in config.roleDefaults[roleKey];
+      return ('roleDefaults' in config
+          && roleKey in config.roleDefaults
+          && permission in config.roleDefaults[roleKey])
+        ? config.roleDefaults[roleKey][permission] == true
+        : hasLegacyPermission(permission, role);
     }
 
     function hasPermission(permission) {
       let profile = get(userPath(request.auth.uid)).data;
       let role = profile.rol;
-      return role in ['dueño', 'dueno']
+      return hasUserDoc()
+        && accountStatusAllowsWrites(profile)
+        && (role in ['dueño', 'dueno']
         || (hasPermissionOverride(profile, permission)
           ? permissionOverrideIsEnabled(profile, permission)
-          : (hasConfiguredRolePermissionEntry(role, permission)
-            ? hasConfiguredRolePermission(role, permission)
-            : hasLegacyPermission(permission, role)));
+          : hasConfiguredRolePermissionOrLegacy(role, permission)));
     }
 
     function sensitiveUserFields() {
-      return ['rol', 'role', 'permissionOverrides', 'permissionAudit', 'ownership', 'owner', 'ownerUid', 'isOwner', 'sinAcceso'];
+      return [
+        'rol', 'role', 'permissionOverrides', 'permissionAudit', 'musicAIAccess',
+        'ownership', 'owner', 'ownerUid', 'isOwner', 'sinAcceso', 'accountStatus'
+      ];
     }
 
     function operationalRoles() {
@@ -246,19 +235,19 @@ service cloud.firestore {
             && request.resource.data.projectorState.previousProjectionFields == resource.data.projectorState.previousProjectionFields)
           || (resource.data.projectorState is map && resource.data.projectorState.contentType != 'bible'
             && request.resource.data.projectorState.previousProjectionFields.projectorState == resource.data.projectorState
-            && request.resource.data.projectorState.previousProjectionFields.proyectorMedia == resource.data.proyectorMedia
-            && request.resource.data.projectorState.previousProjectionFields.proyectorSlide == resource.data.proyectorSlide
-            && request.resource.data.projectorState.previousProjectionFields.proyectorLogo == resource.data.proyectorLogo
-            && request.resource.data.projectorState.previousProjectionFields.proyectorApagado == resource.data.proyectorApagado
-            && request.resource.data.projectorState.previousProjectionFields.proyectorFondo == resource.data.proyectorFondo
-            && request.resource.data.projectorState.previousProjectionFields.proyectorFondoMedia == resource.data.proyectorFondoMedia
-            && request.resource.data.projectorState.previousProjectionFields.proyectorSongId == resource.data.proyectorSongId
-            && request.resource.data.projectorState.previousProjectionFields.proyectorSlideIndex == resource.data.proyectorSlideIndex
-            && request.resource.data.projectorState.previousProjectionFields.proyectorNextSlide == resource.data.proyectorNextSlide
-            && request.resource.data.projectorState.previousProjectionFields.proyectorNextSong == resource.data.proyectorNextSong
-            && request.resource.data.projectorState.previousProjectionFields.proyectorOffset == resource.data.proyectorOffset
-            && request.resource.data.projectorState.previousProjectionFields.liveState == resource.data.liveState
-            && request.resource.data.projectorState.previousProjectionFields.currentSongId == resource.data.currentSongId)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorMedia == resource.data.get('proyectorMedia', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorSlide == resource.data.get('proyectorSlide', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorLogo == resource.data.get('proyectorLogo', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorApagado == resource.data.get('proyectorApagado', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorFondo == resource.data.get('proyectorFondo', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorFondoMedia == resource.data.get('proyectorFondoMedia', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorSongId == resource.data.get('proyectorSongId', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorSlideIndex == resource.data.get('proyectorSlideIndex', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorNextSlide == resource.data.get('proyectorNextSlide', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorNextSong == resource.data.get('proyectorNextSong', null)
+            && request.resource.data.projectorState.previousProjectionFields.proyectorOffset == resource.data.get('proyectorOffset', null)
+            && request.resource.data.projectorState.previousProjectionFields.liveState == resource.data.get('liveState', null)
+            && request.resource.data.projectorState.previousProjectionFields.currentSongId == resource.data.get('currentSongId', null))
         );
     }
 
@@ -589,7 +578,6 @@ service cloud.firestore {
       ];
     }
 
-    // Output controls must not depend on the content currently on a screen.
     function projectorControlFields() {
       return ['proyectorModoTransmision', 'proyectorTransicion', 'proyectorCountdown'];
     }
@@ -608,9 +596,31 @@ service cloud.firestore {
         );
     }
 
+    function hasProjectorControlPermission() {
+      let profile = get(userPath(request.auth.uid)).data;
+      let roleKey = normalizedRoleKey(profile.rol);
+      return hasUserDoc()
+        && accountStatusAllowsWrites(profile)
+        && (roleKey == 'dueno'
+          || (hasPermissionOverride(profile, 'multimedia.controlOutputs')
+            ? permissionOverrideIsEnabled(profile, 'multimedia.controlOutputs')
+            : (exists(permissionConfigPath())
+              ? hasConfiguredProjectorControlPermission(roleKey)
+              : roleKey in ['admin', 'multimedia'])));
+    }
+
+    function hasConfiguredProjectorControlPermission(roleKey) {
+      let config = get(permissionConfigPath()).data;
+      return ('roleDefaults' in config
+          && roleKey in config.roleDefaults
+          && 'multimedia.controlOutputs' in config.roleDefaults[roleKey])
+        ? config.roleDefaults[roleKey]['multimedia.controlOutputs'] == true
+        : roleKey in ['admin', 'multimedia'];
+    }
+
     function canUpdateProjectorControls() {
       let changed = changedEventKeys();
-      return hasPermission('multimedia.controlOutputs')
+      return hasProjectorControlPermission()
         && changed.hasOnly(projectorControlFields())
         && (!changed.hasAny(['proyectorModoTransmision'])
           || request.resource.data.proyectorModoTransmision is bool)
@@ -803,11 +813,10 @@ service cloud.firestore {
       return state is map
         && state.keys().hasOnly([
           'active', 'presentationId', 'title', 'sourceUrl', 'embedUrl',
-          'projectionOperationId', 'page', 'pageCount', 'updatedAt', 'updatedBy'
+          'page', 'pageCount', 'updatedAt', 'updatedBy'
         ])
         && state.active == true
         && state.presentationId is string
-        && (!('projectionOperationId' in state) || state.projectionOperationId is string)
         && state.title is string
         && state.sourceUrl is string
         && state.embedUrl is string
@@ -827,121 +836,6 @@ service cloud.firestore {
         && (!('musicians' in outputs) || validCanvaOutputState(outputs.musicians));
     }
 
-    function hasCanonicalTemporaryCanvaIdentity(state) {
-      return state is map
-        && state.presentationId == ''
-        && !('projectionOperationId' in state)
-        && state.embedUrl.matches('^https://([A-Za-z0-9-]+\\.)*canva\\.com/design/[^?#]+/view\\?embed#(page=)?[1-9][0-9]*$');
-    }
-
-    function preservesSavedCanvaRoute(previous, next) {
-      return next.presentationId == previous.presentationId
-        && next.sourceUrl == previous.sourceUrl
-        && next.title == previous.title
-        && next.pageCount == previous.pageCount;
-    }
-
-    function preservesCanvaProjectionIdentity(next, previous, target) {
-      return !(target in next)
-        || (!(target in previous)
-          ? hasCanonicalTemporaryCanvaIdentity(next[target])
-          : (('projectionOperationId' in previous[target])
-            ? (('projectionOperationId' in next[target])
-              ? (next[target].projectionOperationId == previous[target].projectionOperationId
-                && preservesSavedCanvaRoute(previous[target], next[target]))
-              : hasCanonicalTemporaryCanvaIdentity(next[target]))
-            : (!('projectionOperationId' in next[target])
-              && (previous[target].presentationId == ''
-                ? hasCanonicalTemporaryCanvaIdentity(next[target])
-                : (hasCanonicalTemporaryCanvaIdentity(next[target])
-                  || preservesSavedCanvaRoute(previous[target], next[target]))))));
-    }
-
-    function validCanvaOutputWithProjectionIdentity(next, previous, target) {
-      return !(target in next)
-        || (target in previous && next[target] == previous[target])
-        || (validCanvaOutputState(next[target])
-          && (!(target in previous)
-            ? hasCanonicalTemporaryCanvaIdentity(next[target])
-            : preservesCanvaProjectionIdentity(next, previous, target)));
-    }
-
-    function validCanvaOutputsWithProjectionIdentities() {
-      let next = request.resource.data.canvaOutputs;
-      let previous = ('canvaOutputs' in resource.data && resource.data.canvaOutputs is map)
-        ? resource.data.canvaOutputs
-        : {};
-      return next is map
-        && next.keys().hasOnly(['projector', 'singers', 'musicians'])
-        && validCanvaOutputWithProjectionIdentity(next, previous, 'projector')
-        && validCanvaOutputWithProjectionIdentity(next, previous, 'singers')
-        && validCanvaOutputWithProjectionIdentity(next, previous, 'musicians');
-    }
-
-    function mediaOutputRemovedOnlyForCanvaTarget(nextMedia, previousMedia, nextCanva, previousCanva, target) {
-      return target in nextMedia
-        ? (target in previousMedia && nextMedia[target] == previousMedia[target])
-        : (!(target in previousMedia)
-          || (target in nextCanva && (!(target in previousCanva) || nextCanva[target] != previousCanva[target])));
-    }
-
-    // A Canva write that also removes Media is only allowed to install a canonical
-    // temporary route. Saved Canva routes are server-authoritative.
-    function validTemporaryCanvaOutputShape(state) {
-      return state is map
-        && state.keys().hasOnly([
-          'active', 'presentationId', 'title', 'sourceUrl', 'embedUrl',
-          'projectionOperationId', 'page', 'pageCount', 'updatedAt', 'updatedBy'
-        ])
-        && state.active == true
-        && state.presentationId == ''
-        && !('projectionOperationId' in state)
-        && state.title is string
-        && state.sourceUrl is string
-        && state.embedUrl is string
-        && state.page is int && state.page >= 1 && state.page <= 500
-        && state.pageCount is int && state.pageCount >= 1 && state.pageCount <= 500
-        && state.page <= state.pageCount
-        && state.updatedAt is int
-        && state.updatedBy is string
-        && state.sourceUrl.matches('^https://([A-Za-z0-9-]+\\.)*canva\\.com/design/[^?#]+/view$')
-        && state.embedUrl.matches('^https://([A-Za-z0-9-]+\\.)*canva\\.com/design/[^?#]+/view\\?embed#(page=)?[1-9][0-9]*$');
-    }
-
-    function validTemporaryCanvaOutputForMediaRemoval(next, previous, target) {
-      return !(target in next)
-        || ((target in previous && next[target] == previous[target])
-          || validTemporaryCanvaOutputShape(next[target]));
-    }
-
-    function validTemporaryCanvaOutputsForMediaRemoval() {
-      let next = request.resource.data.canvaOutputs;
-      let previous = ('canvaOutputs' in resource.data && resource.data.canvaOutputs is map)
-        ? resource.data.canvaOutputs
-        : {};
-      return next is map
-        && next.keys().hasOnly(['projector', 'singers', 'musicians'])
-        && validTemporaryCanvaOutputForMediaRemoval(next, previous, 'projector')
-        && validTemporaryCanvaOutputForMediaRemoval(next, previous, 'singers')
-        && validTemporaryCanvaOutputForMediaRemoval(next, previous, 'musicians');
-    }
-
-    function mediaOutputsOnlyRemoveForCanvaChanges() {
-      let nextMedia = request.resource.data.mediaOutputs;
-      let previousMedia = ('mediaOutputs' in resource.data && resource.data.mediaOutputs is map)
-        ? resource.data.mediaOutputs
-        : {};
-      let nextCanva = request.resource.data.canvaOutputs;
-      let previousCanva = ('canvaOutputs' in resource.data && resource.data.canvaOutputs is map)
-        ? resource.data.canvaOutputs
-        : {};
-      return nextMedia is map
-        && nextMedia.keys().hasOnly(['projector', 'singers', 'musicians'])
-        && mediaOutputRemovedOnlyForCanvaTarget(nextMedia, previousMedia, nextCanva, previousCanva, 'projector')
-        && mediaOutputRemovedOnlyForCanvaTarget(nextMedia, previousMedia, nextCanva, previousCanva, 'singers')
-        && mediaOutputRemovedOnlyForCanvaTarget(nextMedia, previousMedia, nextCanva, previousCanva, 'musicians');
-    }
-
     function validCanvaPageMemory() {
       let memory = request.resource.data.canvaPageMemory;
       return memory is map
@@ -951,22 +845,18 @@ service cloud.firestore {
         && (!('musicians' in memory) || (memory.musicians is map && memory.musicians.size() <= 500));
     }
 
-    // Route/page-only writes reach this branch before the general event disjunction.
-    function canUpdateEventCanvaOutputs(changed) {
+    function canUpdateEventCanvaOutputs() {
       return hasPermission('canva.project')
-        && changed.hasOnly(['canvaOutputs', 'canvaPageMemory'])
-        && validCanvaOutputsWithProjectionIdentities()
+        && onlyEventKeys(['canvaOutputs', 'mediaOutputs', 'canvaPageMemory'])
+        && validCanvaOutputsMap()
         && (
-          !changed.hasAny(['canvaPageMemory'])
+          !changedEventKeys().hasAny(['mediaOutputs'])
+          || (validMediaOutputsMap() && mediaOutputsOnlyRemove())
+        )
+        && (
+          !changedEventKeys().hasAny(['canvaPageMemory'])
           || validCanvaPageMemory()
         );
-    }
-
-    function canUpdateEventCanvaOutputsWithMediaRemoval() {
-      return hasPermission('canva.project')
-        && validTemporaryCanvaOutputsForMediaRemoval()
-        && mediaOutputsOnlyRemoveForCanvaChanges()
-        && (!('canvaPageMemory' in request.resource.data) || validCanvaPageMemory());
     }
 
     function canUpdateEventBibleOutline() {
@@ -1120,14 +1010,31 @@ service cloud.firestore {
 
     function canUpdateEvent(eventoId) {
       let changed = changedEventKeys();
-      let canvaRouteWithMediaRemoval = changed.hasOnly(['canvaOutputs', 'canvaPageMemory', 'mediaOutputs'])
-        && changed.hasAny(['canvaOutputs'])
-        && changed.hasAny(['mediaOutputs']);
       let projectionChange = changed.hasAny(['projectorState']);
       let controlChange = changed.hasAny(projectorControlFields());
-      let canvaRouteOnlyChange = changed.hasOnly(['canvaOutputs', 'canvaPageMemory']);
-      return canvaRouteWithMediaRemoval
-        ? canUpdateEventCanvaOutputsWithMediaRemoval()
+      let invalidBibleMediaMutation = !projectionChange
+        && resource.data.projectorState is map
+        && resource.data.projectorState.type == 'preaching'
+        && resource.data.projectorState.contentType == 'bible'
+        && changed.hasAny(['proyectorMedia']);
+      let normalBibleProjection = projectionChange
+        && request.resource.data.projectorState is map
+        && request.resource.data.projectorState.type == 'preaching'
+        && request.resource.data.projectorState.contentType == 'bible'
+        && !(resource.data.projectorState is map
+          && resource.data.projectorState.type == 'blackout');
+      let possibleBibleRestore = projectionChange
+        && resource.data.projectorState is map
+        && resource.data.projectorState.contentType == 'bible'
+        && resource.data.projectorState.previousProjectionFields is map
+        && request.resource.data.projectorState
+          == resource.data.projectorState.previousProjectionFields.projectorState;
+      return invalidBibleMediaMutation
+        ? false
+        : (possibleBibleRestore
+        ? (isExactBibleRestore() && hasPermission('bible.project'))
+        : (normalBibleProjection
+        ? canUpdateEventBibleProjection()
         : (controlChange
         ? canUpdateProjectorControls()
         : (projectionChange
@@ -1138,15 +1045,13 @@ service cloud.firestore {
           && !isExactBibleRestore()
           ? false
           : canUpdateEventProjection(eventoId)))
-        : (canvaRouteOnlyChange
-          ? canUpdateEventCanvaOutputs(changed)
         : (canUpdateEventAsAdmin()
           || canUpdateEventSetlist()
           || canUpdateEventBibleOutline()
-          || canUpdateEventCanvaOutputs(changed)
+          || canUpdateEventCanvaOutputs()
           || canUpdateEventMediaOutputs()
           || canUpdateEventAsParticipant()
-          || canUpdateEventAsMedia()))));
+          || canUpdateEventAsMedia())))));
     }
 
     function canUpdateEventAsPastorProjection(eventoId) {
@@ -1199,6 +1104,11 @@ service cloud.firestore {
         allow read: if isOwnerOnly() || request.auth.uid == userId;
         allow read, write: if false;
       }
+
+      match /musicAIAudit/{auditId} {
+        allow read: if isOwnerOnly();
+        allow write: if false;
+      }
     }
 
     match /eventos/{eventoId} {
@@ -1226,10 +1136,6 @@ service cloud.firestore {
         allow delete: if false;
       }
 
-      match /undoOperations/{operationId} {
-        allow read, write: if false;
-      }
-
       match /private/preacher {
         allow read, write: if canUsePreacherPrivate();
       }
@@ -1240,9 +1146,24 @@ service cloud.firestore {
     }
 
     match /canciones/{songId} {
+      function isSafeLegacyLyricsUpdate() {
+        return (!('lyricFormatting' in resource.data) || resource.data.lyricFormatting == null)
+          && (!('lyricFormatting' in request.resource.data) || request.resource.data.lyricFormatting == null)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'lyricFormatting', 'letra', 'lyrics', 'contenido'
+          ]);
+      }
+
       allow read: if signedIn();
-      allow create: if hasPermission('songs.create');
-      allow update: if isOwnerOnly();
+      allow create: if hasPermission('songs.create')
+        && (!('lyricFormatting' in request.resource.data) || request.resource.data.lyricFormatting == null);
+      allow update: if isOwnerOnly()
+        && (
+          isSafeLegacyLyricsUpdate()
+          || !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'letraRaw', 'lyricFormatting', 'letra', 'lyrics', 'contenido'
+          ])
+        );
       allow delete: if hasPermission('songs.delete') && resource.data.archived == true;
 
       match /permissionAudit/{auditId} {
@@ -1335,14 +1256,21 @@ service cloud.firestore {
       }
     }
 
+    match /sistema/v21RuntimeControl {
+      allow read, write: if false;
+    }
+
     match /sistema/{document} {
-      allow read: if document != 'teamAccessPin' && signedIn();
-      allow write: if document != 'teamAccessPin' && document != 'permissionRoles' && isMediaOrAdmin();
+      allow read: if document != 'teamAccessPin' && document != 'v21RuntimeControl' && signedIn();
+      allow write: if document != 'teamAccessPin'
+        && document != 'permissionRoles'
+        && document != 'v21RuntimeControl'
+        && isMediaOrAdmin();
     }
 
     match /sistema/{document}/{subdocument=**} {
-      allow read: if signedIn();
-      allow write: if document != 'permissionRoles' && isMediaOrAdmin();
+      allow read: if document != 'v21RuntimeControl' && signedIn();
+      allow write: if document != 'permissionRoles' && document != 'v21RuntimeControl' && isMediaOrAdmin();
     }
 
     match /notificaciones/{notificationId} {

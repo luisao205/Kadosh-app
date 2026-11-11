@@ -21,6 +21,12 @@ dist-ssr
 
 # Environment variables
 .env
+.env.local
+.env.local.*
+.env.*.local
+functions/.env.local
+functions/.secret.local
+*.local
 *.ntvs*
 *.njsproj
 *.sln
@@ -28,6 +34,12 @@ dist-ssr
 
 Kadosh App-win32-x64/
 .firebase/
+
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 
 # Kadosh - archivos sensibles/pesados que no deben subir a Git
 *.keystore

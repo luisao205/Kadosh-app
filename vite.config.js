@@ -1,6 +1,23 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { rm } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+const excludeE2eFixturesFromBuild = () => {
+  let outDir = 'dist'
+
+  return {
+    name: 'exclude-e2e-fixtures-from-build',
+    apply: 'build',
+    configResolved: (config) => {
+      outDir = config.build.outDir
+    },
+    closeBundle: async () => {
+      await rm(resolve(outDir, 'e2e-projection-style-video.webm'), { force: true })
+    }
+  }
+}
 
 const createPwaPlugin = () => VitePWA({
   registerType: 'autoUpdate',
@@ -46,8 +63,19 @@ const createPwaPlugin = () => VitePWA({
 
 export default defineConfig(({ mode }) => ({
   base: '/',
+  server: {
+    forwardConsole: false,
+    ...(mode === 'local.emulator'
+      ? {
+          hmr: {
+            host: '127.0.0.1',
+          },
+        }
+      : {}),
+  },
   plugins: [
     react(),
-    ...(mode === 'android' ? [] : [createPwaPlugin()])
+    ...(mode === 'android' ? [] : [createPwaPlugin()]),
+    excludeE2eFixturesFromBuild()
   ]
 }))

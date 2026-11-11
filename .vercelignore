@@ -1,0 +1,33 @@
+# Entornos, secretos locales y credenciales privadas
+.env
+.env.*
+*.local
+*.keystore
+*.jks
+*.pre-*
+
+# Backend Firebase y emuladores (no requeridos para build Vite en Vercel)
+functions/
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+
+# Artefactos nativos Windows y Android 1.1.12
+release/
+release-candidates/
+android/
+desktop/
+electron/
+Kadosh App-win32-x64/
+
+# Scripts locales, pruebas E2E, fuentes bíblicas y temporales
+scripts/
+e2e/
+test-results/
+playwright-report/
+blob-report/
+playwright/
+bibles-source/
+tmp/
+dist/

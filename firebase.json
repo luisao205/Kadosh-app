@@ -37,7 +37,9 @@
         ".git",
         "firebase-debug.log",
         "firebase-debug.*.log",
-        "*.local"
+        "*.local",
+        ".env.local",
+        ".secret.local"
       ]
     }
   ]

@@ -1,9 +1,10 @@
 ﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useCallback } from 'react';
 import { doc, getDoc, updateDoc, collection, onSnapshot, addDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db } from '../../config/firebase';
-import { Save, ArrowLeft, Edit3, AlertCircle, X, Scissors, Wand2 } from 'lucide-react';
+import { Save, ArrowLeft, Edit3, AlertCircle, X, Scissors, Wand2, Sparkles } from 'lucide-react';
 import { detectarTonoDesdeAcordes } from '../../utils/musicCore';
 import { uploadToCloudinary } from '../../utils/cloudinaryUpload';
 import { getSectionKey, isSongSectionTitle, parsearCancion } from '../../utils/songParser';
@@ -14,8 +15,14 @@ import { parseSingerTones } from '../../utils/songAssignments';
 import SectionMediaManager from './SectionMediaManager';
 import SongMetadataForm from './SongMetadataForm';
 import SongResourcesPanel from './SongResourcesPanel';
+import ProjectionStylePanel from './ProjectionStylePanel';
+import LyricFormattingDraftEditor from './LyricFormattingDraftEditor';
 import { useFeedback } from '../ui/FeedbackProvider';
 import { updateSongContent, updateSongMetadata } from '../../utils/songFunctions';
+import { normalizeProjectionStyle } from '../../utils/projectionStyle';
+import { classifyLyricFormattingSidecar, computeFormattingHash, computeLyricsHash, stableSerializeFormatting, validateV21SavePayloadSize } from '../../utils/lyricFormattingPersistence';
+import { createV21RequestId, describeV21CallableError, saveLyricFormattingV21, saveLyricsAndFormattingV21, useV21Capability } from '../../utils/v21CallableClient';
+import { canAccessMusicAI } from '../../utils/rolePermissions';
 
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
 const INSTRUMENTOS_RECURSOS = ['General', 'Voz Principal', 'Coros', 'Batería', 'Piano', 'Bajo', 'Guitarra Acústica', 'Guitarra Eléctrica', 'Percusión'];
@@ -26,6 +33,12 @@ const normalizeKey = (value, fallback = 'C') => {
   const clean = String(value || '').trim();
   const match = TONOS_DISPONIBLES.find(t => t.toLowerCase() === clean.toLowerCase());
   return match || clean || fallback;
+};
+
+const getEditableSongContent = (song = {}) => {
+  if (typeof song.letraRaw === 'string') return song.letraRaw;
+  return [song.letra, song.lyrics, song.contenido]
+    .find((value) => typeof value === 'string') || '';
 };
 
 
@@ -94,10 +107,20 @@ const normalizeEditableSongState = (state = {}) => ({
   } : null,
   youtubeUrl: String(state.youtubeUrl || ''),
   fondoUrl: String(state.fondoUrl || ''),
-  fondoMediaId: String(state.fondoMediaId || '')
+  fondoMediaId: String(state.fondoMediaId || ''),
+  projectionStyle: normalizeProjectionStyle(state.projectionStyle)
 });
 
 const stringifySongState = (state) => JSON.stringify(normalizeEditableSongState(state));
+
+const editableStateFromServerSong = (song = {}) => ({
+  ...song,
+  tonoOriginal: song.tonoOriginal || '',
+  tonosCantantes: parseSingerTones(song.tonosPorCantante || song.tonosAlternativos || ''),
+  letraRaw: getEditableSongContent(song),
+  audioFile: null,
+  projectionStyle: normalizeProjectionStyle(song.projectionStyle),
+});
 
 const EditSong = ({ user }) => {
   const { id } = useParams();
@@ -105,6 +128,7 @@ const EditSong = ({ user }) => {
   const location = useLocation();
   const returnTo = location.state?.returnTo || '/canciones';
   const { confirm: askConfirm, notify } = useFeedback();
+  const v21Capability = useV21Capability();
 
   const [titulo, setTitulo] = useState('');
   const [artista, setArtista] = useState('');
@@ -127,6 +151,13 @@ const EditSong = ({ user }) => {
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [fondoUrl, setFondoUrl] = useState('');
   const [fondoMediaId, setFondoMediaId] = useState('');
+  const [projectionStyle, setProjectionStyle] = useState(() => normalizeProjectionStyle());
+  const [lyricFormattingDraft, setLyricFormattingDraft] = useState(null);
+  const [confirmedLyricFormatting, setConfirmedLyricFormatting] = useState(null);
+  const [confirmedSongSnapshot, setConfirmedSongSnapshot] = useState(null);
+  const [confirmedFormattingSnapshot, setConfirmedFormattingSnapshot] = useState(() => stableSerializeFormatting(null));
+  const [lyricFormattingStatus, setLyricFormattingStatus] = useState('absent');
+  const [formatSaveState, setFormatSaveState] = useState({ status: 'idle', message: '' });
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -140,6 +171,11 @@ const EditSong = ({ user }) => {
   const initialSongStateRef = useRef(null);
   const initialServerSongRef = useRef(null);
   const pendingMediaUsageRef = useRef([]);
+  const formattingRequestRef = useRef(null);
+  const saveInFlightRef = useRef(false);
+  const editRevisionRef = useRef(0);
+  const lastEditableSnapshotRef = useRef(null);
+  const lyricFormattingDraftRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -165,11 +201,53 @@ const EditSong = ({ user }) => {
     audioFile,
     youtubeUrl,
     fondoUrl,
-    fondoMediaId
-  }), [titulo, artista, bpm, tono, etiquetas, recursos, multitracks, sectionMedia, tonosCantantes, letraRaw, audioUrl, audioFile, youtubeUrl, fondoUrl, fondoMediaId]);
+    fondoMediaId,
+    projectionStyle
+  }), [titulo, artista, bpm, tono, etiquetas, recursos, multitracks, sectionMedia, tonosCantantes, letraRaw, audioUrl, audioFile, youtubeUrl, fondoUrl, fondoMediaId, projectionStyle]);
   const currentEditableSnapshot = useMemo(() => stringifySongState(currentEditableState), [currentEditableState]);
-  const isDirty = Boolean(initialSongStateRef.current && initialSongStateRef.current !== currentEditableSnapshot);
+  const songFieldsDirty = Boolean(confirmedSongSnapshot && confirmedSongSnapshot !== currentEditableSnapshot);
+  const formattingDirty = ['absent', 'valid'].includes(lyricFormattingStatus)
+    && stableSerializeFormatting(lyricFormattingDraft) !== confirmedFormattingSnapshot;
+  const isDirty = songFieldsDirty || formattingDirty;
   const showToast = (message, type = 'error') => notify(message, { type });
+  const handleFormattingDraftChange = useCallback((next) => {
+    if (stableSerializeFormatting(next) === stableSerializeFormatting(lyricFormattingDraftRef.current)) return;
+    lyricFormattingDraftRef.current = next;
+    editRevisionRef.current += 1;
+    setLyricFormattingDraft(next);
+    setFormatSaveState((current) => current.status === 'saving' ? current : (
+      stableSerializeFormatting(next) === confirmedFormattingSnapshot
+        ? { status: 'idle', message: '' }
+        : { status: 'dirty', message: 'Cambios de formato sin guardar.' }
+    ));
+  }, [confirmedFormattingSnapshot]);
+
+  useEffect(() => {
+    if (lastEditableSnapshotRef.current === null) {
+      lastEditableSnapshotRef.current = currentEditableSnapshot;
+      return;
+    }
+    if (lastEditableSnapshotRef.current !== currentEditableSnapshot) {
+      lastEditableSnapshotRef.current = currentEditableSnapshot;
+      editRevisionRef.current += 1;
+    }
+  }, [currentEditableSnapshot]);
+
+  const commitConfirmedPatch = (patch) => {
+    const confirmed = { ...(initialServerSongRef.current || {}), ...patch };
+    initialServerSongRef.current = confirmed;
+    initialSongStateRef.current = stringifySongState(editableStateFromServerSong(confirmed));
+    setConfirmedSongSnapshot(initialSongStateRef.current);
+    setConfirmedFormattingSnapshot(stableSerializeFormatting(confirmed.lyricFormatting ?? null));
+  };
+
+  const requestIdFor = (kind, payload) => {
+    const fingerprint = stableSerializeFormatting({ kind, ...payload });
+    if (formattingRequestRef.current?.fingerprint === fingerprint) return formattingRequestRef.current.requestId;
+    const requestId = createV21RequestId(kind);
+    formattingRequestRef.current = { fingerprint, requestId };
+    return requestId;
+  };
 
   // Cargar cantantes desde el equipo
   useEffect(() => {
@@ -183,13 +261,25 @@ const EditSong = ({ user }) => {
 
   // Cargar los datos de la cancion al abrir la pantalla
   useEffect(() => {
+    let active = true;
+    let redirectTimer = null;
     const fetchSong = async () => {
       try {
         const docRef = doc(db, 'canciones', id);
         const docSnap = await getDoc(docRef);
+        if (!active) return;
         if (docSnap.exists()) {
           const data = docSnap.data();
-          initialServerSongRef.current = data;
+          const editableContent = getEditableSongContent(data);
+          const formatting = classifyLyricFormattingSidecar(data.lyricFormatting, { lyricsRaw: editableContent });
+          initialServerSongRef.current = { ...data, letraRaw: editableContent };
+          setLyricFormattingStatus(formatting.status);
+          setLyricFormattingDraft(formatting.status === 'valid' ? formatting.value : null);
+          lyricFormattingDraftRef.current = formatting.status === 'valid' ? formatting.value : null;
+          setConfirmedLyricFormatting(formatting.status === 'valid' ? formatting.value : null);
+          setConfirmedFormattingSnapshot(stableSerializeFormatting(data.lyricFormatting ?? null));
+          setFormatSaveState({ status: 'idle', message: '' });
+          formattingRequestRef.current = null;
           setTitulo(data.titulo || '');
           setArtista(data.artista || '');
           setBpm(data.bpm || '');
@@ -199,11 +289,12 @@ const EditSong = ({ user }) => {
           setRecursos(data.recursos || []);
           setSectionMedia(data.sectionMedia || {});
           pendingMediaUsageRef.current = [];
-          setLetraRaw(data.letraRaw || '');
+          setLetraRaw(editableContent);
           setAudioUrl(data.audioUrl || '');
           setYoutubeUrl(data.youtubeUrl || '');
           setFondoUrl(data.fondoUrl || '');
           setFondoMediaId(data.fondoMediaId || '');
+          setProjectionStyle(normalizeProjectionStyle(data.projectionStyle));
 
           if (data.tonosAlternativos || data.tonosPorCantante) {
             const parsed = parseSingerTones(data.tonosPorCantante || data.tonosAlternativos);
@@ -218,13 +309,15 @@ const EditSong = ({ user }) => {
               recursos: data.recursos || [],
               sectionMedia: data.sectionMedia || {},
               tonosCantantes: parsed,
-              letraRaw: data.letraRaw || '',
+              letraRaw: editableContent,
               audioUrl: data.audioUrl || '',
               audioFile: null,
               youtubeUrl: data.youtubeUrl || '',
               fondoUrl: data.fondoUrl || '',
-              fondoMediaId: data.fondoMediaId || ''
+              fondoMediaId: data.fondoMediaId || '',
+              projectionStyle: normalizeProjectionStyle(data.projectionStyle)
             });
+            setConfirmedSongSnapshot(initialSongStateRef.current);
           } else {
             initialSongStateRef.current = stringifySongState({
               titulo: data.titulo || '',
@@ -236,26 +329,32 @@ const EditSong = ({ user }) => {
               recursos: data.recursos || [],
               sectionMedia: data.sectionMedia || {},
               tonosCantantes: {},
-              letraRaw: data.letraRaw || '',
+              letraRaw: editableContent,
               audioUrl: data.audioUrl || '',
               audioFile: null,
               youtubeUrl: data.youtubeUrl || '',
               fondoUrl: data.fondoUrl || '',
-              fondoMediaId: data.fondoMediaId || ''
+              fondoMediaId: data.fondoMediaId || '',
+              projectionStyle: normalizeProjectionStyle(data.projectionStyle)
             });
+            setConfirmedSongSnapshot(initialSongStateRef.current);
           }
         } else {
-          showToast("La cancion no existe");
-          setTimeout(() => navigate(returnTo), 1500);
+          notify("La cancion no existe", { type: 'error' });
+          redirectTimer = setTimeout(() => navigate(returnTo), 1500);
         }
       } catch (error) {
-        console.error("Error al cargar la cancion:", error);
+        if (active) console.error("Error al cargar la cancion:", error);
       } finally {
-        setIsLoading(false);
+        if (active) setIsLoading(false);
       }
     };
     fetchSong();
-  }, [id, navigate]);
+    return () => {
+      active = false;
+      if (redirectTimer) clearTimeout(redirectTimer);
+    };
+  }, [id, navigate, notify, returnTo]);
 
   useEffect(() => {
     if (!isDirty) return undefined;
@@ -764,11 +863,14 @@ const EditSong = ({ user }) => {
   };
 
   const handleSave = async ({ navigateOnSuccess = true } = {}) => {
+    if (saveInFlightRef.current) return false;
     if (!titulo || !letraRaw) {
       showToast("El título y la letra son obligatorios.");
       return;
     }
 
+    saveInFlightRef.current = true;
+    const operationRevision = editRevisionRef.current;
     setIsSaving(true);
     try {
       let newAudioUrl = audioUrl;
@@ -806,9 +908,24 @@ const EditSong = ({ user }) => {
         youtubeUrl,
         fondoUrl,
         fondoMediaId: fondoMediaId || null,
+        projectionStyle: normalizeProjectionStyle(projectionStyle),
         fechaActualizacion: new Date().toISOString()
       };
       const previous = initialServerSongRef.current || {};
+      const metadataDefaults = {
+        artista: '',
+        etiquetas: [],
+        multitracks: [],
+        recursos: [],
+        sectionMedia: {},
+        tonosAlternativos: '',
+        bpm: 0,
+        audioUrl: '',
+        youtubeUrl: '',
+        fondoUrl: '',
+        fondoMediaId: null,
+        projectionStyle: normalizeProjectionStyle()
+      };
       const metadataChanges = Object.fromEntries(Object.entries({
         titulo: savedData.titulo,
         artista: savedData.artista,
@@ -822,43 +939,122 @@ const EditSong = ({ user }) => {
         audioUrl: savedData.audioUrl,
         youtubeUrl: savedData.youtubeUrl,
         fondoUrl: savedData.fondoUrl,
-        fondoMediaId: savedData.fondoMediaId
-      }).filter(([field, value]) => JSON.stringify(previous[field] ?? null) !== JSON.stringify(value ?? null)));
+        fondoMediaId: savedData.fondoMediaId,
+        projectionStyle: savedData.projectionStyle
+      }).filter(([field, value]) => JSON.stringify(previous[field] ?? metadataDefaults[field] ?? null) !== JSON.stringify(value ?? null)));
 
-      if (previous.letraRaw !== savedData.letraRaw) {
-        await updateSongContent(id, savedData.letraRaw);
+      const lyricsChanged = previous.letraRaw !== savedData.letraRaw;
+      const hasStoredFormatting = previous.lyricFormatting !== undefined && previous.lyricFormatting !== null;
+      const needsV21ContentSave = formattingDirty || (lyricsChanged && hasStoredFormatting);
+      const results = { content: 'unchanged', metadata: 'unchanged', media: 'unchanged' };
+      const failures = [];
+
+      if (needsV21ContentSave) {
+        if (!v21Capability.canEditFormatting) {
+          failures.push({ area: 'formato', error: { code: 'functions/failed-precondition', details: { code: 'feature-disabled' } } });
+        } else if (!lyricFormattingDraft) {
+          failures.push({ area: 'formato', error: { code: 'functions/failed-precondition', details: { code: 'reconciliation-required' } } });
+        } else {
+          setFormatSaveState({ status: 'saving', message: 'Guardando formato...' });
+          const basePayload = {
+            songId: id,
+            lyricFormatting: lyricFormattingDraft,
+            expectedLyricsHash: await computeLyricsHash(previous.letraRaw || ''),
+            expectedFormattingHash: await computeFormattingHash(previous.lyricFormatting ?? null, { lyricsRaw: previous.letraRaw || '' }),
+          };
+          const kind = lyricsChanged ? 'lyrics-format' : 'format-only';
+          try {
+            const payload = validateV21SavePayloadSize({
+              ...basePayload,
+              ...(lyricsChanged ? { letraRaw: savedData.letraRaw } : {}),
+              requestId: requestIdFor(kind, { ...basePayload, ...(lyricsChanged ? { letraRaw: savedData.letraRaw } : {}) }),
+            });
+            if (lyricsChanged) await saveLyricsAndFormattingV21(payload);
+            else await saveLyricFormattingV21(payload);
+            results.content = 'confirmed';
+            commitConfirmedPatch({
+              ...(lyricsChanged ? { letraRaw: savedData.letraRaw } : {}),
+              lyricFormatting: lyricFormattingDraft,
+            });
+            setLyricFormattingStatus('valid');
+            setConfirmedLyricFormatting(lyricFormattingDraft);
+            setFormatSaveState(editRevisionRef.current === operationRevision
+              ? { status: 'saved', message: 'Formato guardado correctamente.' }
+              : { status: 'dirty', message: 'El guardado terminó, pero hay cambios nuevos pendientes.' });
+            formattingRequestRef.current = null;
+          } catch (error) {
+            const described = describeV21CallableError(error);
+            failures.push({ area: 'formato', error });
+            setFormatSaveState({
+              status: ['stale-lyrics', 'formatting-conflict', 'reconciliation-required'].includes(described.code) ? 'conflict' : 'error',
+              message: described.message,
+            });
+          }
+        }
+      } else if (lyricsChanged) {
+        try {
+          await updateSongContent(id, savedData.letraRaw);
+          results.content = 'confirmed';
+          commitConfirmedPatch({ letraRaw: savedData.letraRaw });
+        } catch (error) {
+          failures.push({ area: 'letra', error });
+        }
       }
+
       if (Object.keys(metadataChanges).length) {
-        await updateSongMetadata(id, metadataChanges);
+        try {
+          await updateSongMetadata(id, metadataChanges);
+          results.metadata = 'confirmed';
+          commitConfirmedPatch(metadataChanges);
+        } catch (error) {
+          failures.push({ area: 'metadatos', error });
+        }
       }
-      try {
-        await flushPendingMediaUsage(resolvedMediaUsageChanges);
-      } catch (usageError) {
-        console.error('La canción fue guardada, pero falló la sincronización de uso multimedia:', usageError);
-        showToast("La canción se guardó, pero no se pudo actualizar Biblioteca Multimedia. Vuelve a guardar para reintentar.");
+
+      const mediaUsagePending = pendingMediaUsageRef.current.length > 0 || resolvedMediaUsageChanges.length > 0;
+      const metadataAllowsMediaSync = results.metadata === 'confirmed' || (results.metadata === 'unchanged' && !Object.keys(metadataChanges).length);
+      if (mediaUsagePending && metadataAllowsMediaSync) {
+        try {
+          await flushPendingMediaUsage(resolvedMediaUsageChanges);
+          results.media = 'confirmed';
+        } catch (usageError) {
+          console.error('La cancion fue guardada, pero fallo la sincronizacion de uso multimedia:', usageError);
+          failures.push({ area: 'biblioteca multimedia', error: usageError });
+        }
+      }
+
+      if (failures.length) {
+        const confirmed = Object.entries(results).filter(([, status]) => status === 'confirmed').map(([area]) => area);
+        const pending = failures.map(({ area }) => area);
+        const prefix = confirmed.length ? `Guardado confirmado: ${confirmed.join(', ')}. ` : '';
+        showToast(`${prefix}Pendiente: ${pending.join(', ')}. Tus cambios se conservaron.`);
         return false;
       }
 
       if (stemsNuevosCount > 0) {
-        await addDoc(collection(db, 'notificaciones'), {
-          titulo: `🎶 Pistas Actualizadas: ${titulo}`,
-          mensaje: `Se han añadido ${stemsNuevosCount} pistas/secuencias nuevas a esta cancion.`,
-          destinatarios: ['all'],
-          emisorId: user?.uid,
-          fechaCreacion: new Date().toISOString()
-        });
+        try {
+          await addDoc(collection(db, 'notificaciones'), {
+            titulo: `🎶 Pistas Actualizadas: ${titulo}`,
+            mensaje: `Se han añadido ${stemsNuevosCount} pistas/secuencias nuevas a esta cancion.`,
+            destinatarios: ['all'],
+            emisorId: user?.uid,
+            fechaCreacion: new Date().toISOString()
+          });
+        } catch (notificationError) {
+          console.error('La cancion se guardo, pero no se pudo crear la notificacion:', notificationError);
+        }
       }
 
       setAudioUrl(newAudioUrl);
       setAudioFile(null);
       setSectionMedia(resolvedSectionMedia);
       setStemsNuevosCount(0);
-      initialServerSongRef.current = { ...previous, ...savedData };
-      initialSongStateRef.current = stringifySongState({
-        ...savedData,
-        tonosCantantes,
-        audioFile: null
-      });
+      commitConfirmedPatch(savedData);
+
+      if (editRevisionRef.current !== operationRevision) {
+        showToast('El guardado terminó, pero hay cambios nuevos pendientes.', 'info');
+        return false;
+      }
 
       showToast("¡Cancion actualizada exitosamente!", "success");
       if (navigateOnSuccess) {
@@ -869,6 +1065,7 @@ const EditSong = ({ user }) => {
       console.error("Error al actualizar en Firebase:", error);
       showToast("Error al actualizar la cancion.");
     } finally {
+      saveInFlightRef.current = false;
       setIsSaving(false);
     }
   };
@@ -918,10 +1115,35 @@ const EditSong = ({ user }) => {
     fondoUrl
   });
 
+  const handleOpenMusicAI = () => {
+    try {
+      sessionStorage.setItem('kadosh_music_ai_draft', JSON.stringify({
+        titulo,
+        artista,
+        tono,
+        letraRaw,
+        youtubeUrl
+      }));
+    } catch (_) {}
+    navigate('/music-ai');
+  };
+
   return (
     <div className="max-w-5xl mx-auto animate-in fade-in duration-500">
       <header className="mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 rounded-3xl border border-white/10 bg-zinc-950/45 p-5 md:p-6 backdrop-blur-sm">
         <div className="flex items-center gap-3">
+          {canAccessMusicAI(user) && (
+            <button
+              type="button"
+              onClick={handleOpenMusicAI}
+              className="inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3.5 py-2 text-xs font-black uppercase text-violet-300 hover:bg-violet-500/20 transition-colors shadow-sm"
+              title="Abrir en KADOSH Music AI para estructurar letras y acordes"
+            >
+              <Sparkles size={14} className="text-violet-400" />
+              <span>Preparar con Music AI</span>
+            </button>
+          )}
+
           <div className="p-3 bg-amber-500/10 text-amber-300 border border-amber-500/20 rounded-2xl">
             <Edit3 size={28} />
           </div>
@@ -1006,6 +1228,25 @@ const EditSong = ({ user }) => {
             />
 
             <SongResourcesPanel
+              fondoUrl={fondoUrl}
+              onFondoUrlChange={handleFondoUrlChange}
+              onUploadFondo={handleUploadFondo}
+              isUploadingFondo={isSaving}
+              projectionStyle={projectionStyle}
+              onProjectionStyleChange={setProjectionStyle}
+              canEditProjectionStyle={v21Capability.canEditProjectionStyle}
+              canEditFormatting={v21Capability.canEditFormatting}
+              lyricFormattingEditor={v21Capability.canEditFormatting && <LyricFormattingDraftEditor
+                key={id}
+                lyricsRaw={letraRaw}
+                sections={parsedSections}
+                projectionStyle={projectionStyle}
+                initialFormatting={confirmedLyricFormatting}
+                formattingStatus={lyricFormattingStatus}
+                saveStatus={formatSaveState.status}
+                saveMessage={formatSaveState.message}
+                onDraftChange={handleFormattingDraftChange}
+              />}
               audioUrl={audioUrl}
               audioRef={audioRef}
               isPlaying={isPlaying}
@@ -1021,6 +1262,8 @@ const EditSong = ({ user }) => {
               onTimeUpdate={handleTimeUpdate}
               onLoadedMetadata={(e) => setDuration(e.target.duration)}
               onAudioEnded={() => setIsPlaying(false)}
+              youtubeUrl={youtubeUrl}
+              onYoutubeUrlChange={setYoutubeUrl}
               multitracks={multitracks}
               nombreStem={nombreStem}
               onNombreStemChange={setNombreStem}
@@ -1028,9 +1271,6 @@ const EditSong = ({ user }) => {
               onCustomStemNameChange={setCustomStemName}
               onUploadStem={handleUploadStem}
               onRemoveStem={removeStem}
-              fondoUrl={fondoUrl}
-              onFondoUrlChange={handleFondoUrlChange}
-              onUploadFondo={handleUploadFondo}
               recursos={recursos}
               nuevoRecurso={nuevoRecurso}
               onNuevoRecursoChange={setNuevoRecurso}
@@ -1038,22 +1278,21 @@ const EditSong = ({ user }) => {
               onUploadPDF={handleUploadPDF}
               onRemoveRecurso={removeRecurso}
               instrumentosRecursos={INSTRUMENTOS_RECURSOS}
+              sectionMediaProps={{
+                sections: parsedSections,
+                sectionMedia: sectionMedia,
+                isSaving: isSaving,
+                getSectionKey: getSectionKey,
+                getSectionDraft: getSectionDraft,
+                updateSectionDraft: updateSectionDraft,
+                onSelectLibraryResource: handleSelectLibrarySectionMedia,
+                onAddUrlResource: addSectionMediaResource,
+                onUploadResource: uploadSectionMediaResource,
+                onUpdateResource: updateSectionMediaResource,
+                onRemoveResource: removeSectionMediaResource,
+              }}
               isSaving={isSaving}
               formatTime={formatTime}
-            />
-
-            <SectionMediaManager
-              sections={parsedSections}
-              sectionMedia={sectionMedia}
-              isSaving={isSaving}
-              getSectionKey={getSectionKey}
-              getSectionDraft={getSectionDraft}
-              updateSectionDraft={updateSectionDraft}
-              onSelectLibraryResource={handleSelectLibrarySectionMedia}
-              onAddUrlResource={addSectionMediaResource}
-              onUploadResource={uploadSectionMediaResource}
-              onUpdateResource={updateSectionMediaResource}
-              onRemoveResource={removeSectionMediaResource}
             />
 
             <div className="col-span-2 pt-4 mt-2 border-t border-zinc-100 dark:border-zinc-800">

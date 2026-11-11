@@ -11,6 +11,8 @@ import { isVideoMediaUrl } from '../../utils/mediaUtils';
 import { MEDIA_PROVIDERS } from '../../utils/mediaLibrary';
 import { createOrReuseMediaLibraryResource } from '../../utils/mediaLibraryFirestoreSync';
 import { useFeedback } from '../ui/FeedbackProvider';
+import SongResourcesPanel from './SongResourcesPanel';
+import { DEFAULT_PROJECTION_STYLE } from '../../utils/projectionStyle';
 
 const TONOS_DISPONIBLES = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
 const ETIQUETAS_DISPONIBLES = ['Júbilo', 'Adoración', 'Acústico', 'Navidad', 'Ministración', 'Especial'];
@@ -61,6 +63,29 @@ const detectarSeccionesTexto = (value) => {
 
 const AddSongAI = ({ user }) => {
   const { confirm: askConfirm, notify } = useFeedback();
+  const [projectionStyle, setProjectionStyle] = useState(DEFAULT_PROJECTION_STYLE);
+
+  // Cargar borrador de KADOSH Music AI si proviene de la transferencia
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem('kadosh_music_ai_draft');
+      if (stored) {
+        sessionStorage.removeItem('kadosh_music_ai_draft');
+        const draft = JSON.parse(stored);
+        if (draft.titulo) setTitulo(draft.titulo);
+        if (draft.artista) setArtista(draft.artista);
+        if (draft.tono) setTono(normalizeKey(draft.tono));
+        if (draft.bpm) setBpm(draft.bpm);
+        if (draft.letraRaw) setLetraGenerada(draft.letraRaw);
+        if (draft.youtubeUrl) setYoutubeUrl(draft.youtubeUrl);
+        if (draft.projectionStyle) setProjectionStyle(draft.projectionStyle);
+        notify('Borrador de KADOSH Music AI cargado en el editor. Revisa los datos antes de guardar.', { type: 'info', duration: 6000 });
+      }
+    } catch (e) {
+      console.warn('No se pudo cargar el borrador de Music AI:', e);
+    }
+  }, []);
+
   const [busqueda, setBusqueda] = useState('');
   const [letraGenerada, setLetraGenerada] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -77,6 +102,11 @@ const AddSongAI = ({ user }) => {
   const [fondoUrl, setFondoUrl] = useState('');
   const [fondoMediaId, setFondoMediaId] = useState('');
   const [isUploadingFondo, setIsUploadingFondo] = useState(false);
+  const [multitracks, setMultitracks] = useState([]);
+  const [nombreStem, setNombreStem] = useState('Click');
+  const [customStemName, setCustomStemName] = useState('');
+  const [recursos, setRecursos] = useState([]);
+  const [nuevoRecurso, setNuevoRecurso] = useState({ titulo: '', url: '', tipo: 'youtube', instrumento: 'General' });
   const [isSaving, setIsSaving] = useState(false);
   const [showExample, setShowExample] = useState(false);
   const [showSingerModal, setShowSingerModal] = useState(false);
@@ -242,6 +272,71 @@ const AddSongAI = ({ user }) => {
     }
   };
 
+  const handleUploadStem = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const finalStemName = nombreStem === 'Otro' ? customStemName.trim() : nombreStem;
+    if (!finalStemName || finalStemName === 'Otro') {
+      showToast('Por favor, ingresa un nombre para la pista.', 'error');
+      return;
+    }
+    showToast(`Subiendo pista: ${finalStemName}...`, 'info');
+    setIsSaving(true);
+    try {
+      const storage = getStorage();
+      const stemRef = ref(storage, `multitracks/${Date.now()}_${file.name}`);
+      await uploadBytes(stemRef, file);
+      const url = await getDownloadURL(stemRef);
+      setMultitracks((prev) => [...prev, { id: Date.now().toString(), nombre: finalStemName, url, fileName: file.name }]);
+      showToast(`¡Pista de ${finalStemName} subida!`, 'success');
+      setCustomStemName('');
+      setNombreStem('Click');
+    } catch (err) {
+      showToast('Error al subir la pista.', 'error');
+    } finally {
+      setIsSaving(false);
+      e.target.value = '';
+    }
+  };
+
+  const removeStem = (id) => {
+    setMultitracks((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  const handleAddRecurso = () => {
+    if (!nuevoRecurso.titulo || !nuevoRecurso.url) {
+      showToast('Título y URL son obligatorios para el recurso.', 'warning');
+      return;
+    }
+    setRecursos((prev) => [...prev, { ...nuevoRecurso, id: Date.now().toString() }]);
+    setNuevoRecurso({ titulo: '', url: '', tipo: 'youtube', instrumento: 'General' });
+    showToast('Recurso añadido a la lista.', 'success');
+  };
+
+  const handleUploadPDF = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    showToast('Subiendo PDF...', 'info');
+    setIsSaving(true);
+    try {
+      const storage = getStorage();
+      const pdfRef = ref(storage, `partituras/${Date.now()}_${file.name}`);
+      await uploadBytes(pdfRef, file);
+      const url = await getDownloadURL(pdfRef);
+      setRecursos((prev) => [...prev, { id: Date.now().toString(), tipo: 'pdf', url, titulo: file.name, instrumento: 'General' }]);
+      showToast('¡PDF adjuntado exitosamente!', 'success');
+    } catch (err) {
+      showToast('Error al subir el PDF.', 'error');
+    } finally {
+      setIsSaving(false);
+      e.target.value = '';
+    }
+  };
+
+  const removeRecurso = (id) => {
+    setRecursos((prev) => prev.filter((r) => r.id !== id));
+  };
+
   const handleFondoUrlChange = (value) => {
     setFondoUrl(value);
     setFondoMediaId('');
@@ -283,6 +378,9 @@ const AddSongAI = ({ user }) => {
         youtubeUrl,
         fondoUrl,
         fondoMediaId: fondoMediaId || null,
+        multitracks: multitracks || [],
+        recursos: recursos || [],
+        projectionStyle: projectionStyle || DEFAULT_PROJECTION_STYLE,
         fechaCreacion: new Date().toISOString()
       });
       
@@ -295,7 +393,7 @@ const AddSongAI = ({ user }) => {
         fechaCreacion: new Date().toISOString()
       });
       showToast(`Cancion "${titulo}" guardada exitosamente en Kadosh App!`, "success");
-      setTitulo(''); setArtista(''); setTono('C'); setEtiquetas([]); setTonosCantantes({}); setBpm(''); setLetraGenerada(''); setBusqueda(''); setAudioFile(null); setYoutubeUrl(''); setFondoUrl(''); setFondoMediaId('');
+      setTitulo(''); setArtista(''); setTono('C'); setEtiquetas([]); setTonosCantantes({}); setBpm(''); setLetraGenerada(''); setBusqueda(''); setAudioFile(null); setYoutubeUrl(''); setFondoUrl(''); setFondoMediaId(''); setMultitracks([]); setRecursos([]);
     } catch (error) {
       console.error("Error guardando en Firebase:", error);
       showToast("Hubo un error al guardar la cancion. Verifica tu conexión a Firebase.");
@@ -499,48 +597,34 @@ const AddSongAI = ({ user }) => {
                  </div>
                  <p className="mt-2 text-[10px] font-bold text-zinc-500">Estos filtros aparecen en Repertorio y ayudan a encontrar la cancion sin editarla después.</p>
               </div>
-              <div className="col-span-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
-                 <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2">Pista o Secuencia de Audio (MP3)</label>
-                <input type="file" accept="audio/*" onChange={(e) => setAudioFile(e.target.files[0])} className="kp-input w-full p-2 rounded-xl text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-blue-500/10 file:text-blue-300 hover:file:bg-blue-500/20 transition-all cursor-pointer" />
-             </div>
-             <div className="col-span-2 mt-1">
-                <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-1">O pega un Enlace de YouTube</label>
-                <input type="url" value={youtubeUrl} onChange={(e)=>setYoutubeUrl(e.target.value)} className="kp-input w-full p-2 rounded-xl text-sm" placeholder="https://www.youtube.com/watch?v=..." />
-             </div>
-             <div className="col-span-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
-                <label className="block text-xs font-bold text-zinc-500 dark:text-zinc-400 mb-2 flex items-center gap-2">
-                  <Monitor size={15} className="text-emerald-400" /> Fondo de Proyeccion
-                </label>
-                <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950">
-                  {fondoUrl && (
-                    <div className="relative mb-3 h-36 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
-                      {isVideoMediaUrl(fondoUrl) ? (
-                        <video src={fondoUrl} autoPlay loop muted playsInline className="h-full w-full object-cover" />
-                      ) : (
-                        <img src={fondoUrl} alt="Fondo" className="h-full w-full object-cover" />
-                      )}
-                      <button type="button" onClick={() => handleFondoUrlChange('')} className="absolute right-2 top-2 rounded-lg bg-red-600/90 p-2 text-white">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  )}
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <input
-                      type="url"
-                      value={fondoUrl}
-                      onChange={e => handleFondoUrlChange(e.target.value)}
-                      placeholder="Pegar URL de imagen, GIF o video corto"
-                      className="kp-input min-w-0 flex-1 p-2.5 text-xs"
-                    />
-                    <label className="flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-xl bg-emerald-500/15 px-4 py-2.5 text-xs font-black text-emerald-300 transition-colors hover:bg-emerald-500/25">
-                      {isUploadingFondo ? 'Subiendo...' : 'Subir fondo'}
-                      <Upload size={14} />
-                      <input type="file" accept="image/*,video/*" className="hidden" onChange={handleUploadFondo} disabled={isUploadingFondo || isSaving} />
-                    </label>
-                  </div>
-                  <p className="mt-2 text-[10px] font-bold text-zinc-500">Recomendado: video MP4/WebM corto en loop. Tambien acepta GIF o imagen.</p>
-                </div>
-             </div>
+              <SongResourcesPanel
+                fondoUrl={fondoUrl}
+                onFondoUrlChange={handleFondoUrlChange}
+                onUploadFondo={handleUploadFondo}
+                isUploadingFondo={isUploadingFondo}
+                projectionStyle={projectionStyle}
+                onProjectionStyleChange={setProjectionStyle}
+                canEditProjectionStyle={true}
+                canEditFormatting={false}
+                audioFile={audioFile}
+                onAudioFileChange={(e) => setAudioFile(e.target.files?.[0] || null)}
+                youtubeUrl={youtubeUrl}
+                onYoutubeUrlChange={setYoutubeUrl}
+                multitracks={multitracks}
+                nombreStem={nombreStem}
+                onNombreStemChange={setNombreStem}
+                customStemName={customStemName}
+                onCustomStemNameChange={setCustomStemName}
+                onUploadStem={handleUploadStem}
+                onRemoveStem={removeStem}
+                recursos={recursos}
+                nuevoRecurso={nuevoRecurso}
+                onNuevoRecursoChange={setNuevoRecurso}
+                onAddRecurso={handleAddRecurso}
+                onUploadPDF={handleUploadPDF}
+                onRemoveRecurso={removeRecurso}
+                isSaving={isSaving}
+              />
           </div>
         </div>
 

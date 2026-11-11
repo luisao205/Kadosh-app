@@ -34,6 +34,27 @@ const auth = getAuth(app);
 const functions = getFunctions(app);
 
 const useFirebaseEmulators = import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true';
+const e2eSafeMode = import.meta.env.VITE_E2E_SAFE === 'true';
+
+if (e2eSafeMode) {
+  const emulatorHost = import.meta.env.VITE_FIREBASE_EMULATOR_HOST;
+  const configuredPorts = {
+    auth: import.meta.env.VITE_AUTH_EMULATOR_PORT,
+    firestore: import.meta.env.VITE_FIRESTORE_EMULATOR_PORT,
+    functions: import.meta.env.VITE_FUNCTIONS_EMULATOR_PORT,
+  };
+
+  if (!useFirebaseEmulators
+    || import.meta.env.VITE_PROJECT_ID !== 'demo-kadosh-e2e'
+    || emulatorHost !== '127.0.0.1'
+    || configuredPorts.auth !== '9099'
+    || configuredPorts.firestore !== '8080'
+    || configuredPorts.functions !== '5001') {
+    throw new Error('El modo E2E solo puede usar los Firebase Emulators locales configurados para demo-kadosh-e2e.');
+  }
+
+  window.__KADOSH_E2E_EMULATORS__ = true;
+}
 
 if (useFirebaseEmulators) {
   const emulatorHost = import.meta.env.VITE_FIREBASE_EMULATOR_HOST || '127.0.0.1';

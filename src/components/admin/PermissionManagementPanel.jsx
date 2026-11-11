@@ -1,16 +1,22 @@
 import { useMemo, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
-import { RotateCcw, Save, ShieldCheck, UsersRound } from 'lucide-react';
+import { RotateCcw, Save, ShieldCheck, Sparkles, UsersRound, CheckCircle2, XCircle } from 'lucide-react';
 import { functions } from '../../config/firebase';
 import { PERMISSION_GROUPS, PERMISSIONS, ROLE_KEYS, getRoleDefaults, getRoleKey, isOwnerUser, overrideCount, permissionLabel, sanitizeOverrides } from '../../utils/permissions';
 import { GROUP_PERMISSION_PRESETS, MULTIMEDIA_COMPLETE_PRESET, MULTIMEDIA_TOTAL_PRESET } from '../../utils/permissionPresets';
 import { useFeedback } from '../ui/FeedbackProvider';
 
 const ROLE_LABELS = { dueno: 'Dueno', admin: 'Administrador', multimedia: 'Multimedia', musico: 'Musico', cantante: 'Cantante', pastor: 'Pastor', predicador: 'Predicador' };
-const TABS = [{ id: 'members', label: 'Integrantes' }, { id: 'roles', label: 'Roles' }, { id: 'bulk', label: 'Edicion en grupo' }];
+const TABS = [
+  { id: 'members', label: 'Integrantes' },
+  { id: 'roles', label: 'Roles' },
+  { id: 'bulk', label: 'Edicion en grupo' },
+  { id: 'music-ai', label: 'Acceso a Music AI' }
+];
 const updateRolePermissionDefaults = httpsCallable(functions, 'updateRolePermissionDefaults');
 const updateUserPermissionOverrides = httpsCallable(functions, 'updateUserPermissionOverrides');
 const bulkUpdateUserPermissionOverrides = httpsCallable(functions, 'bulkUpdateUserPermissionOverrides');
+const setMusicAIAccessCallable = httpsCallable(functions, 'setMusicAIAccess');
 const roleLabel = (role) => ROLE_LABELS[getRoleKey(role)] || role || 'Sin rol';
 const displayName = (user) => user?.nombre || user?.email || 'Integrante sin nombre';
 
@@ -32,6 +38,8 @@ const PermissionManagementPanel = ({ currentUser, usuarios = [], configuredDefau
   const [bulkPermission, setBulkPermission] = useState(PERMISSIONS.BIBLE_PROJECT);
   const [bulkAction, setBulkAction] = useState('allow');
   const [bulkPreset, setBulkPreset] = useState('');
+  const [musicAISearch, setMusicAISearch] = useState('');
+  const [isUpdatingMusicAI, setIsUpdatingMusicAI] = useState(false);
   const targetRole = selectedUser?.rol || selectedUser?.role || 'musico';
   const inherited = useMemo(() => getRoleDefaults(targetRole, configuredDefaults), [targetRole, configuredDefaults]);
   const nonOwners = useMemo(() => usuarios.filter((member) => !isOwnerUser(member)), [usuarios]);
@@ -76,10 +84,134 @@ const PermissionManagementPanel = ({ currentUser, usuarios = [], configuredDefau
   const applyBulkPreset = () => { if (!bulkPreset) return; const name = bulkPreset === 'multimediaComplete' ? 'Multimedia Completo' : 'Apoyo Multimedia'; applyBulk(GROUP_PERMISSION_PRESETS[bulkPreset], `Esto aplicara el paquete ${name} a ${activeSelectedIds.length} integrante(s), sin cambiar sus roles.`); };
   const clearAllOverrides = () => applyBulk(Object.fromEntries(Object.values(PERMISSIONS).map((permission) => [permission, null])), `Esto eliminara todas las excepciones individuales de ${activeSelectedIds.length} integrante(s). Sus roles no cambiaran.`);
 
-  return <section className="space-y-5 rounded-2xl border border-indigo-400/20 bg-indigo-500/5 p-4 md:p-6"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-indigo-300">Equipo · Permisos</p><h2 className="mt-1 text-xl font-black text-white">Administracion de permisos</h2></div>{onClose ? <button type="button" onClick={onClose} className="kp-button-secondary rounded-xl px-4 py-2 text-xs font-bold">Cerrar</button> : null}</div><div className="grid grid-cols-1 gap-2 border-b border-white/10 pb-3 sm:grid-cols-3">{TABS.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`rounded-lg px-3 py-2.5 text-xs font-black uppercase tracking-wide ${tab === item.id ? 'bg-indigo-500 text-white' : 'bg-zinc-950/45 text-zinc-400 hover:text-white'}`}>{item.label}</button>)}</div>
+  const handleToggleMusicAIAccess = async (targetMember) => {
+    if (!targetMember || isOwnerUser(targetMember)) return;
+    const isCurrentlyAuthorized = targetMember.musicAIAccess?.authorized === true;
+    const nextAuthorized = !isCurrentlyAuthorized;
+    const actionText = nextAuthorized ? 'aprobar el acceso a' : 'revocar el acceso de';
+    if (!window.confirm(`¿Confirmas ${actionText} KADOSH Music AI para ${displayName(targetMember)}?`)) return;
+
+    setIsUpdatingMusicAI(true);
+    try {
+      await setMusicAIAccessCallable({ targetUid: targetMember.id, authorized: nextAuthorized });
+      notify(`Acceso a Music AI ${nextAuthorized ? 'aprobado' : 'revocado'} para ${displayName(targetMember)}.`, { type: 'success' });
+    } catch (error) {
+      console.error(error);
+      notify('No se pudo actualizar el acceso a Music AI.', { type: 'error' });
+    } finally {
+      setIsUpdatingMusicAI(false);
+    }
+  };
+
+  const musicAIMembers = useMemo(() => {
+    const search = musicAISearch.trim().toLowerCase();
+    return nonOwners.filter((member) => !search || `${member.nombre || ''} ${member.email || ''}`.toLowerCase().includes(search));
+  }, [musicAISearch, nonOwners]);
+
+  const totalMusicAIAuthorized = useMemo(() => {
+    return nonOwners.filter((member) => member.musicAIAccess?.authorized === true).length;
+  }, [nonOwners]);
+
+  const totalMusicAIRequests = useMemo(() => {
+    return usuarios.reduce((sum, member) => sum + (Number(member.musicAIAccess?.requestCount) || 0), 0);
+  }, [usuarios]);
+
+  return <section className="space-y-5 rounded-2xl border border-indigo-400/20 bg-indigo-500/5 p-4 md:p-6"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-indigo-300">Equipo · Permisos</p><h2 className="mt-1 text-xl font-black text-white">Administracion de permisos</h2></div>{onClose ? <button type="button" onClick={onClose} className="kp-button-secondary rounded-xl px-4 py-2 text-xs font-bold">Cerrar</button> : null}</div><div className="grid grid-cols-2 gap-2 border-b border-white/10 pb-3 sm:grid-cols-4">{TABS.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`rounded-lg px-3 py-2.5 text-xs font-black uppercase tracking-wide ${tab === item.id ? 'bg-indigo-500 text-white' : 'bg-zinc-950/45 text-zinc-400 hover:text-white'}`}>{item.label}</button>)}</div>
     {tab === 'members' && <div className="space-y-4"><div className="rounded-xl border border-white/10 bg-black/20 p-4"><p className="text-xs font-black uppercase tracking-widest text-emerald-300">Permisos de</p><h3 className="mt-1 text-lg font-black text-white">{selectedUser ? displayName(selectedUser) : 'Selecciona un integrante'}</h3>{selectedUser && isOwnerUser(selectedUser) ? <p className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm font-bold text-amber-100">Acceso total. El Dueno no admite excepciones individuales.</p> : selectedUser ? <div className="mt-3 grid gap-2 text-xs text-zinc-400 sm:grid-cols-2"><p>Rol actual: <b className="text-white">{roleLabel(targetRole)}</b></p><p>Permisos personalizados: <b className="text-white">{overrideCount(selectedUser)}</b></p></div> : null}</div>{selectedUser && !isOwnerUser(selectedUser) ? <><MemberPermissionRows user={selectedUser} values={draftOverrides} onChange={updateOverride} roleDefaults={inherited}/><div className="grid gap-2 sm:grid-cols-2"><button type="button" onClick={saveOverrides} className="kp-button-primary flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold"><Save size={16}/>Guardar permisos</button><button type="button" onClick={resetOverrides} className="kp-button-secondary flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold"><RotateCcw size={16}/>Restaurar permisos del rol</button></div></> : !selectedUser ? <p className="rounded-xl border border-white/10 p-4 text-sm text-zinc-400">Abre Permisos desde un integrante para editar solo sus excepciones.</p> : null}</div>}
     {tab === 'roles' && <div className="space-y-4"><div className="rounded-xl border border-white/10 bg-black/20 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="flex items-center gap-2"><ShieldCheck size={18} className="text-indigo-300"/><h3 className="font-black text-white">Permisos predeterminados por rol</h3></div><p className="mt-1 max-w-2xl text-xs text-zinc-400">Los cambios se aplican a integrantes que usan este rol y no tienen una excepcion individual.</p></div>{role === 'multimedia' ? <div className="flex flex-wrap gap-2"><button type="button" onClick={applyMultimediaPreset} className="kp-button-secondary rounded-xl px-3 py-2 text-xs font-bold">Preset recomendado</button><button type="button" disabled={isApplyingMultimediaTotal} onClick={applyMultimediaTotalPackage} className="kp-button-primary rounded-xl px-3 py-2 text-xs font-black disabled:opacity-50">{isApplyingMultimediaTotal ? 'APLICANDO...' : 'MULTIMEDIA TOTAL'}</button></div> : null}</div><label className="mt-4 block text-xs font-bold text-zinc-400">Rol a configurar<select value={role} onChange={(event) => selectRole(event.target.value)} className="kp-input mt-1 w-full rounded-xl p-2.5">{ROLE_KEYS.filter((key) => key !== 'dueno').map((key) => <option key={key} value={key}>{roleLabel(key)}</option>)}</select></label></div><RolePermissionRows values={draftDefaults} onChange={updateDefault}/><button type="button" onClick={saveDefaults} className="kp-button-primary flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold"><Save size={16}/>Guardar defaults de {roleLabel(role)}</button></div>}
     {tab === 'bulk' && <div className="space-y-4"><div className="rounded-xl border border-white/10 bg-black/20 p-4"><div className="flex items-center gap-2"><UsersRound size={18} className="text-indigo-300"/><h3 className="font-black text-white">Edicion en grupo</h3></div><div className="mt-4 grid gap-2 sm:grid-cols-2"><input value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="Buscar integrante" className="kp-input rounded-xl p-2.5 text-sm"/><select value={memberRole} onChange={(event) => setMemberRole(event.target.value)} className="kp-input rounded-xl p-2.5 text-sm"><option value="all">Todos los roles</option>{ROLE_KEYS.filter((key) => key !== 'dueno').map((key) => <option key={key} value={key}>{roleLabel(key)}</option>)}</select></div><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={selectVisible} className="kp-button-secondary rounded-lg px-3 py-2 text-xs font-bold">Seleccionar visibles</button><button type="button" onClick={() => setSelectedIds([])} className="kp-button-secondary rounded-lg px-3 py-2 text-xs font-bold">Limpiar seleccion</button><span className="px-2 py-2 text-xs font-bold text-indigo-200">{selectedIds.length} integrante(s) seleccionado(s)</span></div><div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1">{visibleMembers.map((member) => <label key={member.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-white/10 px-3 py-2 text-sm text-zinc-200"><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggleMember(member.id)} className="h-4 w-4"/><span className="min-w-0 flex-1 truncate font-bold">{displayName(member)}</span><span className="text-xs text-zinc-500">{roleLabel(member)}</span></label>)}{!visibleMembers.length ? <p className="py-4 text-center text-sm text-zinc-500">No hay integrantes disponibles.</p> : null}</div></div><div className="grid gap-4 lg:grid-cols-2"><div className="rounded-xl border border-white/10 bg-black/20 p-4"><h4 className="font-black text-white">Aplicar permiso concreto</h4><select value={bulkPermission} onChange={(event) => setBulkPermission(event.target.value)} className="kp-input mt-3 w-full rounded-xl p-2.5 text-sm">{PERMISSION_GROUPS.flatMap((group) => group.permissions).map((permission) => <option key={permission} value={permission}>{permissionLabel(permission)}</option>)}</select><select value={bulkAction} onChange={(event) => setBulkAction(event.target.value)} className="kp-input mt-2 w-full rounded-xl p-2.5 text-sm"><option value="allow">Permitir</option><option value="deny">Denegar</option><option value="inherit">Volver al permiso del rol</option></select><button type="button" disabled={!selectedIds.length} onClick={applyBulkPermission} className="kp-button-primary mt-3 w-full rounded-xl py-3 text-sm font-bold disabled:opacity-50">Aplicar a seleccionados</button></div><div className="rounded-xl border border-white/10 bg-black/20 p-4"><h4 className="font-black text-white">Aplicar paquete</h4><select value={bulkPreset} onChange={(event) => setBulkPreset(event.target.value)} className="kp-input mt-3 w-full rounded-xl p-2.5 text-sm"><option value="">Seleccionar paquete</option><option value="multimediaComplete">Multimedia Completo</option><option value="multimediaSupport">Apoyo Multimedia</option></select><button type="button" disabled={!selectedIds.length || !bulkPreset} onClick={applyBulkPreset} className="kp-button-primary mt-2 w-full rounded-xl py-3 text-sm font-bold disabled:opacity-50">Aplicar paquete</button><button type="button" disabled={!selectedIds.length} onClick={clearAllOverrides} className="kp-button-secondary mt-2 w-full rounded-xl py-3 text-sm font-bold disabled:opacity-50">Quitar todas las excepciones</button></div></div></div>}
+    {tab === 'music-ai' && <div className="space-y-4">
+      <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4">
+        <div className="flex items-center gap-2">
+          <Sparkles size={20} className="text-violet-400" />
+          <h3 className="font-black text-white">Gestión de Acceso a KADOSH Music AI</h3>
+        </div>
+        <p className="mt-1 max-w-2xl text-xs text-zinc-300">
+          Autorización expresa del dueño para el uso del transcriptor y preparador de canciones con IA.
+          Los usuarios no autorizados o suspendidos tienen el acceso bloqueado tanto en la interfaz como en el backend.
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+            <p className="text-[10px] font-black uppercase tracking-wider text-zinc-400">Total Integrantes</p>
+            <p className="mt-1 text-lg font-black text-white">{nonOwners.length}</p>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+            <p className="text-[10px] font-black uppercase tracking-wider text-emerald-400">Autorizados</p>
+            <p className="mt-1 text-lg font-black text-emerald-300">{totalMusicAIAuthorized}</p>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-black/30 p-3 col-span-2 sm:col-span-1">
+            <p className="text-[10px] font-black uppercase tracking-wider text-violet-400">Consultas Totales</p>
+            <p className="mt-1 text-lg font-black text-violet-300">{totalMusicAIRequests}</p>
+          </div>
+        </div>
+        <div className="mt-4">
+          <input
+            value={musicAISearch}
+            onChange={(e) => setMusicAISearch(e.target.value)}
+            placeholder="Buscar integrante por nombre o correo..."
+            className="kp-input w-full rounded-xl p-2.5 text-sm"
+          />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {musicAIMembers.map((member) => {
+          const isAuthorized = member.musicAIAccess?.authorized === true;
+          const requestCount = member.musicAIAccess?.requestCount || 0;
+          const isSuspended = String(member.accountStatus || '').toLowerCase() === 'suspended';
+
+          return (
+            <div key={member.id} className="flex flex-col gap-3 rounded-xl border border-white/10 bg-zinc-950/60 p-3.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="truncate font-bold text-white text-sm">{displayName(member)}</p>
+                  <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-bold text-zinc-400">
+                    {roleLabel(member)}
+                  </span>
+                  {isSuspended && (
+                    <span className="rounded-md border border-rose-500/20 bg-rose-500/10 px-2 py-0.5 text-[10px] font-black text-rose-300 uppercase">
+                      Suspendido
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-xs text-zinc-400">{member.email}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-zinc-400">
+                  <span className={`inline-flex items-center gap-1 font-bold ${isAuthorized ? 'text-emerald-300' : 'text-zinc-500'}`}>
+                    {isAuthorized ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                    {isAuthorized ? 'Acceso Autorizado' : 'Sin Autorización'}
+                  </span>
+                  <span>Consumo: <b className="text-zinc-200">{requestCount}</b> consultas</span>
+                  {member.musicAIAccess?.lastUsedAt && (
+                    <span className="text-[10px] text-zinc-500">
+                      Último uso: {new Date(member.musicAIAccess.lastUsedAt?.seconds ? member.musicAIAccess.lastUsedAt.seconds * 1000 : member.musicAIAccess.lastUsedAt).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isUpdatingMusicAI}
+                  onClick={() => handleToggleMusicAIAccess(member)}
+                  className={`rounded-xl px-3.5 py-2 text-xs font-black uppercase transition-colors disabled:opacity-50 ${
+                    isAuthorized
+                      ? 'border border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20'
+                      : 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                  }`}
+                >
+                  {isAuthorized ? 'Revocar acceso' : 'Aprobar acceso'}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {!musicAIMembers.length && (
+          <p className="py-6 text-center text-sm font-semibold text-zinc-500">
+            No se encontraron integrantes que coincidan con la búsqueda.
+          </p>
+        )}
+      </div>
+    </div>}
   </section>;
 };
 

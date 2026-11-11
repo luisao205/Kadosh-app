@@ -27,6 +27,25 @@
     min-width: 320px;
     background: var(--kp-bg);
   }
+
+  /* Ocultar visualmente scrollbars manteniendo desplazamiento, teclado, rueda y tactil */
+  html,
+  body,
+  *,
+  *::before,
+  *::after {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  *::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+    background: transparent;
+  }
 }
 
 @layer components {
@@ -261,3 +280,57 @@
 .quick-message-particle-1 { animation-name: quick-message-particle-drift-b, quick-message-particle-color; }
 .quick-message-particle-2 { animation-name: quick-message-particle-drift-c, quick-message-particle-color; }
 .quick-message-particle-3 { animation-name: quick-message-particle-drift-d, quick-message-particle-color; }
+
+@keyframes projection-style-soft-in {
+  from { opacity: 0.82; transform: translate3d(0, 12px, 0) scale(0.988); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes projection-style-dynamic-in {
+  from { opacity: 0.7; transform: translate3d(0, 16px, 0) scale(1.035); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes projection-transition-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes projection-transition-slide-in {
+  from { opacity: 0.45; transform: translate3d(0, 4vh, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes projection-transition-zoom-in {
+  from { opacity: 0.55; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.projection-transition-fade { animation: projection-transition-fade-in 250ms ease-in-out both; }
+.projection-transition-slide { animation: projection-transition-slide-in 150ms ease-in-out both; }
+.projection-transition-zoom { animation: projection-transition-zoom-in 150ms ease-in-out both; }
+.projection-transition-none { animation: none; }
+.projection-motion-soft { animation: projection-style-soft-in 360ms cubic-bezier(.22,.8,.25,1) both; }
+.projection-motion-dynamic { animation: projection-style-dynamic-in 260ms cubic-bezier(.2,.85,.22,1) both; }
+.projection-lyric-text {
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.86), 0 8px 24px rgba(0, 0, 0, 0.78);
+  transform-origin: center;
+  transition: transform 260ms ease, letter-spacing 260ms ease, font-weight 260ms ease;
+}
+.projection-preset-clean .projection-lyric-text { font-weight: 800; letter-spacing: 0.002em; text-shadow: 0 2px 5px rgba(0, 0, 0, 0.82), 0 8px 22px rgba(0, 0, 0, 0.72); }
+.projection-preset-cinematic .projection-lyric-text { font-weight: 700; letter-spacing: 0.032em; transform: scaleX(0.94); text-shadow: 0 3px 7px rgba(0, 0, 0, 0.9), 0 12px 34px rgba(0, 0, 0, 0.82); }
+.projection-preset-worship .projection-lyric-text { font-weight: 700; letter-spacing: 0.018em; transform: translate3d(0, 5vh, 0) scale(0.92); text-shadow: 0 2px 6px rgba(0, 0, 0, 0.86), 0 10px 28px rgba(0, 0, 0, 0.8); }
+.projection-preset-impact .projection-lyric-text { font-weight: 900; letter-spacing: 0; transform: scale(1.025); text-shadow: 0 3px 7px rgba(0, 0, 0, 0.92), 0 12px 30px rgba(0, 0, 0, 0.84); }
+.projection-preset-minimal .projection-lyric-text { font-weight: 600; letter-spacing: 0.045em; transform: translate3d(0, 9vh, 0) scale(0.8); text-shadow: 0 2px 5px rgba(0, 0, 0, 0.8), 0 7px 20px rgba(0, 0, 0, 0.7); }
+.projection-preset-minimal { max-width: 78vw; margin-inline: auto; }
+
+.projection-style-preview { background: radial-gradient(ellipse at 50% 42%, rgba(113, 113, 122, 0.2), transparent 62%); }
+.projection-style-preview-text { margin: 0; font-size: clamp(1.15rem, 4vw, 1.8rem); font-weight: 800; line-height: 1.08; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.88); }
+.projection-style-preview.projection-preset-clean .projection-style-preview-text { font-weight: 800; letter-spacing: 0.002em; }
+.projection-style-preview.projection-preset-cinematic .projection-style-preview-text { font-weight: 700; letter-spacing: 0.05em; line-height: 1.22; transform: scaleX(0.9); }
+.projection-style-preview.projection-preset-worship .projection-style-preview-text { font-weight: 700; letter-spacing: 0.025em; line-height: 1.35; transform: translateY(10px) scale(0.9); }
+.projection-style-preview.projection-preset-impact .projection-style-preview-text { font-weight: 900; letter-spacing: 0; line-height: 0.98; transform: scale(1.08); }
+.projection-style-preview.projection-preset-minimal .projection-style-preview-text { font-weight: 600; letter-spacing: 0.07em; line-height: 1.42; transform: translateY(18px) scale(0.78); }
+
+@media (prefers-reduced-motion: reduce) {
+  .projection-motion-soft,
+  .projection-motion-dynamic,
+  .projection-transition-fade,
+  .projection-transition-slide,
+  .projection-transition-zoom { animation: none; }
+}
